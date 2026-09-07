@@ -15,13 +15,13 @@ covers:
   - path: src/results.ts
     sha: 0fc3dc145a1c515267534909aee79f034effa61b
   - path: src/controller.ts
-    sha: e346f83af40789b9fb4292972c6014f30cde34e1
+    sha: d961ffadfb3923dbafb051243f3d079b50648664
   - path: src/runtime/claude.ts
     sha: 5ae775633cae411b71443add232b79f1325c4075
   - path: src/brief.ts
-    sha: 11efbf53da940f7e23f1ddc0335bea2e748783af
+    sha: ee84b2c276df6664b29b7fd8e114617b19308c49
   - path: prisma/schema.prisma
-    sha: b6d31a7e665c57a075972e88e98e2501da2c45d7
+    sha: 636cb35b527e2f4f3bca8351b6afce0a024b0651
   - path: src/artifacts.ts
     sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
   - path: src/inputs.ts
@@ -35,7 +35,7 @@ related:
     architecture/job-kind,
     architecture/the-loop,
   ]
-generated_at_commit: f2c1da5
+generated_at_commit: ee1f4fb
 last_refreshed: 2026-09-06
 ---
 
@@ -80,8 +80,8 @@ workload that creates work talk to the API server" is **no**.
 
 hkb already has the machinery for the second answer and calls it something else. ADR-008's `results`
 is exactly this interface: the Job declares names, the controller hands it a path per name
-(`withResults`, `src/brief.ts:70`), the run writes files, and the controller reads them back after the
-run returns (`collectResults`, `src/results.ts:117`; called at `src/controller.ts:701`) into a
+(`withResults`, `src/brief.ts:83`), the run writes files, and the controller reads them back after the
+run returns (`collectResults`, `src/results.ts:117`; called at `src/controller.ts:717`) into a
 directory that sits beside the board, outside every checkout, on purpose (`src/results.ts:72-73`).
 
 Everything a board mutation needs is in that shape already. What is missing is not a channel. It is
@@ -122,7 +122,7 @@ output, and the controller validates and applies it.**
    a proposal becomes rows only once ADR-010's approval has been recorded. That is not a demand for a
    human — the approver is a seat with three fillers, and the auto-approve policy is one of them — it
    is the requirement that *something with authority said yes*, and that the yes is on the Event
-   stream where the controller already reads it (`src/controller.ts:734-736`).
+   stream where the controller already reads it (`src/controller.ts:750-752`).
 
 6. **This does not make the Job kind into the DAG kind.** The distinction is ordering, not creation.
    A controller that creates Jobs and then forgets them is `CronJob`-shaped: the created Jobs are
@@ -135,7 +135,7 @@ output, and the controller validates and applies it.**
 
 **The write becomes retry-safe, and this is the argument that outranks the others.** Results are
 collected *after* the run returns, and only then does the attempt's decision get made
-(`src/controller.ts:701`). A worker that dies mid-session leaves nothing collected and the attempt
+(`src/controller.ts:717`). A worker that dies mid-session leaves nothing collected and the attempt
 retries clean. An in-session API call has no such property: a retried attempt **re-does its side
 effects**, and the controller cannot tell the duplicates from the originals. This is the same reason a
 level-triggered controller reconciles from spec rather than from events, applied one layer out — and

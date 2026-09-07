@@ -9,7 +9,7 @@ covers:
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
-    sha: e346f83af40789b9fb4292972c6014f30cde34e1
+    sha: d961ffadfb3923dbafb051243f3d079b50648664
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/worktree.ts
@@ -17,8 +17,8 @@ covers:
   - path: src/limits.ts
     sha: 61b65c43e2fd7c28f952c403e02d073ca9907561
   - path: prisma/schema.prisma
-    sha: b6d31a7e665c57a075972e88e98e2501da2c45d7
-generated_at_commit: f2c1da5
+    sha: 636cb35b527e2f4f3bca8351b6afce0a024b0651
+generated_at_commit: ee1f4fb
 last_refreshed: 2026-09-06
 related: [architecture/the-loop, architecture/the-board, architecture/job-kind, concepts/ceilings]
 ---
@@ -34,7 +34,7 @@ related: [architecture/the-loop, architecture/the-board, architecture/job-kind, 
 
 ## Two clocks, and only one of them sleeps
 
-A lease row carries an `expiresAt` (`prisma/schema.prisma:506-536`). A run carries
+A lease row carries an `expiresAt` (`prisma/schema.prisma:510-540`). A run carries
 a `timeoutMs`, which becomes a `setTimeout` — and Node's timers are monotonic: on
 Linux they do not advance while the machine is suspended
 (`src/liveness.ts:5-16`). The two therefore disagree across a laptop sleep. A
@@ -159,37 +159,37 @@ duration (`src/daemon.ts:381-392`).
 
 ## Renewal, and what a failed renewal means
 
-The claim writes a `token` alongside the holder (`src/controller.ts:589-613`).
+The claim writes a `token` alongside the holder (`src/controller.ts:597-621`).
 Deriving the duration already makes expiry-while-alive impossible; **renewal is
 what makes a dead holder cheap to reclaim**, since without it a host that dies a
 minute into a thirty-minute Job holds the claim for the full thirty-five
-(`src/controller.ts:734-736`).
+(`src/controller.ts:750-752`).
 
 The cadence is a third of the lease, floored at one second — two renewals may
 fail before anything expires, and at the real default the floor never binds
-(`src/controller.ts:741-744`). Each renewal is an `updateMany` fenced on the
+(`src/controller.ts:757-760`). Each renewal is an `updateMany` fenced on the
 token, so it writes **nothing** if somebody else now holds the lease; a zero
 count is how a running holder learns it lost one
-(`src/controller.ts:738-758`). A renewal that could not be written at all is
-simply retried on the next tick (`src/controller.ts:757`).
+(`src/controller.ts:754-774`). A renewal that could not be written at all is
+simply retried on the next tick (`src/controller.ts:773`).
 
 Losing the lease mid-run does not stop the work, it changes what the worker is
 allowed to write. The Attempt row is uncontended — keyed `(jobId, k)`, and no
 other holder uses this `k` — so it is still recorded; the **Job** row is the
 contended one, and a holder that did not keep its lease leaves it alone and emits
-`lease_lost` instead (`src/controller.ts:1197-1206`).
+`lease_lost` instead (`src/controller.ts:1228-1237`).
 
 ## The fence at release
 
 Release is `deleteMany` fenced on the token, not `delete` by `jobId`
-(`src/controller.ts:969-974`). The unfenced version deleted whoever's lease was
+(`src/controller.ts:991-996`). The unfenced version deleted whoever's lease was
 there — so a stale holder finishing late removed the *new* holder's claim and
 then overwrote its outcome. The token was already being written at claim and
 never read; making it the fence is what closed that.
 
 Order matters too: the lease is released **before** the Job row is touched,
 because the delete's count is what decides whether this holder may touch it at
-all (`src/controller.ts:971-974`).
+all (`src/controller.ts:993-996`).
 
 ## The daemon's belt and braces: skip one reclaim after a wake
 
@@ -223,7 +223,7 @@ local holder and no remote one.
 
 Shared: the holder string, the three-valued liveness rule, and the insert-as-
 compare-and-swap where losing is a normal outcome rather than an error
-(`src/daemon.ts:108-146`, `src/controller.ts:589-613`).
+(`src/daemon.ts:108-146`, `src/controller.ts:597-621`).
 
 Different: what the duration is derived from. A Job lease is sized by the *run it
 covers*; a controller lease is sized by the *tick*, so it outlives three ticks and
@@ -244,7 +244,7 @@ outright leaves both held until they expire (`src/daemon.ts:491-496`,
 ## What a live lease is also counted for
 
 The number of lease rows on a board is what the concurrency ceiling counts
-(`src/controller.ts:517-518`, `src/limits.ts:30-32`) — which means a lapsed lease
+(`src/controller.ts:525-526`, `src/limits.ts:30-32`) — which means a lapsed lease
 still occupies a slot until reclaim closes it, an over-count in the safe
 direction. The ceiling argument itself belongs to *concepts/ceilings*, and the
 `Lease.slot` ordinal to *architecture/the-board*.

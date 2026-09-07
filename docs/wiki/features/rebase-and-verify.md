@@ -7,15 +7,15 @@ audience: [dev]
 read_when: "a Job failed as `conflicted`, a worker branch was rewritten under a draft PR, or you are about to make the checkout base a spec field"
 covers:
   - path: src/rebase.ts
-    sha: cccbc000ced08a0b486f76ae6a7cf6079536f379
+    sha: 6e78dce436e7b1a7dbc2bbf4bafbd1b6074f6009
   - path: src/worktree.ts
     sha: 95c1207c4eaa7318526b9cd4df337802c08a521d
   - path: src/controller.ts
-    sha: e346f83af40789b9fb4292972c6014f30cde34e1
+    sha: d961ffadfb3923dbafb051243f3d079b50648664
   - path: src/brief.ts
-    sha: 11efbf53da940f7e23f1ddc0335bea2e748783af
+    sha: ee84b2c276df6664b29b7fd8e114617b19308c49
   - path: prisma/schema.prisma
-    sha: b6d31a7e665c57a075972e88e98e2501da2c45d7
+    sha: 636cb35b527e2f4f3bca8351b6afce0a024b0651
 related:
   [
     gotchas/merge-composition,
@@ -24,18 +24,19 @@ related:
     features/declared-outputs,
     decisions/adr-014-no-preset-three-rules,
   ]
-generated_at_commit: f2c1da5
+generated_at_commit: ee1f4fb
 last_refreshed: 2026-09-06
 ---
 
 # Rebase before the pull request
 
 > A Job's checkout is cut from `origin/<default>` when the attempt is claimed and the base keeps
-> moving while the work runs. Two things now happen about that: the base branch is **fetched**
-> before the worktree is cut, and after a successful run the attempt's branch is **replayed onto
-> the base as it is then** (`rebaseOntoBase`, `src/rebase.ts`). A clean replay is pushed with
-> `--force-with-lease` if the worker had already pushed; one that will not replay fails the attempt
-> with `Outcome.conflicted` and keeps the checkout to fix it in.
+> moving while the work runs. Two things now happen about that: the base branch is **fetched** once
+> per repository per pass, before any worktree is cut, and after a successful run the attempt's
+> branch is **replayed onto the base as it is then** (`rebaseOntoBase`, `src/rebase.ts`). A clean
+> replay is pushed with `--force-with-lease` if the worker had already pushed; three ways of
+> failing to get the branch onto the base end the attempt as `Outcome.conflicted` with the checkout
+> kept to fix it in.
 
 ## The hole this closes, and the two it does not
 
@@ -78,19 +79,41 @@ available. It uses the non-interactive, time-limited git the sweep already neede
 stranger pushes to the attempt branch, `fetchBase` runs, and the tracking ref must still be where
 it was.
 
+The same trap is reachable from the *prompt*, and was: a worktree shares its parent's ref store, so
+a worker running `git fetch origin` inside one updates every remote-tracking ref there. The brief
+therefore names the branch — `git fetch origin main` — and says why in one line. A guard that the
+prompt beside it hands back is not a guard.
+
+**And it is one fetch per repository per pass, not per Job.** It runs in the serial pre-dispatch
+section, whose own comment justifies its placement with *"cutting a worktree is fast"*; a network
+round trip is not. Five Jobs claimed together would otherwise have made five identical fetches one
+after another, each able to burn the full twenty-second timeout before any worker started.
+
 ## Why the controller rewrites history the worker may not
 
 The worker's protocol has always said *never `git push --force`* (`withProtocol`, `src/brief.ts`)
 and that rule is unchanged. But a branch that has already been pushed and whose base has since
 moved can only be rebased by rewriting what is on the remote. If the worker may not and a human
 should not have to, the controller is the only candidate left — and it is a defensible owner: it
-created the branch, `kb-<id>-<k>` is hkb's namespace on that remote, and the pull request the
-rewrite lands under is a *draft* nobody has reviewed.
+created the branch, and `kb-<id>-<k>` is hkb's namespace on that remote.
 
-The safety is `--force-with-lease`, which refuses when the remote is not where our own tracking ref
-says it is. When it refuses, the attempt fails as `conflicted` too, with its own message: the branch
-here has been rebased and the remote has not, which is a state somebody has to resolve rather than
-a state to leave quietly.
+The rest of that argument is *"the pull request it lands under is a draft nobody has reviewed"*, and
+it is now enforced rather than asserted. The controller reads the pull request **before** the rebase
+and passes `mayRewrite`; a pull request out of draft stops the whole operation, reported as
+`current`. That case is not hypothetical — ADR-010's gate suspends an attempt *precisely* so a human
+reviews the diff, and the approved attempt would otherwise force-push out from under their comments.
+
+The other half of the safety is `--force-with-lease`, which refuses when the remote is not where our
+own tracking ref says it is.
+
+### The worker's own rebase, and where it is NOT asked for
+
+The brief asks for a rebase only when the branch has **not yet been pushed** — which the controller
+decides with `pushedRef`. A resumed attempt lands in the previous attempt's checkout, on a branch
+already on the remote: rebasing there makes the next `git push -u` a non-fast-forward rejection, and
+the very next rule in the same protocol forbids the force that would fix it. Asking anyway is asking
+for a step with no legal ending, and a worker in that position reports a failed push and often
+skips the pull request entirely. The controller rebases that case itself after the run.
 
 ## The prompt half, and why it is not the mechanism
 
@@ -117,9 +140,19 @@ cases are named rather than collapsed, because they are different facts about a 
   new base (its pull request landed while the attempt was still running) reads identically.
   Rebasing either would rewrite a branch and spend a force-push to produce the base itself.
 
-`conflictReason` is the other pure piece: git says a great deal on a failed rebase and the
-`CONFLICT` lines are the part that names whose change collided. It is capped at three, because the
-result lands in `Attempt.reason`, which is 300 characters.
+Three other pure pieces sit beside it, and two of them exist because git's exit code lies:
+
+- `conflictReason` — git says a great deal on a failed rebase, and the `CONFLICT` lines are the part
+  that names whose change collided. Capped at three, because the result lands in `Attempt.reason`,
+  which is 300 characters.
+- **`autostashFailed`** — a `rebase --autostash` that replays every commit and then cannot reapply
+  the stash **exits 0**. Believing that means reporting `rebased`, force-pushing, recording the
+  attempt as succeeded, and leaving the operator an unmerged index full of conflict markers with the
+  worker's uncommitted output in an unnamed stash entry. It is the reachable case, not a theoretical
+  one: a Job with declared `exports` ends with a dirty tree every time, because exporting copies
+  rather than moves. Detected, nothing is pushed, and the attempt blocks with the stash named.
+- **`pushRefused`** — the difference between the remote *refusing* us and our failing to *reach* it,
+  which is the difference between blocking an attempt and not.
 
 ## Where it sits in the run, and why there
 
@@ -135,6 +168,20 @@ the proposal validator, and **before** the gate:
 It is gated on `heldToTheEnd` like every other write outside the attempt's own row: the branch and
 the remote are contended state too, and a holder that lost its lease mid-run must not rewrite
 history the new holder's worker is committing onto.
+
+## What blocks an attempt, and what is only said
+
+Three states are the Job's problem and end the attempt as `conflicted`: the replay hit a conflict,
+the lease refused because somebody else moved the branch, and the replay worked while the autostash
+did not.
+
+One is **ours** and does not block: a push that never reached the remote. A twenty-second timeout on
+a large repository, an auth blip or a forge outage would otherwise fail an attempt whose work
+succeeded and is already on the remote with a pull request open — and the state such a failure
+leaves is exactly the state that existed before this module did. It is said out loud, with the
+command to finish it, and the Job stands. The same reasoning covers a failed *fetch*: it is carried
+on every result as `staleBase` and printed, because everything downstream then ran against the ref
+as it stood.
 
 ## `conflicted`, and why it is not `no_output`
 
@@ -163,7 +210,10 @@ actually refuses, whether an aborted rebase really leaves the branch where it wa
 fetch of one branch touches another are three questions a double would answer the way the author
 expected instead of the way git does.
 
-The refusing cases are the ones that carry the feature: a branch that will not replay must leave the
-local branch, the remote, and the working tree exactly as the worker left them, with no rebase in
-progress for the operator to discover; and a remote somebody else moved must be refused by the lease
-rather than overwritten.
+The refusing cases are the ones that carry the feature, and each one fails a test when its guard is
+neutered: a branch that will not replay must leave the local branch, the remote and the working tree
+exactly as the worker left them, with no rebase in progress for the operator to discover; a remote
+somebody else moved must be refused by the lease rather than overwritten; an autostash that did not
+come back must block rather than ride git's exit code; a remote that went away must **not** fail the
+Job; a pull request out of draft must stop the rewrite; and the brief must never ask for a blanket
+fetch.

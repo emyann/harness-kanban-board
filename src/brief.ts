@@ -19,14 +19,27 @@ import { PROPOSAL_MAX_BYTES, PROPOSAL_MAX_JOBS } from './proposals.ts';
  * to (`src/rebase.ts`). This is prose, and prose guarantees nothing (ADR-014) — the controller
  * checks it afterwards, and that is the mechanism. The pairing is the point: the prompt makes it
  * usually true and free, the check makes it true.
+ *
+ * Two things about `base` that are the caller's to get right, and both were wrong first:
+ *
+ *   - **it names a branch, and the fetch is narrowed to it.** `git fetch origin` inside a worktree
+ *     updates every remote-tracking ref in the shared store, `refs/remotes/origin/kb-<id>-<k>`
+ *     included — the exact ref `--force-with-lease` compares against. Telling the worker to run one
+ *     would hand back the protection `fetchBase` narrows itself to preserve.
+ *   - **it is passed only when a rebase is legal here.** A resumed attempt lands in a checkout
+ *     whose branch is already on the remote; rebasing there makes the next push non-fast-forward,
+ *     and the rule below forbids the force that would fix it. Asking anyway is asking for a step
+ *     with no legal ending, so the caller omits it and the controller does the rebase afterwards.
  */
 export function withProtocol(brief: string, branch: string, base?: string): string {
   // Only when there is a remote to rebase against. `baseRef` falls back to `HEAD` in a repository
   // with no origin, and telling a worker to `git fetch origin` there is an instruction to fail.
   const rebasing = base?.startsWith('origin/')
     ? [
-      `  2. Rebase onto what you will be merged into, BEFORE you push: \`git fetch origin && git rebase ${base}\`.`,
-      '     Then re-run the checks — the base has probably moved since this worktree was cut, and a',
+      `  2. Rebase onto what you will be merged into, BEFORE you push:`,
+      `     \`git fetch origin ${base.slice('origin/'.length)} && git rebase ${base}\``,
+      '     Fetch that ONE branch, not everything — hkb compares the rest against what it last saw.',
+      '     Then re-run the checks: the base has probably moved since this worktree was cut, and a',
       '     branch that was green against a stale base is not evidence about the merge.',
     ]
     : [];

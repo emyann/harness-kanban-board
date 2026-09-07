@@ -27,8 +27,10 @@ execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'migrate',
 
 const { openBoard, closeBoard } = await import('../src/db.ts');
 const { reconcile } = await import('../src/controller.ts');
-const { rebaseOntoBase, rebasePlan, conflictReason } = await import('../src/rebase.ts');
-const { createWorktree, baseRef, fetchBase } = await import('../src/worktree.ts');
+const {
+  rebaseOntoBase, rebasePlan, conflictReason, autostashFailed, pushRefused,
+} = await import('../src/rebase.ts');
+const { createWorktree, baseRef, fetchBase, heldWork } = await import('../src/worktree.ts');
 const { withProtocol } = await import('../src/brief.ts');
 
 const git = (cwd: string, args: string[]) => {
@@ -92,7 +94,7 @@ test.after(async () => { await closeBoard(); fs.rmSync(dir, { recursive: true, f
 // ---------------------------------------------------------------- the pure decision
 
 test('rebasePlan: a branch already on the base is left alone', () => {
-  const p = rebasePlan({ label: 'origin/main', ahead: 3, onBase: true });
+  const p = rebasePlan({ label: 'origin/main', ahead: 3, onBase: true, pushed: true, mayRewrite: true });
   assert.equal(p.act, 'nothing');
   assert.match(p.why, /already on origin\/main/);
 });
@@ -100,15 +102,42 @@ test('rebasePlan: a branch already on the base is left alone', () => {
 test('rebasePlan: a branch with nothing committed on it is left alone', () => {
   // The base moved AND the branch is behind it — but there is nothing to replay, so replaying
   // would rewrite a branch and spend a force-push to produce the base itself.
-  const p = rebasePlan({ label: 'origin/main', ahead: 0, onBase: false });
+  const p = rebasePlan({ label: 'origin/main', ahead: 0, onBase: false, pushed: false, mayRewrite: true });
   assert.equal(p.act, 'nothing');
   assert.match(p.why, /nothing was committed/);
 });
 
 test('rebasePlan: commits plus a base that moved is the one case that rebases', () => {
-  const p = rebasePlan({ label: 'origin/main', ahead: 2, onBase: false });
+  const p = rebasePlan({ label: 'origin/main', ahead: 2, onBase: false, pushed: true, mayRewrite: true });
   assert.equal(p.act, 'rebase');
   assert.match(p.why, /moved/);
+});
+
+test('rebasePlan: a pushed branch under a pull request nobody may rewrite is left alone', () => {
+  // The safety argument for rewriting an attempt branch is that the PR is a draft nobody has read.
+  // ADR-010's gate suspends an attempt precisely so somebody DOES read it.
+  const p = rebasePlan({ label: 'origin/main', ahead: 2, onBase: false, pushed: true, mayRewrite: false });
+  assert.equal(p.act, 'nothing');
+  assert.match(p.why, /no longer a draft/);
+});
+
+test('rebasePlan: an unpushed branch needs nobody\'s permission, there being no remote history to rewrite', () => {
+  const p = rebasePlan({ label: 'origin/main', ahead: 2, onBase: false, pushed: false, mayRewrite: false });
+  assert.equal(p.act, 'rebase');
+});
+
+test('autostashFailed: git exits 0 for this, which is the whole reason it is checked', () => {
+  assert.equal(autostashFailed('Successfully rebased and updated refs/heads/kb-1-1.'), false);
+  assert.equal(
+    autostashFailed('Applying autostash resulted in conflicts.\nYour changes are safe in the stash.'),
+    true,
+  );
+});
+
+test('pushRefused: a lease refusal is the Job\'s problem, an unreachable remote is ours', () => {
+  assert.equal(pushRefused(' ! [rejected]        kb-1-1 -> kb-1-1 (stale info)'), true);
+  assert.equal(pushRefused("fatal: '/nope.git' does not appear to be a git repository"), false);
+  assert.equal(pushRefused(''), false);
 });
 
 test('conflictReason: the CONFLICT lines are what a reader needs, not the --continue paragraph', () => {
@@ -295,8 +324,76 @@ test('a remote somebody else moved is REFUSED by the lease, rather than overwrit
   moveMain(other, 'other.txt', 'theirs\n', 'landed');
 
   const r = rebaseOntoBase(repo, wt);
-  assert.equal(r.kind, 'stale');
+  assert.equal(r.kind, 'rejected');
   assert.equal(at(origin, wt.branch), strangers, 'the stranger\'s commit is still on the remote');
+});
+
+test('a replay whose autostash does not come back BLOCKS, and pushes nothing — git exits 0 there', () => {
+  // The trap this exists for: `rebase --autostash` that replays every commit and then cannot
+  // reapply the stash exits **0**, leaving an unmerged index with conflict markers and the worker's
+  // uncommitted output in an unnamed stash entry. Believing the exit code means reporting success
+  // and force-pushing over it.
+  const { origin, repo, other } = makeRemote('autostash-conflict');
+  const wt = createWorktree(repo, 11, 1);
+  work(wt.path, 'mine.txt', 'mine\n', 'my work');
+  git(wt.path, ['push', '-q', '-u', 'origin', wt.branch]);
+  const remoteBefore = at(origin, wt.branch);
+  // Uncommitted, and on the same line the base is about to move: the legitimate `exports` shape.
+  fs.writeFileSync(path.join(wt.path, 'README.md'), 'one\nMINE\nthree\n');
+  moveMain(other, 'README.md', 'one\nTHEIRS\nthree\n', 'their line');
+
+  const r = rebaseOntoBase(repo, wt);
+  assert.equal(r.kind, 'autostash', 'not `rebased` — git said 0 and it is not what happened');
+  assert.equal(at(origin, wt.branch), remoteBefore, 'and nothing was pushed over it');
+  assert.match(
+    git(wt.path, ['stash', 'list']),
+    /autostash/,
+    'the uncommitted work is still recoverable, which is what the message has to say',
+  );
+});
+
+test('a remote we could not REACH does not fail the attempt — that is our fault, not the work\'s', () => {
+  const { repo, other } = makeRemote('unreachable');
+  const wt = createWorktree(repo, 12, 1);
+  work(wt.path, 'mine.txt', 'mine\n', 'my work');
+  git(wt.path, ['push', '-q', '-u', 'origin', wt.branch]);
+  moveMain(other, 'other.txt', 'theirs\n', 'landed');
+  git(repo, ['fetch', '-q', 'origin', 'main']);
+  // The remote goes away between the run and the push: a timeout, an auth blip, a forge outage.
+  git(repo, ['remote', 'set-url', 'origin', path.join(dir, 'gone.git')]);
+
+  const r = rebaseOntoBase(repo, wt);
+  assert.equal(r.kind, 'unpushed', 'not `rejected` — nothing refused us, we never arrived');
+  assert.ok(r.staleBase, 'and the fetch that failed first is not swallowed either');
+});
+
+test('a pull request out of draft stops the rewrite dead, because that is the safety argument', () => {
+  const { origin, repo, other } = makeRemote('reviewed');
+  const wt = createWorktree(repo, 13, 1);
+  work(wt.path, 'mine.txt', 'mine\n', 'my work');
+  git(wt.path, ['push', '-q', '-u', 'origin', wt.branch]);
+  const before = at(origin, wt.branch);
+  moveMain(other, 'other.txt', 'theirs\n', 'landed');
+
+  const r = rebaseOntoBase(repo, wt, { mayRewrite: false });
+  assert.equal(r.kind, 'current');
+  assert.match(r.kind === 'current' ? r.why : '', /no longer a draft/);
+  assert.equal(at(origin, wt.branch), before, 'a reviewer\'s comments still line up with the commits');
+  assert.equal(at(wt.path, 'HEAD'), before, 'and the local branch was not split off from them either');
+});
+
+test('a rebased checkout does not then read as holding the base\'s own commits', () => {
+  // `wt.base` is the floor the sweep counts unpushed work from. Left at the OLD base after a
+  // replay, every commit the new base brought is counted as work that exists only here — an
+  // inflated "push them" message and a checkout kept for ever on it.
+  const { repo, other } = makeRemote('held');
+  const wt = createWorktree(repo, 14, 1);
+  work(wt.path, 'mine.txt', 'mine\n', 'my work');
+  moveMain(other, 'other.txt', 'theirs\n', 'landed');
+
+  const r = rebaseOntoBase(repo, wt);
+  assert.equal(r.kind, 'rebased');
+  assert.equal(heldWork(repo, wt).unpushed, 1, 'one commit is ours; the base\'s is not');
 });
 
 // ---------------------------------------------------------------- the prompt half
@@ -309,6 +406,15 @@ test('the protocol asks the worker to rebase BEFORE it pushes, since after it ca
   assert.ok(rebaseAt < pushAt, 'and it is asked for before the push, which is the only place it is free');
   assert.match(p, /3\. Push it/, 'the steps are renumbered rather than repeating a number');
   assert.match(p, /5\. Reply with one line/);
+});
+
+test('the protocol never asks for a BLANKET fetch, which would undo the lease it is paired with', () => {
+  // A worktree shares its parent's ref store, so `git fetch origin` inside one updates
+  // `refs/remotes/origin/kb-<id>-<k>` — the exact ref `--force-with-lease` compares against.
+  // `fetchBase` narrows itself for this reason; asking the worker to widen it again gives it back.
+  const p = withProtocol('do the thing', 'kb-1-1', 'origin/main');
+  assert.match(p, /git fetch origin main\b/, 'the base branch, by name');
+  assert.doesNotMatch(p, /git fetch origin(?!\s+\S)/, 'and never a bare `git fetch origin`');
 });
 
 test('a repository with no remote is not told to fetch one', () => {
@@ -362,6 +468,84 @@ test('a Job whose base moved under it FAILS as conflicted, keeps its checkout, a
   const wtPath = path.join(repo, '.hkb', 'worktrees', `kb-${job.id}-1`);
   assert.equal(fs.existsSync(wtPath), true, 'the checkout to rebase IN is still there');
   assert.ok(lines.some((l) => /rebase it there/.test(l)), 'and the operator was told so');
+});
+
+test('a resumed attempt is NOT asked to rebase — on a pushed branch the step has no legal ending', async () => {
+  // Rebase then `git push -u`, on a branch already on the remote, is a non-fast-forward rejection —
+  // and the next rule in the same protocol forbids the force that would fix it. The controller
+  // rebases that case itself after the run instead.
+  const { repo } = makeRemote('resumed');
+  const db = openBoard();
+  const board = await db.board.upsert({
+    where: { slug: 'resumed' }, update: { repoPath: repo }, create: { slug: 'resumed', repoPath: repo },
+  });
+  const job = await db.job.create({ data: { boardId: board.id, name: 'twice', brief: 'do it twice' } });
+
+  const prompts: string[] = [];
+  const runtime: Runtime = {
+    name: 'two-goes',
+    async run(spec: WorkerSpec, onEvent?: (e: RuntimeEvent) => void): Promise<WorkerOutcome> {
+      prompts.push(spec.prompt);
+      const branch = git(spec.cwd, ['branch', '--show-current']);
+      if (spec.attempt === 1) {
+        work(spec.cwd, 'mine.txt', 'partway\n', 'partway');
+        git(spec.cwd, ['push', '-q', '-u', 'origin', branch]);
+        onEvent?.({ kind: 'ended', taskId: spec.taskId, status: 'max_turns' });
+        return {
+          status: 'max_turns', ok: false, sessionId: 's-1', text: 'partway', costUsd: 0, turns: 1,
+          durationMs: 0, stopReason: 'max_turns', denials: 0, error: null,
+        };
+      }
+      onEvent?.({ kind: 'ended', taskId: spec.taskId, status: 'completed' });
+      return {
+        status: 'completed', ok: true, sessionId: 's-2', text: 'done', costUsd: 0, turns: 1,
+        durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+      };
+    },
+  };
+
+  await reconcile({ runtime, cwd: repo, board: 'resumed', readPr: false });
+  await reconcile({ runtime, cwd: repo, board: 'resumed', readPr: false });
+
+  assert.equal(prompts.length, 2, 'it really did run twice');
+  assert.match(prompts[0], /git rebase origin\/main/, 'the first attempt, on a branch nobody has pushed, is asked');
+  assert.doesNotMatch(prompts[1], /git rebase origin\/main/, 'the second, resuming on a pushed branch, is not');
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: job.id } })).phase, 'succeeded');
+});
+
+test('a remote that went away does not fail a Job whose work is already on it', async () => {
+  const { repo, other } = makeRemote('ctl-unreachable');
+  const db = openBoard();
+  const board = await db.board.upsert({
+    where: { slug: 'unreachable' }, update: { repoPath: repo }, create: { slug: 'unreachable', repoPath: repo },
+  });
+  const job = await db.job.create({ data: { boardId: board.id, name: 'offline', brief: 'add a file' } });
+
+  const runtime: Runtime = {
+    name: 'then-offline',
+    async run(spec: WorkerSpec, onEvent?: (e: RuntimeEvent) => void): Promise<WorkerOutcome> {
+      const branch = git(spec.cwd, ['branch', '--show-current']);
+      work(spec.cwd, 'mine.txt', 'mine\n', 'my work');
+      git(spec.cwd, ['push', '-q', '-u', 'origin', branch]);
+      moveMain(other, 'other.txt', 'theirs\n', 'their work');
+      git(repo, ['fetch', '-q', 'origin', 'main']);
+      // The forge goes down between the run ending and the controller pushing.
+      git(repo, ['remote', 'set-url', 'origin', path.join(dir, 'vanished.git')]);
+      onEvent?.({ kind: 'ended', taskId: spec.taskId, status: 'completed' });
+      return {
+        status: 'completed', ok: true, sessionId: 'z-1', text: 'done', costUsd: 0, turns: 1,
+        durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+      };
+    },
+  };
+
+  const lines: string[] = [];
+  await reconcile({ runtime, cwd: repo, board: 'unreachable', readPr: false, onEvent: (l) => lines.push(l) });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'succeeded', 'a network fault is not evidence about the work');
+  assert.equal(after.attempts[0].outcome, 'completed');
+  assert.ok(lines.some((l) => /could not be reached/.test(l)), 'and it is not silent either');
 });
 
 test('a Job whose base moved somewhere else succeeds, rebased, with the remote brought along', async () => {

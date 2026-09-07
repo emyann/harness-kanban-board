@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "filing a batch of Jobs against one repository, reviewing several agent PRs cut from the same base, or designing how a graph kind would decompose work"
 covers:
   - path: src/controller.ts
-    sha: e346f83af40789b9fb4292972c6014f30cde34e1
+    sha: d961ffadfb3923dbafb051243f3d079b50648664
   - path: src/worktree.ts
     sha: 95c1207c4eaa7318526b9cd4df337802c08a521d
   - path: src/limits.ts
@@ -15,9 +15,9 @@ covers:
   - path: src/hkb.ts
     sha: 2aae98b33ad6c7909aceff4bcc573fcda399da82
   - path: prisma/schema.prisma
-    sha: b6d31a7e665c57a075972e88e98e2501da2c45d7
+    sha: 636cb35b527e2f4f3bca8351b6afce0a024b0651
 related: [architecture/job-kind, architecture/the-loop, concepts/ceilings, features/rebase-and-verify, decisions/adr-007-workload-scheduler, decisions/adr-008-declared-outputs]
-generated_at_commit: f2c1da5
+generated_at_commit: ee1f4fb
 last_refreshed: 2026-09-06
 ---
 
@@ -70,7 +70,7 @@ find (#362)"*, 2026-09-05:
 
 - Every branch is cut from the mainline at claim time and never rebased. The
   controller cuts the checkout on the serial side of the reconcile pass, at the
-  moment of the claim (`src/controller.ts:648-669`), from `origin/<default>` when
+  moment of the claim (`src/controller.ts:656-685`), from `origin/<default>` when
   there is one (`baseRef`, `src/worktree.ts:111-125`; `createWorktree`,
   `src/worktree.ts:161-185`). Nothing in `bin/`, `src/`, `scripts/` or `prisma/`
   contains the string `rebase`.
@@ -148,7 +148,7 @@ attempt chose to freeze the resolved cap onto the Attempt rather than re-derive
 it, and argued the cost into a feature (`docs/rebuild-plan.md:456`, `:469-470`);
 the doc-comment on `Attempt.maxBudgetUsd` sets out the three options and why the
 freeze is the only one that stays correct when an operator edits a board's default
-mid-flight (`prisma/schema.prisma:383-427`).
+mid-flight (`prisma/schema.prisma:387-431`).
 
 The recorded consequence: **what collides is not shared files but shared
 invariants**, and a decomposer that splits work by area reproduces this exactly
