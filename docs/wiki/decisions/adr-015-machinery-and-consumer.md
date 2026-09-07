@@ -11,12 +11,12 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/hkb.ts
-    sha: 21ce29cc760b2c0d9ec709eb3523ce79f39a6c96
+    sha: dcee4783fbf061987575b6b28f48df781ed61522
   - path: src/controller.ts
     sha: 41c7fbd41f65c61a80c6fcfa9ec56236d0811a7f
   - path: prisma/schema.prisma
     sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
-generated_at_commit: 9ce6588
+generated_at_commit: 5f66a64
 last_refreshed: 2026-09-07
 related:
   [
@@ -95,6 +95,12 @@ to the CLI.
 **A verb that is hard to write under the rule is telling you something.** `queue` and `triage` were
 written into the switch the day before this record, and are the first two that should move when they
 are next touched. That is not a criticism of them; it is the rule doing its job.
+
+> Done on 2026-09-07: every human-driven phase transition is now `src/transitions.ts`
+> (*architecture/transitions*) and the verbs parse, call and print. This record is not superseded by
+> it — decision 5 said the seam should fall out of ordinary work rather than be guessed, and that is
+> what happened. What still fails the test above is **creating** a Job: `hkb new` holds
+> `db.job.create` inside the switch behind ~190 lines of argument parsing.
 
 **The naming is unresolved, and this record does not resolve it.** "hkb" currently names the
 machinery, the CLI and the product at once. Kubernetes has `kubernetes`/`kubectl`/Argo; hkb has one

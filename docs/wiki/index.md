@@ -11,6 +11,7 @@
 - [The runtime layer — running a worker on the Agent SDK](./architecture/runtime-layer.md): One seam, run(spec) -> WorkerOutcome, with the Claude Agent SDK as the first driver and a fake for tests; what the SDK stores for us (so the board does not), and the three SDK behaviours that each cost a bug to learn.
 - [The board — the schema as a model](./architecture/the-board.md): What a row of each table means, why nearly every spec column is nullable, what is frozen onto an Attempt at claim time and why, and the self-bootstrapping migration path that makes the first command on a fresh machine work.
 - [The loop — a level-triggered daemon, and why the clock is not enough](./architecture/the-loop.md): hkb up runs reconcile on a 45s timer over every board on the machine. Why a controller is level-triggered rather than event-driven, why a lapsed lease is evidence and not proof, why leadership is a row rather than a pid file, and why an operator stop is its own outcome.
+- [Transitions — the human half of a Job's lifecycle](./architecture/transitions.md): A Job's phase moves for two reasons with two owners: the controller observes, and a person decides. The second half had no module and lived inside the CLI's switch, which is the ADR-015 test that failed. What a transition actually is, why the actor became a parameter, and what is still trapped.
 
 ## Concepts
 

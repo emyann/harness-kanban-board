@@ -1118,6 +1118,16 @@ test('hkb retry does not crash on a Job whose cap came from the board', async ()
   assert.equal(ok.maxBudgetUsd, 10, 'the retry runs under the board\'s new default');
   assert.equal((await db.job.findUniqueOrThrow({ where: { id } })).maxBudgetUsd, null,
     'and nothing was written onto the Job — it still has no opinion of its own');
+  assert.equal(ok.raised, undefined, 'no --max-budget was typed, so nothing was raised BY this retry');
+
+  // And when one IS typed, `maxBudgetUsd` stays a number and the raise gets its own key. It used to
+  // spread `{ maxBudgetUsd: { from, to } }` over the numeric field, so the TYPE of that field
+  // changed on the raise path only — a consumer doing arithmetic broke exactly when something
+  // interesting happened.
+  await db.job.update({ where: { id }, data: { phase: 'failed' } });
+  const raised = json((await hkb('retry', String(id), '--board', 'retry-inherited', '--max-budget', '20', '--json')).out);
+  assert.equal(raised.maxBudgetUsd, 20, 'still a number');
+  assert.deepEqual(raised.raised, { from: 3, to: 20 }, 'and the raise is beside it, not on top of it');
 });
 
 test('hkb boards prints a defaults line only for the boards that have one', async () => {
