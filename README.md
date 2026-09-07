@@ -180,6 +180,31 @@ repository, read by the same code that reads yours, and shipped in no tarball. T
 machinery; a workflow written in it is content. Full page:
 [docs/wiki/features/workflow-templates.md](docs/wiki/features/workflow-templates.md).
 
+### Finding work again: `--label`
+
+A Job can be **labelled**, the way a Kubernetes object is: a `key=value` pair, repeatable, held as a
+map rather than a list of tags — so `workflow=release` and `step=draft` are both true of one Job and
+either one can be asked about on its own.
+
+```bash
+hkb new "Draft the release notes" --brief "…" --label workflow=release --label step=draft
+hkb ls --label workflow=release              # the Jobs of this workflow
+hkb ls --label workflow=release --label step=draft   # ANDed: both, or it does not match
+```
+
+**The selector language is equality, and stops there on purpose.** Kubernetes also has `!=`, `in`,
+`notin` and set-based selectors, and every one of them is a query language to maintain; equality
+answers "the Jobs of this workflow", "everything touching the parser" and "all my security triage",
+which is what labels were wanted for. A key and a value are each a plain token — a letter or digit at
+each end, letters, digits, `-`, `_` and `.` between them, up to 63 characters — refused at file time
+and by name, before anything is created.
+
+**Nothing schedules off a label.** The controller does not read one: a label is how *you* find work
+again, not how work finds work. Ordering between Jobs is a second workload kind that does not exist
+yet. `hkb show` prints the labels and `hkb ls --json` carries them on every row, because a grouping
+nobody can see is a surprise. Full page:
+[docs/wiki/features/labels.md](docs/wiki/features/labels.md).
+
 ### A checkout may create a board and may not rewrite one
 
 The board is created and migrated on first touch, because the first command on a fresh machine has to

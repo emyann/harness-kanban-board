@@ -99,6 +99,11 @@ meet one in the git history, that is what it was.
 - **Kind** — a workload's schema plus the controller that advances it. `Job` is the first and only
   one (`prisma/schema.prisma`, `src/controller.ts`); a new kind means a new controller, not just new
   data (*architecture/job-kind*).
+- **Label** — a `key=value` pair on a Job, stored as a string→string map in `Job.labels` and selected
+  on with `hkb ls --label k=v` — equality only, ANDed across repeats (`src/labels.ts`;
+  *features/labels*). A map rather than a tag list so `workflow=release` and `step=draft` compose.
+  Nothing in the controller reads one: a label is how a person finds work again, not how work finds
+  work.
 - **Slot** — the concurrency ordinal a lease holds: the lowest non-negative integer no other live
   lease holds, machine-wide, released when the lease is (`Lease.slot`, frozen onto `Attempt.slot`).
   It is the only fact answering *"which of the concurrent workers am I"*, which a run picking a port

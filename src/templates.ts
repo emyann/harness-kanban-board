@@ -88,6 +88,7 @@ export const TEMPLATE_KEYS: Record<string, Kind> = {
   'allow-tool': 'list',
   'allow-tools': 'string',
   'plugin-dir': 'list',
+  label: 'list',
   input: 'list',
   export: 'list',
   result: 'list',

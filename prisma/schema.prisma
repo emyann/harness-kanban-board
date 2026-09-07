@@ -291,6 +291,24 @@ model Job {
   /// The file IS the value, so the file is what is durable, and `src/artifacts.ts` never removes
   /// one. That is a deliberate cost — see the size in `hkb show`.
   artifacts    Json?
+  /// How this Job is GROUPED: a JSON object of string → string, the way Kubernetes labels an
+  /// object. `{"workflow":"release","step":"draft"}`.
+  ///
+  /// A map rather than a list of tags, because the pair is the thing that gets asked for — "the
+  /// draft step of the release workflow" — and a flat list can only say it by inventing a separator
+  /// inside the tag, which is a schema nobody wrote down. `hkb ls --label workflow=release` selects
+  /// on it, equality only and ANDed across repeats (`src/labels.ts`); the richer k8s selectors
+  /// (`!=`, `in`, `notin`) are each a query language and are deliberately absent.
+  ///
+  /// **Nothing in the controller reads this.** A label groups Jobs for whoever is looking at the
+  /// board; it does not schedule, own or cascade. Ownership between Jobs is
+  /// `proposedByJobId`/`proposedByK`/`proposalIndex` above, and a dependency between them is a
+  /// second kind that does not exist yet (ADR-007).
+  ///
+  /// Nullable, so "unlabelled" is the absence of a value rather than an empty object every row
+  /// carries — and so the column is a plain `ADD COLUMN` against a live board.
+  labels       Json?
+
   /// What a human must decide before this Job goes on (ADR-010). Non-null makes the Job **gated**:
   /// an attempt that succeeds AND produced everything it declared does not go terminal — it goes
   /// `suspended`, carrying this text as `suspendedFor`, and waits.

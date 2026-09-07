@@ -10,6 +10,7 @@ import { reconcile } from './controller.ts';
 import { checkExportPath } from './worktree.ts';
 import { checkResultName, RESULT_MAX_BYTES } from './results.ts';
 import { checkArtifactName, artifactsDir, bytes } from './artifacts.ts';
+import { parseLabels, jobLabels, selects, describeLabels } from './labels.ts';
 import { PROPOSAL_ARTIFACT, describeProposal, storedProposal } from './proposals.ts';
 import { eventLine, watchEvents, watchWhere, WATCH_FALLBACK_MS } from './watch.ts';
 import { checkPluginPath, pluginList } from './plugins.ts';
@@ -88,6 +89,10 @@ const HELP = `hkb — run one agent against one brief
        --result <name>  a named value the Job must produce — a finding, a decision, a URL.
                         The board keeps it on the attempt and \`hkb show\` prints it, so a Job
                         that makes no commit still leaves something behind. Repeatable.
+       --label k=v      group this Job, repeatable — \`workflow=release\`, \`area=parser\`.
+                        A map, not a tag list, so two labels compose; \`hkb ls --label k=v\`
+                        selects on them. Nothing schedules off a label: it is how you find
+                        work again, not how work finds work.
        --artifact <name> a FILE the Job must produce, kept beside the board rather than
                         committed. Same contract as --result with no size limit: for a report,
                         a dataset, a proposal. A name may come back as a directory. Repeatable.
@@ -108,6 +113,10 @@ const HELP = `hkb — run one agent against one brief
 
   hkb ls                    what is on the board        [--phase p] [--board s]
        --all               every board on this machine, with a BOARD column
+       --label k=v         only Jobs carrying that label, repeatable and ANDed. Equality
+                           only, on purpose: \`!=\`, \`in\` and \`notin\` are a query language,
+                           and \`--label workflow=release --label step=draft\` is the question
+                           labels were wanted for.
   hkb show <id>             one screen: spec, phase, every attempt
   hkb run [<id>]            reconcile once, in the foreground   [--fake]
   hkb retry <id>            re-queue a Job that stopped, resuming its session
@@ -424,6 +433,9 @@ export async function main(argv: string[]): Promise<number> {
       // Repeatable: a Job with two deliverables declares two paths, and the alternative — one
       // comma-separated string — makes a filename containing a comma undeclarable.
       export: { type: 'string', multiple: true },
+      // `key=value`, repeatable — on `hkb new` it labels the Job, on `hkb ls` it selects. One flag
+      // for both, because the thing you filed with is the thing you look for.
+      label: { type: 'string', multiple: true },
       // Repeatable for the same reason `--export` is: a Job with two named values declares two.
       result: { type: 'string', multiple: true },
       artifact: { type: 'string', multiple: true },
@@ -562,6 +574,10 @@ export async function main(argv: string[]): Promise<number> {
       // Same reasoning one medium over: a name that cannot be a single path segment is a fault in
       // the spec, and finding it here costs nothing while finding it after a run costs the run.
       const artifacts = ((values.artifact as string[] | undefined) ?? []).map(checkArtifactName);
+      // The same fence again, for the same reason: a label that is not `key=value` in plain tokens
+      // is a fault in the spec, and a Job filed under a group nobody can name or select is worse
+      // than a refusal — it is a Job that is quietly not in the group its filer thinks it is in.
+      const labels = parseLabels((values.label as string[] | undefined) ?? []);
       // Checked at file time for the same reason an export path is: a grant is resolved into an
       // absolute path with no agent in the loop, so a path that was never legal must not become
       // state. Null when the flag was absent, so the board's grant can answer; an EMPTY list is
@@ -629,6 +645,9 @@ export async function main(argv: string[]): Promise<number> {
           ...(results.length ? { results } : {}),
           ...(artifacts.length ? { artifacts } : {}),
           ...(inputs.length ? { inputs } : {}),
+          // Null rather than `{}` for an unlabelled Job, on the same rule as every other Json?
+          // column here: the absence of a value is what "nobody said" looks like.
+          ...(Object.keys(labels).length ? { labels } : {}),
           ...(gate ? { gate } : {}),
           ...(guide !== undefined ? { guide } : {}),
           ...(triage ? { phase: 'triage' as const } : {}),
@@ -649,7 +668,7 @@ export async function main(argv: string[]): Promise<number> {
       await db.event.create({
         data: { kind: 'created', jobId: job.id, boardId: board.id, actor: whoami(), payload: { name, ...(triage ? { phase: 'triage' } : {}) } },
       });
-      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports, results, artifacts, inputs, proposes, from: tpl?.name ?? null }, () =>
+      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports, results, artifacts, inputs, labels, proposes, from: tpl?.name ?? null }, () =>
         console.log(`#${job.id} ${job.name}  [${job.phase}]  on ${slug}`
           + (triage ? `  — noted, not queued. \`hkb queue ${job.id}\` when it is work` : '')
           // Named because the Job no longer remembers: a workflow is expanded at file time and gone,
@@ -659,6 +678,9 @@ export async function main(argv: string[]): Promise<number> {
           + (results.length ? `\n  must report   ${results.join(', ')}` : '')
           + (artifacts.length ? `\n  must hand over ${artifacts.join(', ')}` : '')
           + (inputs.length ? `\n  is given      ${inputs.map((i) => `${i.name}=${describeSource(i)}`).join(', ')}` : '')
+          // Echoed back because a grouping nobody can see is a surprise — the same argument
+          // `describeDefaults` makes for a board's defaults.
+          + (Object.keys(labels).length ? `\n  labels        ${describeLabels(labels)}` : '')
           + (proposes ? `\n  proposes      Jobs — it writes \`${PROPOSAL_ARTIFACT}\` and waits for you to approve` : '')));
       return 0;
     }
@@ -673,6 +695,14 @@ export async function main(argv: string[]): Promise<number> {
       if (all && named) {
         throw usage(`--all is every board on this machine and --board ${named} is one — they contradict each other. Drop whichever you did not mean.`);
       }
+      // Equality, ANDed, and parsed BEFORE the read: a malformed selector is a usage error, and an
+      // empty listing is the one answer it must never give — that reads as "nothing matches".
+      //
+      // The filtering itself happens over the rows rather than in the `where`, because Prisma's
+      // JSON filters are PostgreSQL and MySQL only and SQLite cannot ask the question in SQL. This
+      // listing already reads its board in one query and shapes the rows in memory, so a selector
+      // is a `filter` over a read that was happening anyway (`src/labels.ts`).
+      const selector = parseLabels((values.label as string[] | undefined) ?? []);
       const jobs = await db.job.findMany({
         where: { ...(all ? {} : { board: { slug } }), ...(phase ? { phase } : {}) },
         orderBy: [{ board: { slug: 'asc' } }, { id: 'asc' }],
@@ -689,6 +719,7 @@ export async function main(argv: string[]): Promise<number> {
         },
       });
       const rows = jobs.map((j) => {
+        const labels = jobLabels(j.labels);
         const exports = declaredExports(j.exports);
         const results = declaredExports(j.results);
         const artifacts = declaredExports(j.artifacts);
@@ -699,12 +730,18 @@ export async function main(argv: string[]): Promise<number> {
           // Carried on every row, whatever the phase, for the reason `hkb boards` carries its
           // defaults either way: a consumer inferring absence from a missing key reads a shape,
           // not a record.
-          pr, exports, results, artifacts,
+          pr, exports, results, artifacts, labels,
           producedNothing: producedNothing({ phase: j.phase, pr, exports, results, artifacts, proposes: j.proposes }),
         };
-      });
+        // Filtered on the built row rather than before it: the row is where a label has already
+        // been read defensively out of the column, and reading it twice to save shaping a handful
+        // of rows nobody will print would be the more expensive kind of thrift.
+      }).filter((r) => selects(r.labels, selector));
       emit(out, rows, () => {
-        if (!rows.length) return console.log(all ? 'no jobs on any board' : `no jobs on ${slug}`);
+        // The selector is named back in the empty case, because "no jobs on default" when you asked
+        // for one label is an answer to a question you did not ask.
+        const asked = Object.keys(selector).length ? ` labelled ${describeLabels(selector)}` : '';
+        if (!rows.length) return console.log(all ? `no jobs${asked} on any board` : `no jobs${asked} on ${slug}`);
         const w = all ? Math.max(...rows.map((r) => r.board.length)) : 0;
         for (const r of rows) {
           const board = all ? `${r.board.padEnd(w)}  ` : '';
@@ -785,6 +822,11 @@ export async function main(argv: string[]): Promise<number> {
         for (const [k, v, from] of traced) {
           console.log(`           ${k.padEnd(10)} ${v.padEnd(vw)}  ${where(from)}`);
         }
+        // How this Job is GROUPED, printed with the spec rather than with the outputs: a label is
+        // something the filer said about the Job, and one nobody can see is a grouping that
+        // surprises whoever later asks `hkb ls --label` and does not find it.
+        const labels = jobLabels(job.labels);
+        if (Object.keys(labels).length) console.log(`  labels   ${describeLabels(labels)}`);
         // What it must produce, beside how it runs — the half of the spec ADR-008 added, and the
         // one that decides whether a completed session counts as a success.
         // Before the outputs, because that is the order the run sees them in.
