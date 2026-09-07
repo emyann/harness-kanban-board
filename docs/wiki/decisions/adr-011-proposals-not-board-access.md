@@ -21,7 +21,7 @@ covers:
   - path: src/brief.ts
     sha: 8b26e22eef60ceac89d2ececf18a82284a73ddad
   - path: prisma/schema.prisma
-    sha: 608f30399206342bbc1374203b47674c6a719657
+    sha: 888751eac2c7ae7c2bea8f57dd0dce7a1e084b05
   - path: src/artifacts.ts
     sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
   - path: src/inputs.ts
@@ -35,7 +35,7 @@ related:
     architecture/job-kind,
     architecture/the-loop,
   ]
-generated_at_commit: 47d5907
+generated_at_commit: 1ff10a0
 last_refreshed: 2026-09-06
 ---
 

@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "adding a column, deciding whether something belongs on the Job or the Attempt, writing a migration, or explaining why a board refuses to open"
 covers:
   - path: prisma/schema.prisma
-    sha: 608f30399206342bbc1374203b47674c6a719657
+    sha: 888751eac2c7ae7c2bea8f57dd0dce7a1e084b05
   - path: src/schema.ts
     sha: ee1920b789eb96be121c8bba20cc92e452ddf818
   - path: src/db.ts
@@ -16,7 +16,7 @@ covers:
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/spec.ts
     sha: df1e8d90a8b3070313b06dd4d47af39ec3f48ca7
-generated_at_commit: 47d5907
+generated_at_commit: 1ff10a0
 last_refreshed: 2026-09-06
 related:
   [
@@ -72,6 +72,11 @@ claim time in `src/limits.ts`. `Board.defaultMaxBudgetUsd` is the first; `Board.
 A Job that recorded `maxTurns: 20` because nobody said otherwise would outrank its board's default
 for ever — so the columns stay null, and `hkb show` prints where each resolved value came from,
 because a spec you cannot trace is worse than one you have to repeat.
+
+`Job.labels` is the exception that proves the rule, and it is worth knowing it is one: it is neither
+spec nor status but **metadata for selection**, the first column on this table that exists to make a
+*set* of Jobs askable rather than to say anything about one (`src/labels.ts`, `features/labels`).
+Null there means "no labels", which is the same fact as an empty map and is stored as the absence.
 
 The `Json?` columns are read defensively for the same reason: `toolList` treats both null *and* "not
 a list of strings" as unset, so a malformed column cannot silently narrow a Job's tool surface to

@@ -9,7 +9,7 @@ covers:
   - path: bin/hkb.ts
     sha: 698dd0e673a442929b7314d6bb409f87f89b8251
   - path: src/hkb.ts
-    sha: 40d5a07a8bde52758d60e994d6ec0aabbe4e8053
+    sha: 2aae98b33ad6c7909aceff4bcc573fcda399da82
   - path: src/controller.ts
     sha: eb7a09443efe5cd3e872af7f4560c9d82e1c11f6
   - path: src/daemon.ts
@@ -24,6 +24,10 @@ covers:
     sha: ffd76fce7689fe1c9a1dc0db3756cdf343d2b623
   - path: src/proposals.ts
     sha: fd5e1eee8b847c9b4024d1bf5f635a85907baae4
+  - path: src/templates.ts
+    sha: 6fb0fe7b9d2c02a576798c0d9a94eb443bbc7335
+  - path: src/labels.ts
+    sha: b524ef31fce5611a1a676dfb4631aaa83ecba926
   - path: src/watch.ts
     sha: 992b53f9dc3ef4284c2a1bf0201794490afee393
   - path: src/brief.ts
@@ -33,7 +37,7 @@ covers:
   - path: src/pulls.ts
     sha: a27f00a986f576c2d3ed035902c0a1c9f9a9300c
   - path: prisma/schema.prisma
-    sha: 608f30399206342bbc1374203b47674c6a719657
+    sha: 888751eac2c7ae7c2bea8f57dd0dce7a1e084b05
 related:
   [
     architecture/job-kind,
@@ -44,7 +48,7 @@ related:
     decisions/adr-009-retiring-the-first-system,
     decisions/adr-011-proposals-not-board-access,
   ]
-generated_at_commit: 47d5907
+generated_at_commit: 1ff10a0
 last_refreshed: 2026-09-06
 ---
 
@@ -72,6 +76,8 @@ seam or 36 CLI verbs is describing code that is gone.
 | `src/artifacts.ts` | the files a Job hands on that the board keeps and the repository does not |
 | `src/inputs.ts` | what a Job is given: the read side, resolved before the run |
 | `src/guide.ts` | the repository's own rules, read by hkb and put in front of the brief |
+| `src/templates.ts` | a workflow: the file a Job is filed from, and the format that makes one authorable |
+| `src/labels.ts` | the `key=value` pairs a Job carries, and the only thing that selects a set of them |
 | `src/proposals.ts` | what a Job may ask the board to create, and every field it may not set |
 | `src/watch.ts` | the event stream, followed — what the outside world reacts to |
 | `src/pulls.ts` | the only thing that shells out to `gh` |

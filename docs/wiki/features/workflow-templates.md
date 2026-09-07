@@ -7,9 +7,9 @@ audience: [dev]
 read_when: "authoring a workflow, adding a flag to `hkb new`, or deciding whether something belongs in the format (machinery) or in a workflow file (content)"
 covers:
   - path: src/templates.ts
-    sha: 1933caf87cd5ef7de278011e093ae284acfe54d8
+    sha: 6fb0fe7b9d2c02a576798c0d9a94eb443bbc7335
   - path: src/hkb.ts
-    sha: bcdc69f3b2603623346fc39f3da73fec3e8f2b1f
+    sha: 2aae98b33ad6c7909aceff4bcc573fcda399da82
   - path: src/inputs.ts
     sha: ffd76fce7689fe1c9a1dc0db3756cdf343d2b623
 related:
@@ -20,7 +20,7 @@ related:
     concepts/ceilings,
     features/proposals,
   ]
-generated_at_commit: 367856b
+generated_at_commit: 1ff10a0
 last_refreshed: 2026-09-06
 ---
 
