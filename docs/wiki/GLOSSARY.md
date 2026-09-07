@@ -57,6 +57,11 @@ meet one in the git history, that is what it was.
   replays onto the base it will be merged into (`rebaseOntoBase`, `src/rebase.ts`). Its own value
   rather than `no_output` because the fault is in neither the work nor the spec, and the fix is a
   hand rebase rather than another run (*features/rebase-and-verify*).
+- **Transition** — a Job moving between phases because a *person* decided (`src/transitions.ts`:
+  queue, triage, approve, reject, retry, done/cancel, remove), as opposed to the moves the
+  controller makes by observing. Each is a lookup, a set of refusals and a group of writes that
+  belong together; the refusals are why it is a module rather than a phase write
+  (*architecture/transitions*).
 - **Control plane** — hkb read as Kubernetes reads itself: a Board is a namespace, a Job is a Job, an
   Attempt is a Pod, a Lease is a Lease, and the daemon is a controller-manager. The one departure is
   that hkb also *executes* — there is no node to schedule onto (*architecture/overview*,

@@ -8,6 +8,9 @@ import { ensureSchema } from './schema.ts';
 import { databaseUrl } from './db-url.ts';
 import { reconcile } from './controller.ts';
 import { checkExportPath, checkRef } from './worktree.ts';
+import {
+  approveJob, concludeJob, queueJob, rejectJob, removeJob, retryJob, triageJob,
+} from './transitions.ts';
 import { checkResultName, RESULT_MAX_BYTES } from './results.ts';
 import { checkArtifactName, artifactsDir, bytes } from './artifacts.ts';
 import { parseLabels, jobLabels, selects, describeLabels } from './labels.ts';
@@ -1010,16 +1013,8 @@ export async function main(argv: string[]): Promise<number> {
     case 'rm': {
       const id = num(rest[0], 'hkb rm <id>');
       if (!id) throw usage('hkb rm <id> — which Job?');
-      const job = await db.job.findUnique({ where: { id }, include: { lease: true } });
-      if (!job) throw usage(`no Job #${id} — nothing to remove`);
-      if (job.lease) throw usage(`#${id} is leased by ${job.lease.holder} — it is running. Wait for it, or let the lease expire.`);
-      await db.job.delete({ where: { id } });
-      // `jobId` would cascade away with the Job it names, taking the record of the deletion with
-      // it. The board keeps this one.
-      await db.event.create({
-        data: { kind: 'removed', boardId: job.boardId, actor: whoami(), payload: { id, name: job.name } },
-      });
-      emit(out, { removed: id }, () => console.log(`removed #${id}`));
+      const r = await removeJob(db, id, { by: whoami() });
+      emit(out, r, () => console.log(`removed #${r.removed}`));
       return 0;
     }
 
@@ -1032,91 +1027,23 @@ export async function main(argv: string[]): Promise<number> {
     case 'retry': {
       const id = num(rest[0], 'hkb retry <id>');
       if (!id) throw usage('hkb retry <id> — which Job? `hkb ls --phase failed` shows the candidates');
-      const job = await db.job.findUnique({
-        where: { id },
-        include: {
-          lease: true, board: true,
-          attempts: { where: { endedAt: { not: null } }, orderBy: { k: 'desc' }, take: 1 },
-        },
-      });
-      if (!job) throw usage(`no Job #${id} — \`hkb ls\` shows what is on the board`);
-      if (job.lease) {
-        throw usage(`#${id} is leased by ${job.lease.holder} — it is running now. Wait for it, or let the lease expire.`);
-      }
-      if (job.phase === 'pending') throw usage(`#${id} is already pending — \`hkb run ${id}\` works it now`);
-      if (job.phase === 'running') {
-        throw usage(`#${id} says running with no lease — \`hkb run\` reclaims it, and re-queueing it by hand would race that`);
-      }
-      // A proposing Job whose proposal has been applied has nothing left to do: the next pass would
-      // see the same approval, re-file rows the unique key already refuses, and finish it again
-      // without ever running the worker. Refused here rather than absorbed there, because a retry
-      // that quietly does nothing is the failure mode this project has shipped before.
-      if (job.proposes && await db.event.count({ where: { jobId: id, kind: 'applied' } })) {
-        throw usage(
-          `#${id} proposed work that has already been filed — retrying it would re-run nothing, `
-          + `because the approval it would find is the one that was already applied. `
-          + `\`hkb log ${id}\` shows what it filed; file a new Job to propose again.`,
-        );
-      }
-
       const budget = num(values['max-budget'], '--max-budget');
-      const turns = num(values['max-turns'], '--max-turns');
-      const retries = num(values['max-retries'], '--max-retries');
-      // Two different caps, and conflating them is how this guard gets it wrong now that a board
-      // can supply one. `ranUnder` is what the failed attempt was frozen at — the number that
-      // actually stopped it, read off the Attempt because the Job's column is null for every Job
-      // that inherited its cap, and because the board's default may have moved since. `wouldGet`
-      // is what the next attempt gets, which is today's resolution unless `--max-budget` overrides
-      // it. They differ exactly when the board was raised after the failure, and there the retry
-      // genuinely buys something: refusing it would send an operator to override a limit that is
-      // no longer in the way.
-      const last = job.attempts[0];
-      const resolved = resolveSpec(job, job.board).maxBudgetUsd.value;
-      const ranUnder = last?.maxBudgetUsd ?? resolved;
-      const wouldGet = budget ?? resolved;
-      // The guard. Re-queueing a budget-capped Job under the same cap buys exactly what the
-      // automatic retry used to: the same run, the same stopping point, the same bill.
-      if (last?.outcome === 'max_budget' && !(wouldGet > ranUnder)) {
-        throw usage(
-          `#${id} spent its whole $${ranUnder.toFixed(2)} budget and stopped with work left — running it `
-          + `again under $${wouldGet.toFixed(2)} stops in the same place, at the same price. Give it a bigger `
-          + `one: \`hkb retry ${id} --max-budget ${(ranUnder * 2).toFixed(2)}\`, or file a smaller brief.`,
-        );
-      }
-      if (budget !== undefined && !(budget > 0)) {
-        throw usage(`--max-budget wants dollars above zero, got ${budget} — a Job with no budget cannot run at all`);
-      }
-
-      await db.job.update({
-        where: { id },
-        data: {
-          phase: 'pending',
-          finishedAt: null,
-          lastError: null,
-          ...(budget !== undefined ? { maxBudgetUsd: budget } : {}),
-          ...(turns !== undefined ? { maxTurns: turns } : {}),
-          ...(retries !== undefined ? { maxRetries: retries } : {}),
-        },
+      const r = await retryJob(db, id, {
+        by: whoami(),
+        ...(budget !== undefined ? { maxBudgetUsd: budget } : {}),
+        ...(num(values['max-turns'], '--max-turns') !== undefined ? { maxTurns: num(values['max-turns'], '--max-turns') } : {}),
+        ...(num(values['max-retries'], '--max-retries') !== undefined ? { maxRetries: num(values['max-retries'], '--max-retries') } : {}),
       });
-      // Recorded, because "the cap was raised, by whom, from what" is the one fact that makes a
-      // second $2 attempt legible six weeks later.
-      const raise = budget !== undefined && budget !== ranUnder
-        ? { maxBudgetUsd: { from: ranUnder, to: budget } } : {};
-      await db.event.create({
-        data: {
-          kind: 'requeued', jobId: id, boardId: job.boardId, actor: whoami(),
-          payload: { was: job.phase, ...raise, resume: job.lastSessionId },
-        },
-      });
+      const raise = r.maxBudgetUsd_raise ? { maxBudgetUsd: r.maxBudgetUsd_raise } : {};
       emit(out, {
-        id, phase: 'pending', maxBudgetUsd: budget ?? wouldGet, resume: job.lastSessionId, ...raise,
+        id: r.id, phase: r.phase, maxBudgetUsd: r.maxBudgetUsd, resume: r.resume, ...raise,
       }, () => {
-        const cap = budget !== undefined && budget !== ranUnder
-          ? `  maxBudget $${ranUnder.toFixed(2)} → $${budget.toFixed(2)}` : '';
+        const cap = r.maxBudgetUsd_raise
+          ? `  maxBudget $${(r.ranUnder ?? 0).toFixed(2)} → $${r.maxBudgetUsd_raise.to.toFixed(2)}` : '';
         // A resumed Job does not start over, and an operator about to watch it needs to know that
         // before they wonder why the branch already has commits on it.
-        const from = job.lastSessionId ? `  (resumes ${job.lastSessionId})` : '  (starts cold)';
-        console.log(`#${id} pending again${cap}${from}`);
+        const from = r.resume ? `  (resumes ${r.resume})` : '  (starts cold)';
+        console.log(`#${r.id} pending again${cap}${from}`);
       });
       return 0;
     }
@@ -1152,65 +1079,31 @@ export async function main(argv: string[]): Promise<number> {
       const id = num(rest[0], `hkb ${verb} <id>`);
       if (!id) throw usage(`hkb ${verb} <id> — which Job?`);
       const note = rest.slice(1).join(' ').trim();
-      if (verb === 'reject' && !note) {
-        throw usage(`hkb reject ${id} "<why>" — a rejection without a reason tells the next reader nothing.`);
-      }
-      const job = await db.job.findUnique({ where: { id }, include: { lease: true } });
-      if (!job) throw usage(`no Job #${id}`);
-      // Refused rather than queued. A Job that is not waiting has nothing to approve, and saying so
-      // beats writing an approval that the next reconcile ignores.
-      if (job.phase !== 'suspended') {
-        throw usage(`#${id} is ${job.phase}, not suspended — there is nothing waiting to be decided. `
-          + `Only a gated Job that has produced what it declared waits here.`);
-      }
-      if (job.lease) {
-        throw usage(`#${id} is held by ${job.lease.holder} — wait for the run to end, or \`hkb down\`.`);
-      }
       const actor = os.userInfo().username;
 
       if (verb === 'reject') {
-        await db.$transaction([
-          db.job.update({
-            where: { id },
-            data: {
-              phase: 'cancelled', endedBy: actor, endedFor: note, finishedAt: new Date(),
-              suspendedFor: null,
-            },
-          }),
-          db.event.create({
-            data: { kind: 'rejected', jobId: id, boardId: job.boardId, actor, payload: { note } },
-          }),
-        ]);
-        emit(out, { id, phase: 'cancelled', by: actor, why: note }, () =>
-          console.log(`#${id} rejected by ${actor} — ${note}`));
+        const r = await rejectJob(db, id, { note, by: actor });
+        emit(out, r, () => console.log(`#${r.id} rejected by ${r.by} — ${r.why}`));
         return 0;
       }
 
-      // The approval itself is the Event, durable and never consumed; the phase change is what the
-      // controller acts on. Both in one transaction, because a phase moved without the event that
-      // explains it would give the next attempt the brief again instead of the instruction.
-      await db.$transaction([
-        db.event.create({
-          data: { kind: 'approved', jobId: id, boardId: job.boardId, actor, payload: note ? { note } : {} },
-        }),
-        db.job.update({ where: { id }, data: { phase: 'pending', suspendedFor: null } }),
-      ]);
+      const r = await approveJob(db, id, { note, by: actor });
       // Two different things happen next, and saying the wrong one sends a reader looking for a
       // run that will never start. A proposing Job is not resumed: the controller applies what it
       // proposed and the Job is finished (ADR-011). Every other gated Job continues its session
       // with the approver's words as the prompt (ADR-010 decision 4).
-      emit(out, { id, phase: 'pending', by: actor, note: note || null, proposes: job.proposes }, () =>
-        console.log(`#${id} approved by ${actor} — ${job.proposes
+      emit(out, r, () =>
+        console.log(`#${r.id} approved by ${r.by} — ${r.proposes
           ? 'the controller files what it proposed on the next pass'
           : 'it resumes on the next pass'}`
-          + (note ? `, told: ${note}` : '')));
+          + (r.note ? `, told: ${r.note}` : '')));
       return 0;
     }
 
     case 'done':
     case 'cancel': {
       const phase = BY_HAND[verb as ByHandVerb];
-      const id = num(rest[0], `hkb ${verb} <id>`);
+      const id = num(rest[0], `hkb ${verb} <id> "<reason>"`);
       if (!id) throw usage(`hkb ${verb} <id> "<reason>" — which Job?`);
       // Joined the way `hkb new` joins a name, so an unquoted reason is not silently truncated to
       // its first word.
@@ -1222,59 +1115,10 @@ export async function main(argv: string[]): Promise<number> {
             : 'why it is not wanted, e.g. `hkb cancel ' + id + ' "superseded by #12"`'}`,
         );
       }
-
-      const job = await db.job.findUnique({ where: { id }, include: { lease: true } });
-      if (!job) throw usage(`no Job #${id} — \`hkb ls\` shows what is on the board`);
-
-      // The same rule as `hkb rm`, for the same reason: a lease is a worker that is running right
-      // now, and concluding its Job out from under it would leave it reporting to a record that
-      // says the question was already settled. The daemon is a thing the operator can stop, so
-      // say so rather than racing it.
-      if (job.lease) {
-        throw usage(
-          `#${id} is leased by ${job.lease.holder} — it is running. `
-          + `\`hkb down\` stops the daemon, or wait for the run to finish (the lease lapses by `
-          + `${job.lease.expiresAt.toISOString()}), then \`hkb ${verb} ${id}\` again.`,
-        );
-      }
-      if (job.phase === 'succeeded') {
-        throw usage(`#${id} already succeeded — the runtime concluded it, and \`hkb ${verb}\` is for the Jobs it cannot. \`hkb show ${id}\` has the attempts.`);
-      }
-      if (job.phase === phase) {
-        throw usage(`#${id} is already ${phase}${job.endedBy ? ` — ${job.endedBy} said so: ${job.endedFor}` : ''}`);
-      }
-      // Between `done` and `cancelled` a restatement IS allowed, and deliberately: they are both
-      // the operator's own word, a mistyped verb is easy, and the alternative escape is `hkb rm` —
-      // the very trap this verb exists to remove. The correction is another Event, so the log
-      // keeps both statements in order rather than pretending the first never happened.
-
-      const at = new Date();
-      const by = operator();
-      const updated = await db.job.update({
-        where: { id },
-        data: { phase, endedBy: by, endedFor: reason, finishedAt: at },
-      });
-      // An attempt still open on a Job with no lease was never heard from again — `lost` is the
-      // Outcome that already means exactly that. Closing it is not cosmetic: `hkb show` renders an
-      // open attempt as elapsed-so-far, so a terminal Job would print a duration that climbs for
-      // ever. Scoped to `endedAt: null`, so a finished attempt is never rewritten.
-      await db.attempt.updateMany({
-        where: { jobId: id, endedAt: null },
-        data: { endedAt: at, outcome: 'lost', reason: `#${id} was ${phase} by ${by} while this attempt was open` },
-      });
-      await db.event.create({
-        data: {
-          kind: phase, jobId: id, boardId: job.boardId, actor: by,
-          payload: { from: job.phase, reason },
-        },
-      });
-
-      emit(out, {
-        id, board: slug, name: job.name, phase: updated.phase, from: job.phase,
-        endedBy: by, endedFor: reason, finishedAt: at,
-      }, () => {
-        console.log(`#${id} ${phase} — ${job.name}  (was ${job.phase})`);
-        console.log(`  ${reason}`);
+      const r = await concludeJob(db, id, { phase, reason, by: operator() });
+      emit(out, { ...r, board: slug }, () => {
+        console.log(`#${r.id} ${r.phase} — ${r.name}  (was ${r.from})`);
+        console.log(`  ${r.endedFor}`);
       });
       return 0;
     }
@@ -1673,47 +1517,21 @@ export async function main(argv: string[]): Promise<number> {
     case 'triage': {
       const id = num(rest[0], `hkb ${verb} <id>`);
       if (!id) throw usage(`hkb ${verb} <id> — which Job?`);
-      const job = await db.job.findUnique({ where: { id }, include: { lease: true } });
-      if (!job) throw usage(`no Job #${id} — \`hkb ls\` shows what is on the board`);
 
       if (verb === 'queue') {
-        if (job.phase !== 'triage') {
-          throw usage(`#${id} is ${job.phase}, not triage — \`hkb queue\` is for a Job nobody has decided on yet`
-            + (job.phase === 'pending' ? ', and this one is already queued' : ''));
-        }
-        // The brief is rewritable HERE and nowhere else, because this is the moment it stops being a
-        // note and becomes an instruction — the note said what you saw, and the brief has to say
-        // what to do about it. Optional: a note that was already a good brief needs no second pass.
-        const rest1 = rest.slice(1).join(' ').trim();
-        const brief = rest1 || (values.brief !== undefined || values['brief-file'] !== undefined
+        // The brief may be rewritten HERE and nowhere else, so this is the one verb that reads one.
+        const inline = rest.slice(1).join(' ').trim();
+        const brief = inline || (values.brief !== undefined || values['brief-file'] !== undefined
           ? await readBrief(values)
           : null);
-        await db.$transaction([
-          db.job.update({ where: { id }, data: { phase: 'pending', ...(brief ? { brief } : {}) } }),
-          db.event.create({
-            data: { kind: 'queued', jobId: id, boardId: job.boardId, actor: whoami(), payload: brief ? { rebriefed: true } : {} },
-          }),
-        ]);
-        emit(out, { id, phase: 'pending', rebriefed: !!brief }, () =>
-          console.log(`#${id} queued${brief ? ', with a new brief' : ''} — it runs on the next pass`));
+        const r = await queueJob(db, id, { brief, by: whoami() });
+        emit(out, r, () =>
+          console.log(`#${r.id} queued${r.rebriefed ? ', with a new brief' : ''} — it runs on the next pass`));
         return 0;
       }
 
-      // The way back. Without it a Job filed in haste can only be cancelled, which is terminal and
-      // throws away the note along with the decision not to run it now.
-      if (job.lease) {
-        throw usage(`#${id} is leased by ${job.lease.holder} — it is running now. Wait for it, or let the lease expire.`);
-      }
-      if (job.phase === 'triage') throw usage(`#${id} is already in triage`);
-      if (job.phase !== 'pending') {
-        throw usage(`#${id} is ${job.phase}, and triage is for work that has not started`
-          + ` — \`hkb retry ${id}\` puts a stopped Job back on the board, \`hkb cancel ${id} "<why>"\` ends it`);
-      }
-      await db.$transaction([
-        db.job.update({ where: { id }, data: { phase: 'triage' } }),
-        db.event.create({ data: { kind: 'triaged', jobId: id, boardId: job.boardId, actor: whoami(), payload: {} } }),
-      ]);
-      emit(out, { id, phase: 'triage' }, () => console.log(`#${id} back to triage — nothing will claim it`));
+      const r = await triageJob(db, id, { by: whoami() });
+      emit(out, r, () => console.log(`#${r.id} back to triage — nothing will claim it`));
       return 0;
     }
 

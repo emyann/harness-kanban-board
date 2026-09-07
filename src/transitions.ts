@@ -1,0 +1,415 @@
+import type { openBoard } from './db.ts';
+import { resolveSpec } from './spec.ts';
+
+/**
+ * The human half of a Job's lifecycle.
+ *
+ * A Job's phase moves for two reasons and they belong to different owners. The **controller** moves
+ * it by observing: `pending → running`, then `running → succeeded | failed | suspended | pending`,
+ * plus reclaiming a lease whose holder died. That half has been a module since ADR-007. The other
+ * half moves because a **person decided** — queue this, put it back, approve it, retry it, this is
+ * finished, this is not wanted — and it had no module at all. It grew one verb at a time inside
+ * `switch (verb)` in `src/hkb.ts`, downstream of argv parsing, where nothing but the CLI can reach
+ * it.
+ *
+ * That is the failing half of ADR-015's own test — *"could a web board be built without touching
+ * `src/hkb.ts`? No"* — and this module is the answer to it. Nothing here is new behaviour: the
+ * guards, the messages, the events and the returned shapes are the ones the verbs already had, and
+ * the verbs now parse arguments, call one of these, and print.
+ *
+ * ## What a transition is, and why it is not a phase write
+ *
+ * Every one of these is a lookup, a set of refusals, and a group of writes that belong together.
+ * The refusals are the part worth having a module for. `#12 is leased by host/9 — it is running`
+ * is not defensive coding; it is the reason concluding a Job out from under a live worker leaves
+ * that worker reporting to a record which says the question was already settled. A second consumer
+ * that re-implemented these from the phase diagram would get the diagram right and the reasoning
+ * wrong, which is precisely how the machinery and the product become one thing.
+ *
+ * ## The actor is a parameter, and that is the one deliberate change
+ *
+ * The verbs read `process.env.USER` and `os.hostname()` to decide who acted. A web board's actor is
+ * a logged-in person and a daemon's is a host — neither is an environment variable here. So every
+ * function takes `by`, and no function in this module has an opinion about who is calling it. That
+ * is the smallest thing that makes these callable by something that is not a terminal.
+ *
+ * ## Writes are atomic here, which two of them were not
+ *
+ * `queue` and `approve` already wrapped their writes in `$transaction`; `done`, `retry` and `rm`
+ * did the same work as separate awaits, because they were written on different days. A phase moved
+ * without the event that explains it is a Job the log cannot account for — so they are all
+ * transactions now. No behaviour changes on the success path; the failure path stops being able to
+ * leave half a transition behind.
+ */
+
+type Db = ReturnType<typeof openBoard>;
+
+/** Who did it. A username, a host, a service account — this module does not care which. */
+export type Actor = string;
+
+/**
+ * A refusal, in the shape the CLI already throws: exit code 2 for usage or state, and a message
+ * that names the fix. Kept here rather than imported from `src/hkb.ts` so that nothing in this
+ * module depends on the CLI — the dependency runs one way, which is the whole point of the file.
+ */
+function refuse(message: string): never {
+  const e = new Error(message) as Error & { exitCode: number };
+  e.exitCode = 2;
+  throw e;
+}
+
+/** The Job, with the two relations every transition needs to judge one, or a refusal. */
+async function find(db: Db, id: number, missing: string) {
+  const job = await db.job.findUnique({ where: { id }, include: { lease: true } });
+  if (!job) refuse(missing);
+  return job;
+}
+
+/**
+ * A lease is a worker running *right now*, and every transition here refuses one.
+ *
+ * Not a race to win but a race to decline: the daemon is a thing the operator can stop, so the
+ * message says so and names when the lease lapses on its own.
+ */
+function refuseIfLeased(job: { id: number; lease: { holder: string; expiresAt: Date } | null }, what: string): void {
+  if (!job.lease) return;
+  refuse(`#${job.id} is leased by ${job.lease.holder} — it is running. ${what}`);
+}
+
+// ---------------------------------------------------------------- triage ⇄ pending
+
+export type Queued = { id: number; phase: 'pending'; rebriefed: boolean };
+
+/**
+ * A note becomes work.
+ *
+ * The brief is rewritable **here and nowhere else**, because this is the moment it stops being a
+ * note and becomes an instruction: the note said what you saw, and the brief has to say what to do
+ * about it. Optional, because a note that was already a good brief needs no second pass.
+ */
+export async function queueJob(
+  db: Db,
+  id: number,
+  opts: { brief?: string | null; by: Actor },
+): Promise<Queued> {
+  const job = await find(db, id, `no Job #${id} — \`hkb ls\` shows what is on the board`);
+  if (job.phase !== 'triage') {
+    refuse(`#${id} is ${job.phase}, not triage — \`hkb queue\` is for a Job nobody has decided on yet`
+      + (job.phase === 'pending' ? ', and this one is already queued' : ''));
+  }
+  const brief = opts.brief?.trim() || null;
+  await db.$transaction([
+    db.job.update({ where: { id }, data: { phase: 'pending', ...(brief ? { brief } : {}) } }),
+    db.event.create({
+      data: { kind: 'queued', jobId: id, boardId: job.boardId, actor: opts.by, payload: brief ? { rebriefed: true } : {} },
+    }),
+  ]);
+  return { id, phase: 'pending', rebriefed: !!brief };
+}
+
+export type Triaged = { id: number; phase: 'triage' };
+
+/**
+ * The way back.
+ *
+ * Without it a Job filed in haste can only be cancelled, which is terminal and throws away the note
+ * along with the decision not to run it now.
+ */
+export async function triageJob(db: Db, id: number, opts: { by: Actor }): Promise<Triaged> {
+  const job = await find(db, id, `no Job #${id} — \`hkb ls\` shows what is on the board`);
+  refuseIfLeased(job, 'Wait for it, or let the lease expire.');
+  if (job.phase === 'triage') refuse(`#${id} is already in triage`);
+  if (job.phase !== 'pending') {
+    refuse(`#${id} is ${job.phase}, and triage is for work that has not started`
+      + ` — \`hkb retry ${id}\` puts a stopped Job back on the board, \`hkb cancel ${id} "<why>"\` ends it`);
+  }
+  await db.$transaction([
+    db.job.update({ where: { id }, data: { phase: 'triage' } }),
+    db.event.create({ data: { kind: 'triaged', jobId: id, boardId: job.boardId, actor: opts.by, payload: {} } }),
+  ]);
+  return { id, phase: 'triage' };
+}
+
+// ---------------------------------------------------------------- the gate (ADR-010)
+
+export type Approved = {
+  id: number; phase: 'pending'; by: Actor; note: string | null; proposes: string | null;
+};
+
+/**
+ * Let a gated Job go on, in the approver's own words.
+ *
+ * The approval **is** the Event — durable, never consumed, attributable — and the phase change is
+ * what the controller acts on. Both in one transaction, because a phase moved without the event
+ * that explains it would give the next attempt the brief again instead of the instruction
+ * (ADR-010 decision 4).
+ */
+export async function approveJob(
+  db: Db,
+  id: number,
+  opts: { note?: string; by: Actor },
+): Promise<Approved> {
+  const job = await find(db, id, `no Job #${id}`);
+  requireSuspended(job, id);
+  const note = opts.note?.trim() || '';
+  await db.$transaction([
+    db.event.create({
+      data: { kind: 'approved', jobId: id, boardId: job.boardId, actor: opts.by, payload: note ? { note } : {} },
+    }),
+    db.job.update({ where: { id }, data: { phase: 'pending', suspendedFor: null } }),
+  ]);
+  return { id, phase: 'pending', by: opts.by, note: note || null, proposes: job.proposes };
+}
+
+export type Rejected = { id: number; phase: 'cancelled'; by: Actor; why: string };
+
+/** The other end of the gate. A rejection is terminal, and it must say why. */
+export async function rejectJob(
+  db: Db,
+  id: number,
+  opts: { note: string; by: Actor },
+): Promise<Rejected> {
+  const note = opts.note.trim();
+  if (!note) refuse(`hkb reject ${id} "<why>" — a rejection without a reason tells the next reader nothing.`);
+  const job = await find(db, id, `no Job #${id}`);
+  requireSuspended(job, id);
+  await db.$transaction([
+    db.job.update({
+      where: { id },
+      data: { phase: 'cancelled', endedBy: opts.by, endedFor: note, finishedAt: new Date(), suspendedFor: null },
+    }),
+    db.event.create({
+      data: { kind: 'rejected', jobId: id, boardId: job.boardId, actor: opts.by, payload: { note } },
+    }),
+  ]);
+  return { id, phase: 'cancelled', by: opts.by, why: note };
+}
+
+/**
+ * Both ends of the gate refuse the same two things.
+ *
+ * Refused rather than queued: a Job that is not waiting has nothing to approve, and saying so beats
+ * writing an approval that the next reconcile ignores.
+ */
+function requireSuspended(
+  job: { phase: string; lease: { holder: string; expiresAt: Date } | null },
+  id: number,
+): void {
+  if (job.phase !== 'suspended') {
+    refuse(`#${id} is ${job.phase}, not suspended — there is nothing waiting to be decided. `
+      + `Only a gated Job that has produced what it declared waits here.`);
+  }
+  if (job.lease) refuse(`#${id} is held by ${job.lease.holder} — wait for the run to end, or \`hkb down\`.`);
+}
+
+// ---------------------------------------------------------------- back onto the board
+
+export type Requeued = {
+  id: number; phase: 'pending'; maxBudgetUsd: number | null; resume: string | null;
+  maxBudgetUsd_raise?: { from: number | null; to: number };
+  /** What the Job was before, for the caller's own message. */
+  was: string;
+  /** The cap the LAST attempt actually ran under — what a raise is measured from. */
+  ranUnder: number | null;
+};
+
+/**
+ * The deliberate re-queue.
+ *
+ * `nextPhase` retries what a retry could plausibly change and stops at what it cannot — a Job that
+ * spent its whole budget gets the same cap next time, so the controller fails it rather than making
+ * the same wall again. Raising the cap is a change to the Job's spec, which belongs to whoever
+ * filed it: this is where they make it, and the raise goes on the event stream so the extra money
+ * has a name against it.
+ */
+export async function retryJob(
+  db: Db,
+  id: number,
+  opts: {
+    maxBudgetUsd?: number; maxTurns?: number; maxRetries?: number; by: Actor;
+  },
+): Promise<Requeued> {
+  const job = await db.job.findUnique({
+    where: { id },
+    include: {
+      lease: true, board: true,
+      attempts: { where: { endedAt: { not: null } }, orderBy: { k: 'desc' }, take: 1 },
+    },
+  });
+  if (!job) refuse(`no Job #${id} — \`hkb ls\` shows what is on the board`);
+  if (job.lease) {
+    refuse(`#${id} is leased by ${job.lease.holder} — it is running now. Wait for it, or let the lease expire.`);
+  }
+  if (job.phase === 'pending') refuse(`#${id} is already pending — \`hkb run ${id}\` works it now`);
+  if (job.phase === 'running') {
+    refuse(`#${id} says running with no lease — \`hkb run\` reclaims it, and re-queueing it by hand would race that`);
+  }
+  // A proposing Job whose proposal has been applied has nothing left to do: the next pass would see
+  // the same approval, re-file rows the unique key already refuses, and finish it again without
+  // ever running the worker. Refused here rather than absorbed there, because a retry that quietly
+  // does nothing is the failure mode this project has shipped before.
+  if (job.proposes && await db.event.count({ where: { jobId: id, kind: 'applied' } })) {
+    refuse(
+      `#${id} proposed work that has already been filed — retrying it would re-run nothing, `
+      + `because the approval it would find is the one that was already applied. `
+      + `\`hkb log ${id}\` shows what it filed; file a new Job to propose again.`,
+    );
+  }
+
+  const { maxBudgetUsd: budget, maxTurns: turns, maxRetries: retries } = opts;
+  // Two different caps, and conflating them is how this guard gets it wrong now that a board can
+  // supply one. `ranUnder` is what the failed attempt was frozen at — the number that actually
+  // stopped it, read off the Attempt because the Job's column is null for every Job that inherited
+  // its cap, and because the board's default may have moved since. `wouldGet` is what the next
+  // attempt gets, which is today's resolution unless `--max-budget` overrides it. They differ
+  // exactly when the board was raised after the failure, and there the retry genuinely buys
+  // something: refusing it would send an operator to override a limit no longer in the way.
+  const last = job.attempts[0];
+  const resolved = resolveSpec(job, job.board).maxBudgetUsd.value;
+  const ranUnder = last?.maxBudgetUsd ?? resolved;
+  const wouldGet = budget ?? resolved;
+  // The guard. Re-queueing a budget-capped Job under the same cap buys exactly what the automatic
+  // retry used to: the same run, the same stopping point, the same bill.
+  if (last?.outcome === 'max_budget' && !(wouldGet > ranUnder)) {
+    refuse(
+      `#${id} spent its whole $${ranUnder.toFixed(2)} budget and stopped with work left — running it `
+      + `again under $${wouldGet.toFixed(2)} stops in the same place, at the same price. Give it a bigger `
+      + `one: \`hkb retry ${id} --max-budget ${(ranUnder * 2).toFixed(2)}\`, or file a smaller brief.`,
+    );
+  }
+  if (budget !== undefined && !(budget > 0)) {
+    refuse(`--max-budget wants dollars above zero, got ${budget} — a Job with no budget cannot run at all`);
+  }
+
+  // Recorded, because "the cap was raised, by whom, from what" is the one fact that makes a second
+  // $2 attempt legible six weeks later.
+  const raised = budget !== undefined && budget !== ranUnder;
+  await db.$transaction([
+    db.job.update({
+      where: { id },
+      data: {
+        phase: 'pending',
+        finishedAt: null,
+        lastError: null,
+        ...(budget !== undefined ? { maxBudgetUsd: budget } : {}),
+        ...(turns !== undefined ? { maxTurns: turns } : {}),
+        ...(retries !== undefined ? { maxRetries: retries } : {}),
+      },
+    }),
+    db.event.create({
+      data: {
+        kind: 'requeued', jobId: id, boardId: job.boardId, actor: opts.by,
+        payload: {
+          was: job.phase,
+          ...(raised ? { maxBudgetUsd: { from: ranUnder, to: budget } } : {}),
+          resume: job.lastSessionId,
+        },
+      },
+    }),
+  ]);
+  return {
+    id,
+    phase: 'pending',
+    maxBudgetUsd: budget ?? wouldGet,
+    resume: job.lastSessionId,
+    was: job.phase,
+    ranUnder,
+    ...(raised ? { maxBudgetUsd_raise: { from: ranUnder, to: budget as number } } : {}),
+  };
+}
+
+// ---------------------------------------------------------------- ended by hand
+
+export type Concluded = {
+  id: number; name: string; phase: 'done' | 'cancelled'; from: string;
+  endedBy: Actor; endedFor: string; finishedAt: Date;
+};
+
+/**
+ * End a Job the machinery cannot end itself.
+ *
+ * The gap this closes: a Job whose pull request was reviewed and merged while it sat `pending` on a
+ * spent budget. The work is done; the board does not know, and the next reconcile spends the whole
+ * cap redoing merged work. Until this the only thing that stopped it was deleting the Job, its
+ * attempts and its events — so the choice was between re-running work that already landed and
+ * destroying the record that it did, on a board whose whole point is the record.
+ *
+ * `done` and `cancelled` are two statements, not one with a reason attached: *this achieved its aim
+ * by other means* and *stop, this is not wanted*. The reason is required by both, because it says
+ * **what** landed or **why** it was dropped, which the phase never can.
+ */
+export async function concludeJob(
+  db: Db,
+  id: number,
+  opts: { phase: 'done' | 'cancelled'; reason: string; by: Actor },
+): Promise<Concluded> {
+  const { phase, reason, by } = opts;
+  if (!reason.trim()) refuse(`#${id} needs a reason — a terminal phase nobody explained is a record that answers nothing`);
+  const job = await find(db, id, `no Job #${id} — \`hkb ls\` shows what is on the board`);
+  // The same rule as removing one, for the same reason: a lease is a worker running right now, and
+  // concluding its Job out from under it would leave it reporting to a record that says the
+  // question was already settled. The daemon is a thing the operator can stop, so say so.
+  if (job.lease) {
+    refuse(
+      `#${id} is leased by ${job.lease.holder} — it is running. `
+      + `\`hkb down\` stops the daemon, or wait for the run to finish (the lease lapses by `
+      + `${job.lease.expiresAt.toISOString()}), then try again.`,
+    );
+  }
+  if (job.phase === 'succeeded') {
+    refuse(`#${id} already succeeded — the runtime concluded it, and this is for the Jobs it cannot. \`hkb show ${id}\` has the attempts.`);
+  }
+  if (job.phase === phase) {
+    refuse(`#${id} is already ${phase}${job.endedBy ? ` — ${job.endedBy} said so: ${job.endedFor}` : ''}`);
+  }
+  // Between `done` and `cancelled` a restatement IS allowed, and deliberately: they are both the
+  // operator's own word, a mistyped verb is easy, and the alternative escape is deleting the Job —
+  // the very trap this exists to remove. The correction is another Event, so the log keeps both
+  // statements in order rather than pretending the first never happened.
+
+  const at = new Date();
+  const [updated] = await db.$transaction([
+    db.job.update({ where: { id }, data: { phase, endedBy: by, endedFor: reason, finishedAt: at } }),
+    // An attempt still open on a Job with no lease was never heard from again — `lost` is the
+    // Outcome that already means exactly that. Closing it is not cosmetic: `hkb show` renders an
+    // open attempt as elapsed-so-far, so a terminal Job would print a duration that climbs for
+    // ever. Scoped to `endedAt: null`, so a finished attempt is never rewritten.
+    db.attempt.updateMany({
+      where: { jobId: id, endedAt: null },
+      data: { endedAt: at, outcome: 'lost', reason: `#${id} was ${phase} by ${by} while this attempt was open` },
+    }),
+    db.event.create({
+      data: { kind: phase, jobId: id, boardId: job.boardId, actor: by, payload: { from: job.phase, reason } },
+    }),
+  ]);
+  return {
+    id, name: job.name, phase: updated.phase as 'done' | 'cancelled', from: job.phase,
+    endedBy: by, endedFor: reason, finishedAt: at,
+  };
+}
+
+// ---------------------------------------------------------------- gone
+
+export type Removed = { removed: number };
+
+/**
+ * Delete a Job, its attempts and its events.
+ *
+ * Not a phase — the row stops existing — but it belongs here because it is the same decision made
+ * by the same person under the same lease rule, and because a consumer offering the other five
+ * without this one has an incomplete lifecycle. `concludeJob` is almost always the better answer;
+ * this is for a Job that should never have been filed.
+ */
+export async function removeJob(db: Db, id: number, opts: { by: Actor }): Promise<Removed> {
+  const job = await find(db, id, `no Job #${id} — nothing to remove`);
+  refuseIfLeased(job, 'Wait for it, or let the lease expire.');
+  await db.$transaction([
+    db.job.delete({ where: { id } }),
+    // `jobId` would cascade away with the Job it names, taking the record of the deletion with it.
+    // The board keeps this one.
+    db.event.create({
+      data: { kind: 'removed', boardId: job.boardId, actor: opts.by, payload: { id, name: job.name } },
+    }),
+  ]);
+  return { removed: id };
+}

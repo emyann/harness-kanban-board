@@ -14,7 +14,7 @@ covers:
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
 generated_at_commit: 9ce6588
 last_refreshed: 2026-09-07
-related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control, features/rebase-and-verify]
+related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control, features/rebase-and-verify, architecture/transitions]
 ---
 
 # The Job kind and its controller
