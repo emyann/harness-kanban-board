@@ -451,6 +451,12 @@ Job that stalled.
 
 ## 12. What this study decided
 
+> **Clarified by ADR-017 (2026-09-08).** §3's headline — *not as a graph, and not as an edge either* —
+> was written for the case this study examined: one actor, gated. ADR-017 records the vision the
+> study did not have in front of it — the developer's own workflow as content, with a *review* as a
+> step in its own row by §5's identity criterion — and §2's fourth objection to `Job.after` as an
+> artefact of a workflow with no review step. Neither section is rewritten; read them with that.
+
 One record so far, and it came from a question the study did not ask.
 
 **ADR-011 — a workload proposes, the controller writes.** §8 recorded that Hermes lets a worker reach the

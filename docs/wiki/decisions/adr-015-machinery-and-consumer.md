@@ -24,6 +24,7 @@ related:
     decisions/adr-011-proposals-not-board-access,
     architecture/overview,
     architecture/job-kind,
+    decisions/adr-017-the-workflow-is-content,
   ]
 ---
 
