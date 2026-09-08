@@ -7,14 +7,14 @@ audience: [dev]
 read_when: "adding a flag, adding a verb that joins positionals, or wondering why a value arrived as one word"
 covers:
   - path: src/hkb.ts
-    sha: de723e5a29b4eecb20165522e7f8aba7a059d7be
+    sha: 58995038dfcf0e00183f7331b57f1a4350a5994c
 related:
   [
     architecture/transitions,
     features/workflow-templates,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: 238e866
+generated_at_commit: 3c57c88
 last_refreshed: 2026-09-07
 ---
 
@@ -57,7 +57,9 @@ have been accepted and its value filed as something else.
 
 It is a check rather than `strict: true` because strict mode throws Node's own error: no exit code
 of ours, no message naming the fix, and it fires before the `--help` path a person mistyping a flag
-most wants next.
+most wants next. Which means the check has to sit **after** that path itself — `hkb new --brefi x
+--help` prints the help — and **before** the leftover check, or a misspelled flag is reported as a
+quoting error on a value that was already quoted. Both orderings were wrong once.
 
 ## 2. A value that lost its quotes becomes positionals
 
@@ -86,34 +88,49 @@ quoting, as in --input "…"; text that belongs to the name goes before the flag
 the value* and *this is part of the name* — need opposite fixes, and only the person who typed it
 knows which they meant. Guessing would be the same silence in a different costume.
 
-### The rule, and how it got narrower
+### The rule, and the two wrong versions before it
 
-The first version was "any positional after any option", and it broke **four** legal invocations
-that no test covered. That is the finding behind the finding: the tests asserted only what the guard
-must *refuse*. CLAUDE.md's rule about proving a guard by making it refuse has a second half nobody
-had written down — **a guard also has to be proven not to refuse what people actually type**, and
-without those cases 538 tests passed with four regressions live.
+`hkb new`'s name is **every positional**, so the only question worth asking is *which positionals
+are the name*. They are the ones before the first flag — or, when there are none there, the first
+one after it. Everything beyond that is a leftover, and `--` overrides the whole thing.
 
-A positional is stray only when:
+| typed | read as |
+|---|---|
+| `hkb new "a name" --input k=v:x y` | `y` is a leftover |
+| `hkb new --triage "an idea"` | the idea IS the name |
+| `hkb new --triage "a" --input k=v:x y` | `a` is the name, `y` is a leftover |
+| `hkb new my great job --brief "x"` | all three words are the name |
+| `hkb new "a" --brief x -- more` | `--` says the rest is positional |
 
-1. **a positional already appeared before the flags.** That is what says the verb has what it came
-   for. Without it, the first positional after a flag *is* the thing — `hkb new --triage "capture
-   this"` is the frictionless-capture path, `hkb cancel --board other 12 "superseded"` puts the id
-   after a flag because there is nowhere else for it to go, and `hkb new --from tmpl "My Name"` is
-   documented on the templates page. All three were refused, the last two with advice that could not
-   be followed.
-2. **`--` has not been seen.** The standard way to say *everything after this is a positional*, and
-   the only override the guard has.
+**It took three attempts and each wrong one is worth knowing.** The first was *"any positional after
+any option"*, which refused four documented forms including `hkb new --triage "…"`. The second asked
+whether a positional appeared before the *first* flag and gave up if not — which made the check
+entirely inert the moment a boolean led the line, so row three of that table went through silently.
+Both were caught by review rather than by tests, for the same reason both times: **the tests said
+what the guard must refuse and never what it must allow.**
 
-And two things the check is scoped by rather than conditioned on: it runs for the six verbs that
-join positionals into prose (`hkb watch --board other 999` is real, and a verb taking a fixed number
-of positionals cannot absorb a stray one), and options *before* the verb are ignored, or `hkb --json
-new x` would read its own verb as stray.
+That is the half of CLAUDE.md's rule that was not written down. "Every new guard gets a test that
+makes it *refuse*" is necessary and not sufficient — a guard also has to be proven not to refuse
+what people actually type, and without those cases 538 tests passed with four regressions live.
 
-**A boolean flag changes the advice, not the verdict.** A word after `--json` was still silently
-joined into the name, so it is still refused — but only a flag that consumed something can have
-spilled it, and telling somebody to write `--json "…"` is advice that produces a different error. So
-the flag is named only when it took a value, and never across an intervening boolean.
+### Why only `hkb new`
+
+`queue`, `done`, `cancel`, `approve` and `reject` join their trailing positionals into prose too, and
+there a spilled value **cannot be told from an unquoted reason**: `hkb cancel 1 --board b
+"superseded"` and `hkb cancel 1 --board my board name` produce the same token shape, and the first is
+ordinary. Guarding them would mean giving up the greedy join — which exists so an unquoted reason is
+not silently truncated to its first word, i.e. to prevent the *other* silent failure. One or the
+other. The join stays and the guard covers the verb where the name is unambiguous.
+
+Verbs of **fixed** arity are a different case and can be guarded exactly. `hkb job set` takes one id,
+so `hkb job set 1 --name a better name` was setting the name to `a` and throwing away `better name`
+— a leftover is *dropped* rather than absorbed there, which is the same fault wearing the other
+face. It refuses now.
+
+**A boolean flag changes the advice, not the verdict.** A word after `--json` is still a leftover and
+still refused, but only a flag that consumed something can have spilled it, and telling somebody to
+write `--json "…"` is advice that produces a different error. So the flag is named only when it took
+a value, and never across an intervening boolean.
 
 ## Why both of these are the same bug
 

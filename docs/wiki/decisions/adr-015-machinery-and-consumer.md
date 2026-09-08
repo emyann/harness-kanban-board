@@ -11,12 +11,12 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/hkb.ts
-    sha: de723e5a29b4eecb20165522e7f8aba7a059d7be
+    sha: 58995038dfcf0e00183f7331b57f1a4350a5994c
   - path: src/controller.ts
     sha: 41c7fbd41f65c61a80c6fcfa9ec56236d0811a7f
   - path: prisma/schema.prisma
     sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
-generated_at_commit: 238e866
+generated_at_commit: 3c57c88
 last_refreshed: 2026-09-07
 related:
   [

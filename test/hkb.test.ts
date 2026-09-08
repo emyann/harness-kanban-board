@@ -1469,20 +1469,12 @@ test('strayWords: a boolean flag changes the ADVICE, not the verdict', () => {
   ]).after, null);
 });
 
-test('strayWords: with no positional before the flags, the first one after IS the thing', () => {
+test('strayWords: with no positional before the flags, the first one after IS the name', () => {
   // The frictionless-capture path, which the first version of this guard refused outright.
   assert.deepEqual(strayWords([
     { kind: 'positional', index: 0, value: 'new' },
     { kind: 'option', index: 1, name: 'triage' },
     { kind: 'positional', index: 2, value: 'capture this idea' },
-  ]).words, []);
-  // `hkb cancel --board other 12 "superseded"` — the id is not "text that belongs to the message",
-  // and there is no way to move it before the flags without moving the flags too.
-  assert.deepEqual(strayWords([
-    { kind: 'positional', index: 0, value: 'cancel' },
-    { kind: 'option', index: 1, name: 'board', value: 'other' },
-    { kind: 'positional', index: 3, value: '12' },
-    { kind: 'positional', index: 4, value: 'superseded' },
   ]).words, []);
   // `hkb new --from tmpl "My Name"` — the name typed on the line, which the templates page documents.
   assert.deepEqual(strayWords([
@@ -1490,6 +1482,23 @@ test('strayWords: with no positional before the flags, the first one after IS th
     { kind: 'option', index: 1, name: 'from', value: 'tmpl' },
     { kind: 'positional', index: 3, value: 'My Name' },
   ]).words, []);
+});
+
+test('strayWords: a leading boolean does not make the whole line unguarded', () => {
+  // The second wrong version asked whether a positional came before the FIRST flag and gave up if
+  // not — so one leading `--triage` disabled the check for every later flag, and the exact triage
+  // #40 corruption went through silently. The name is the first positional after the flags; the
+  // ones beyond it are leftovers.
+  const r = strayWords([
+    { kind: 'positional', index: 0, value: 'new' },
+    { kind: 'option', index: 1, name: 'triage' },
+    { kind: 'positional', index: 2, value: 'review the parser' },
+    { kind: 'option', index: 3, name: 'input', value: 'page=value:the' },
+    { kind: 'positional', index: 5, value: 'wiki' },
+    { kind: 'positional', index: 6, value: 'page' },
+  ]);
+  assert.deepEqual(r.words, ['wiki', 'page']);
+  assert.equal(r.after, '--input');
 });
 
 test('strayWords: `--` is the override, because a guard with none is one that gets in the way', () => {
@@ -1507,15 +1516,18 @@ test('unknownFlags: a flag nobody declared is a boolean under strict:false, so i
   const declared = ['brief', 'board', 'json'];
   assert.deepEqual(unknownFlags([
     { kind: 'positional', index: 0, value: 'new' },
-    { kind: 'option', index: 1, name: 'brefi', value: 'do it' },
-  ], declared), ['brefi']);
+    { kind: 'option', index: 1, name: 'brefi', rawName: '--brefi', value: 'do it' },
+  ], declared), ['--brefi']);
   // Named once however many times it is typed, and a declared one is never named.
   assert.deepEqual(unknownFlags([
-    { kind: 'option', index: 0, name: 'nope' },
-    { kind: 'option', index: 1, name: 'nope' },
-    { kind: 'option', index: 2, name: 'json' },
-  ], declared), ['nope']);
+    { kind: 'option', index: 0, name: 'nope', rawName: '--nope' },
+    { kind: 'option', index: 1, name: 'nope', rawName: '--nope' },
+    { kind: 'option', index: 2, name: 'json', rawName: '--json' },
+  ], declared), ['--nope']);
   assert.deepEqual(unknownFlags([{ kind: 'option', index: 0, name: 'board', value: 'x' }], declared), []);
+  // A SHORT flag is echoed as it was typed: `-z` is not `--z`, and showing somebody something they
+  // did not write is its own small confusion.
+  assert.deepEqual(unknownFlags([{ kind: 'option', index: 0, name: 'z', rawName: '-z' }], declared), ['-z']);
 });
 
 test('strayWords: the invocations that must stay legal', () => {
@@ -1598,20 +1610,43 @@ test('a misspelled flag says so, rather than blaming the quoting of a value that
   await assert.rejects(() => hkb('ls', '--phse', 'triage'), /unknown flag: `--phse`/);
 });
 
-test('the same trap in the other verbs that join positionals into prose', async () => {
+test('the verbs whose trailing prose is greedy are deliberately NOT guarded', async () => {
+  // `hkb cancel 1 --board b "superseded"` and `hkb cancel 1 --board my board name` have the same
+  // token shape, and the first is ordinary — so guarding them would mean giving up the greedy join,
+  // which exists so an unquoted reason is not silently truncated to its first word. One or the
+  // other. See `strayWords`.
   const r = scratchRepo('stray-verbs');
   await hkb('boards', 'add', 'stray-verbs', '--repo', r);
-  const id = json((await hkb('new', 'note', '--triage', '--board', 'stray-verbs', '--json')).out).id;
-  // `queue` would have taken "the thing" as the inline brief, silently beating `--brief do`.
-  await assert.rejects(
-    () => hkb('queue', String(id), '--board', 'stray-verbs', '--brief', 'do', 'the', 'thing'),
-    /stray words after `--brief`/,
-  );
-  // And a verb that takes a FIXED number of positionals is untouched: an id after a flag is real.
+  const id = json((await hkb('new', 'note', '--board', 'stray-verbs', '--brief', 'x', '--json')).out).id;
+  await hkb('cancel', String(id), '--board', 'stray-verbs', 'superseded by #12');
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id } })).endedFor, 'superseded by #12');
+
+  // And a verb taking a FIXED number of positionals is untouched: an id after a flag is real.
   await assert.rejects(
     () => hkb('watch', '--board', 'stray-verbs', '999999'),
     /no Job #999999|999999/,
   );
+});
+
+test('hkb job set drops nothing silently — its arity is fixed, so a leftover is refused', async () => {
+  // The other face of the same fault: a non-greedy verb does not absorb a stray, it THROWS IT AWAY.
+  // `hkb job set 1 --name a better name` set the name to `a` and lost `better name` without a word.
+  const r = scratchRepo('jobset-stray');
+  await hkb('boards', 'add', 'jobset-stray', '--repo', r);
+  const id = json((await hkb('new', 'original', '--brief', 'x', '--board', 'jobset-stray', '--json')).out).id;
+  await assert.rejects(
+    () => hkb('job', 'set', String(id), '--board', 'jobset-stray', '--name', 'a', 'better', 'name'),
+    /takes one id, and got `better`, `name` as well/,
+  );
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id } })).name, 'original', 'and nothing was written');
+});
+
+test('a mistyped flag does not stop --help from answering', async () => {
+  // This module's own argument against `strict: true` is that it errors before help can answer, and
+  // a person who has just mistyped a flag is exactly the person about to ask for it.
+  const r = await hkb('new', '--brefi', 'x', '--help');
+  assert.equal(r.code, 0);
+  assert.match(r.out, /hkb — run one agent against one brief/);
 });
 
 test('hkb job set --name takes the words, not the boolean parseArgs would make of it', async () => {
