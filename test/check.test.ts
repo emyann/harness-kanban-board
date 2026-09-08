@@ -34,7 +34,8 @@ test('a non-zero exit fails, and the record carries the number', () => {
   assert.equal(r.record?.exitCode, 1);
   assert.equal(r.record?.command, 'npm test');
   assert.equal(r.record?.why, undefined, 'an ordinary failure needs no explanation beyond its code');
-  assert.match(r.record?.tail ?? '', /boom/, 'and what it said is kept');
+  assert.match(r.record?.stderr ?? '', /boom/, 'and what it said is kept');
+  assert.equal(r.record?.stdout, 'x', 'each stream in its own window');
 });
 
 test('a command the shell cannot find is an ordinary failure — the shell says so better', () => {
@@ -43,7 +44,7 @@ test('a command the shell cannot find is an ordinary failure — the shell says 
   const r = readCheck('nope', { status: 127, signal: null, stdout: '', stderr: 'sh: 1: nope: not found' }, 3);
   assert.equal(r.ok, false);
   assert.equal(r.record?.exitCode, 127);
-  assert.match(r.record?.tail ?? '', /not found/);
+  assert.match(r.record?.stderr ?? '', /not found/);
 });
 
 test('a check that ran out of time fails, and says so rather than reporting a code', () => {
@@ -132,13 +133,27 @@ test('a short tail is kept whole, with no note about a cut that did not happen',
 
 test('stderr survives the cut, because that is where the reason is', () => {
   const r = readCheck('t', { status: 1, signal: null, stdout: 'x'.repeat(CHECK_TAIL_BYTES * 2), stderr: 'AssertionError' }, 1);
-  assert.match(r.record?.tail ?? '', /AssertionError$/);
+  assert.match(r.record?.stderr ?? '', /AssertionError$/);
+});
+
+test('TWO windows: a loud stderr does not evict the stdout verdict', () => {
+  // The bug: the two were joined and the JOIN was cut to `CHECK_TAIL_BYTES`, so the moment stderr
+  // alone reached 4 KB the stdout side of the cut was gone entirely. That is the ordinary shape of
+  // `cargo test`, mocha, vitest and `node --test` — progress and warnings on stderr, summary on
+  // stdout — so the one line anybody wanted was the one reliably dropped.
+  const noise = 'warning: unused variable\n'.repeat(300);
+  assert.ok(Buffer.byteLength(noise) > CHECK_TAIL_BYTES, 'the noise really does overflow one window');
+  const r = readCheck('cargo test', { status: 101, signal: null, stdout: 'test result: FAILED. 1 passed; 2 failed', stderr: noise }, 4_000);
+  assert.equal(r.record?.stdout, 'test result: FAILED. 1 passed; 2 failed', 'the verdict survives whole');
+  assert.match(r.record?.stderr ?? '', /earlier bytes dropped/, 'and the loud one is cut on its own');
+  // Each window is capped separately, so the worst case is two of them and not one of eight.
+  assert.ok(Buffer.byteLength(r.record?.stderr ?? '') < CHECK_TAIL_BYTES + 100);
 });
 
 // ---------------------------------------------------------------- what the operator is told
 
 test('the failure names the command, and what happens next depends on whether a retry is left', () => {
-  const rec = { command: 'npm test', exitCode: 1, kind: 'exit' as const, tail: '1 failing', ms: 1000 };
+  const rec = { command: 'npm test', exitCode: 1, kind: 'exit' as const, stdout: '1 failing', stderr: '', ms: 1000 };
   const retrying = checkShortfall(rec, true);
   assert.match(retrying, /`npm test`/, 'the command, so it can be run by hand');
   assert.match(retrying, /exited 1/);
@@ -151,7 +166,7 @@ test('the failure names the command, and what happens next depends on whether a 
 
 test('a check that never ran says WHY instead of quoting an exit code it does not have', () => {
   const line = describeCheck({
-    command: 'npm test', exitCode: null, kind: 'unfinished', tail: '', ms: 600_000,
+    command: 'npm test', exitCode: null, kind: 'unfinished', stdout: '', stderr: '', ms: 600_000,
     why: 'was still running after 600s and was killed',
   });
   assert.match(line, /still running/);
@@ -167,7 +182,7 @@ test('a check that never ran says WHY instead of quoting an exit code it does no
 
 test('the timeout reads as one sentence, with the duration stated once', () => {
   const rec = {
-    command: 'npm test', exitCode: null, kind: 'unfinished' as const, tail: '', ms: 600_000,
+    command: 'npm test', exitCode: null, kind: 'unfinished' as const, stdout: '', stderr: '', ms: 600_000,
     why: 'was still running after 600s and was killed',
   };
   assert.equal(describeCheck(rec), 'check `npm test` was still running after 600s and was killed');
@@ -182,7 +197,7 @@ test('the timeout reads as one sentence, with the duration stated once', () => {
 
 test('a check that could not START claims nothing about the work, and says where the fix is', () => {
   const rec = {
-    command: './gate', exitCode: null, kind: 'unstartable' as const, tail: '', ms: 2,
+    command: './gate', exitCode: null, kind: 'unstartable' as const, stdout: '', stderr: '', ms: 2,
     why: 'could not be started: spawn EACCES',
   };
   assert.equal(describeCheck(rec), 'check `./gate` could not be started: spawn EACCES');
@@ -199,7 +214,7 @@ test('a check that could not START claims nothing about the work, and says where
 });
 
 test('an ordinary non-zero exit keeps the finding it has earned', () => {
-  const rec = { command: 'npm test', exitCode: 1, kind: 'exit' as const, tail: '1 failing', ms: 12_000 };
+  const rec = { command: 'npm test', exitCode: 1, kind: 'exit' as const, stdout: '1 failing', stderr: '', ms: 12_000 };
   assert.equal(describeCheck(rec), 'check `npm test` exited 1 after 12s');
   assert.match(checkShortfall(rec, true), /^its check `npm test` exited 1, so the attempt failed: the work is there and it does not do what it must\. /);
 });
@@ -215,14 +230,19 @@ test('a malformed check column reads as "no check was recorded" rather than cras
 });
 
 test('a real record survives the round trip, and missing fields become safe ones', () => {
-  const r = storedCheck({ command: 'npm test', exitCode: 1, kind: 'exit', tail: '1 failing', ms: 30 });
-  assert.deepEqual(r, { command: 'npm test', exitCode: 1, kind: 'exit', tail: '1 failing', ms: 30 });
+  const r = storedCheck({ command: 'npm test', exitCode: 1, kind: 'exit', stdout: '1 failing', stderr: 'x', ms: 30 });
+  assert.deepEqual(r, { command: 'npm test', exitCode: 1, kind: 'exit', stdout: '1 failing', stderr: 'x', ms: 30 });
   // A row written before `kind` existed, and one whose `kind` is nonsense: a number is a verdict
   // and the absence of one is not, so the derivation is the same either way.
   assert.equal(storedCheck({ command: 'npm test', exitCode: 2 })?.kind, 'exit');
   assert.equal(storedCheck({ command: 'npm test', kind: 'nonsense' })?.kind, 'unfinished');
   const thin = storedCheck({ command: 'npm test' });
-  assert.deepEqual(thin, { command: 'npm test', exitCode: null, kind: 'unfinished', tail: '', ms: 0 });
+  assert.deepEqual(thin, { command: 'npm test', exitCode: null, kind: 'unfinished', stdout: '', stderr: '', ms: 0 });
+  // `exit` is the ONE kind that makes a claim, and every renderer of it quotes the number. A row
+  // that names it with no number reaches an operator and a prompt as `exited null`, which asserts
+  // a verdict nobody gave — so the absence of a number wins over the label that contradicts it.
+  assert.equal(storedCheck({ command: 'npm test', kind: 'exit' })?.kind, 'unfinished');
+  assert.equal(storedCheck({ command: 'npm test', kind: 'exit', exitCode: null })?.kind, 'unfinished');
 });
 
 test('the base the tree was on rides along, or is absent together', () => {
@@ -248,7 +268,7 @@ test('it runs through the shell, in the directory it was given', async () => {
   assert.equal(r.ok, false);
   assert.equal(r.record?.exitCode, 3);
   assert.equal(r.record?.kind, 'exit');
-  assert.match(r.record?.tail ?? '', /one/);
+  assert.match(r.record?.stdout ?? '', /one/);
 });
 
 test('a check that outlives its timeout is killed rather than waited for', async () => {
@@ -297,7 +317,104 @@ test('a check that prints far more than the tail is kept, not killed for it', as
   const r = await runCheck(dir, `head -c ${CHECK_TAIL_BYTES * 8} /dev/zero | tr '\\0' 'x'; echo; echo FAIL-AT-THE-END >&2; exit 1`);
   assert.equal(r.ok, false);
   assert.equal(r.record?.kind, 'exit', 'it exited on its own — nothing killed it for being loud');
-  assert.match(r.record?.tail ?? '', /FAIL-AT-THE-END/, 'the verdict is at the end and it survived');
-  assert.match(r.record?.tail ?? '', /earlier bytes dropped/, 'and the cut is stated');
-  assert.ok(Buffer.byteLength(r.record?.tail ?? '') < CHECK_TAIL_BYTES * 2 + 200, 'bounded by the window');
+  assert.match(r.record?.stderr ?? '', /FAIL-AT-THE-END/, 'the verdict is at the end and it survived');
+  assert.match(r.record?.stdout ?? '', /earlier bytes dropped/, 'and the cut is stated');
+  assert.ok(Buffer.byteLength(r.record?.stdout ?? '') < CHECK_TAIL_BYTES + 200, 'bounded by the window');
+});
+
+// ---------------------------------------------------------------- the process lifecycle
+//
+// One design, and every one of these is a shipped failure of it. `runCheck` settled on `close`,
+// which is neither the verdict nor a bound: `exit` is the verdict, `close` is the pipes and belongs
+// to every descendant that inherited them, and the hard kill is owed to the process GROUP whatever
+// either of those did. These use real processes on purpose — the bug in each case was in what the
+// kernel does, not in what the module believes about it.
+
+test('the VERDICT is the exit, so a background child holding the pipe does not fail a pass', async () => {
+  // `--check "node server.js & mocha"` is the ordinary shape. The shell exits 0 the moment mocha is
+  // done, and the server keeps stdout open behind it: waiting for `close` waited for the SERVER, so
+  // a suite that passed in a second burnt the full ten minutes and was recorded as a timeout.
+  const started = Date.now();
+  const r = await runCheck(dir, 'sleep 30 & echo PASSED; exit 0', { timeoutMs: 30_000, drainMs: 300 });
+  assert.equal(r.ok, true, 'it exited 0 — that is the whole of the answer');
+  assert.ok(Date.now() - started < 5_000, `settled in ${Date.now() - started}ms rather than waiting for the child`);
+});
+
+test('a descendant OUTSIDE the group holding the pipe cannot make a check unbounded', async () => {
+  // `setsid` leaves the process group, so the timeout's `kill(-pid)` never reaches it — and with the
+  // promise settling only on `close`, neither the timeout NOR `deps.signal` could settle it at all.
+  // The reconcile pass hung there with the lease renewed for ever. The pipes get their own bound.
+  const started = Date.now();
+  const r = await runCheck(dir, 'setsid sleep 30 & exit 3', { timeoutMs: 60_000, drainMs: 400 });
+  const took = Date.now() - started;
+  assert.equal(r.record?.exitCode, 3, 'the shell\'s own answer, not the timeout\'s');
+  assert.equal(r.record?.kind, 'exit');
+  assert.ok(took < 10_000, `settled at the drain (${took}ms), not at the timeout`);
+  assert.ok(took >= 300, 'and it did give the pipes their moment');
+});
+
+test('the hard kill is UNCONDITIONAL: a TERM-ignoring child is dead after the grace', async () => {
+  // `close` fired when the SHELL died and cancelled the `SIGKILL`, so a runner that traps `SIGTERM`
+  // and has its stdio redirected went on running in the worktree the resumed attempt continues in,
+  // while the record said it "was still running after Ns and was killed".
+  const where = fs.mkdtempSync(path.join(dir, 'hardkill-'));
+  const pidFile = path.join(where, 'pid');
+  const script = path.join(where, 'stubborn.sh');
+  fs.writeFileSync(script, '#!/bin/sh\ntrap "" TERM\necho $$ > "$1"\nsleep 30\n');
+  fs.chmodSync(script, 0o755);
+  // Redirected away from the pipes, so `close` arrives while the process is still very much alive.
+  const r = await runCheck(where, `sh ${script} ${pidFile} </dev/null >/dev/null 2>&1 & wait`, {
+    timeoutMs: 300, killGraceMs: 500, drainMs: 100,
+  });
+  assert.equal(r.ok, false);
+  assert.match(r.record?.why ?? '', /still running after/, 'it ran out of time, and the group was signalled');
+
+  const pid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+  assert.ok(Number.isInteger(pid) && pid > 0, 'the stubborn child really did start');
+  let alive = true;
+  try { process.kill(pid, 0); } catch { alive = false; }
+  assert.equal(alive, true, 'it ignores SIGTERM — otherwise this test proves nothing');
+  // The `SIGKILL` is armed by the timeout and fires whether or not `close` did.
+  await new Promise((done) => setTimeout(done, 1_200));
+  try { process.kill(pid, 0); alive = true; } catch { alive = false; }
+  assert.equal(alive, false, 'and it is gone — no survivor in the checkout the next attempt resumes in');
+});
+
+test('runCheck NEVER rejects: every synchronous spawn failure is an `unstartable` record', async () => {
+  // All three throw SYNCHRONOUSLY, before any listener exists — measured, on this Node. An unhandled
+  // rejection out of the controller's post-run section is a Job stuck `running` with a lease nobody
+  // can take, which is the expensive version of a typo in a `cwd`.
+  const notADir = path.join(dir, 'a-file');
+  fs.writeFileSync(notADir, 'x');
+  const cases: [string, string, string][] = [
+    ['a cwd that is not a directory', path.join(notADir, 'nope'), 'true'],
+    ['a command past the kernel argument limit', dir, `echo ${'x'.repeat(200_000)}`],
+    ['a command containing a NUL byte', dir, 'echo \0 hi'],
+  ];
+  for (const [what, cwd, command] of cases) {
+    const r = await runCheck(cwd, command, { timeoutMs: 2_000 });
+    assert.equal(r.ok, false, what);
+    assert.equal(r.record?.kind, 'unstartable', `${what}: it never began, and that is not the same as failing`);
+    assert.equal(r.record?.exitCode, null, `${what}: there is no verdict to quote`);
+    assert.match(r.record?.why ?? '', /could not be started/, what);
+    // And the sentence it produces claims nothing about the work.
+    assert.match(checkShortfall(r.record!, true), /nothing about the work was judged/, what);
+  }
+});
+
+test('an abort AFTER a timeout still settles — the operator\'s last resort is not a no-op', async () => {
+  // `stop` returned early once `killedFor` was set, so a timeout that could not settle (a descendant
+  // outside the group holding the pipe) left `hkb down` with nothing to do. The second, different
+  // stop is let through: it re-signals the group and the hard kill still bounds it.
+  const ac = new AbortController();
+  const started = Date.now();
+  // The timeout fires first and cannot finish the job; the abort follows.
+  setTimeout(() => ac.abort(), 500);
+  const r = await runCheck(dir, 'setsid sleep 30 & sleep 30', {
+    timeoutMs: 200, killGraceMs: 400, drainMs: 10_000, signal: ac.signal,
+  });
+  const took = Date.now() - started;
+  assert.equal(r.ok, false);
+  assert.ok(took < 8_000, `it came back (${took}ms) rather than waiting out the drain`);
+  assert.equal(r.record?.exitCode, null, 'nothing gave a verdict');
 });

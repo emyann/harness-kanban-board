@@ -157,11 +157,31 @@ test('a shell `[ … ]` test is a command, not a list — the brackets are part 
   const many = repo({ [wf('d.md')]: '---\nname: d\ncheck: [a, b]\n---\nbody\n' });
   const said = why(() => readTemplate(many, 'd'));
   assert.match(said, /`check` takes one value, not a list/);
-  assert.match(said, /quote it: `check: "\[a, b\]"`/);
+  assert.match(said, /quote the whole thing and it is taken verbatim: `check: "\[a, b\]"`/);
 
   // A key that really does take a list is untouched by the exemption.
   const list = repo({ [wf('d.md')]: '---\nname: d\nallow-tool: [Read, Grep]\n---\nbody\n' });
   assert.deepEqual(readTemplate(list, 'd').spec['allow-tool'], ['Read', 'Grep']);
+});
+
+test('the exemption is for ONE shape, and a list with inner spaces is still a list', () => {
+  // `kind !== 'list'` is THIRTEEN scalar keys, and inner spaces are exactly how a person writes a
+  // list they expect to be read as one. `model: [ opus, sonnet ]` was filed as that literal
+  // seventeen-character model name, and `check: [ a, b ]` as a command exiting 2 on every attempt —
+  // an exemption meant for one shape swallowing every mistake that happens to look like it. The
+  // comma is the whole difference: a shell `[ … ]` test has one argument list and no commas in it.
+  for (const key of ['model', 'check', 'guide', 'base', 'gate']) {
+    const t = repo({ [wf('d.md')]: `---\nname: d\n${key}: [ a, b ]\n---\nbody\n` });
+    assert.match(why(() => readTemplate(t, 'd')), new RegExp(`\`${key}\` takes one value, not a list`),
+      `${key}: [ a, b ] is a list mistake, not a shell test`);
+  }
+  // And the quoted form goes through byte for byte — which it always did, because the bracket test
+  // runs on the raw `rest` before `unquote`. The refusal names it as a fix that works.
+  const quoted = repo({ [wf('d.md')]: '---\nname: d\ncheck: "[ a, b ]"\n---\nbody\n' });
+  assert.equal(readTemplate(quoted, 'd').spec.check, '[ a, b ]');
+  // The shape the exemption is actually for is untouched.
+  const one = repo({ [wf('d.md')]: '---\nname: d\ncheck: [ -x ./scripts/verify.sh ]\n---\nbody\n' });
+  assert.equal(readTemplate(one, 'd').spec.check, '[ -x ./scripts/verify.sh ]');
 });
 
 test('a switch is true or false and nothing else', () => {

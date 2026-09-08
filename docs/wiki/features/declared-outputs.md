@@ -13,16 +13,16 @@ covers:
   - path: src/worktree.ts
     sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
   - path: src/controller.ts
-    sha: 4f641c68ffb6006f4b8c393723bfdc2f0edf9fbd
+    sha: f7ad36d78481f66cd84913e0042dc7140c085c6a
   - path: src/brief.ts
-    sha: 7e993bae2f97e12c77c6cc5e426aeab2a2573b20
+    sha: e34bc16f6bcd9864078e47ff114f0790e32a359e
   - path: src/hkb.ts
-    sha: 45c571d3e74827c4648f2b13f16a5192863fe727
+    sha: 842354d38af4478ef10bf7cbd8c5f5beede56223
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: prisma/schema.prisma
     sha: 34921e6803578d6831938ada63d477d55a95eb6a
-generated_at_commit: d2d7f31
+generated_at_commit: 6075a95
 last_refreshed: 2026-09-08
 related: [decisions/adr-008-declared-outputs, decisions/adr-011-proposals-not-board-access, features/proposals, features/worktree-includes, architecture/job-kind, architecture/the-board]
 ---
@@ -152,13 +152,25 @@ half a failed run's output mixed into the repository (`src/worktree.ts:520-570`)
 
 **And the two passes are split across the completion check**, which is where that same rule
 had a hole in it. Asking whether the declared paths are *there* happens early
-(`exportOutputs(..., { copy: false })`, `src/controller.ts:1239-1259`), because a missing
-declared output is the cheaper cause and has to keep outranking a check that would spend ten
-minutes finding a second one. **Copying** them into `Board.repoPath` happens after the check
-has passed (`src/controller.ts:1443-1461`) — it used to run about 150 lines earlier, so an
-attempt the check went on to *refuse* had already written its files into the operator's
-repository, which is exactly what this rule forbids one step out (`features/check`). Nothing
-is lost by waiting: a refused check keeps its checkout, and the files are still in it.
+(`exportOutputs(..., { copy: false })`, `src/controller.ts`), because a missing declared output
+is the cheaper cause and has to keep outranking a check that would spend ten minutes finding a
+second one. **Copying** them into `Board.repoPath` happens after the check — it used to run about
+150 lines earlier, so an attempt the check went on to *refuse* had already written its files into
+the operator's repository, which is exactly what this rule forbids one step out
+(`features/check`). Nothing is lost by waiting: a refused check keeps its checkout, and the files
+are still in it.
+
+**The copy is gated on the check and on nothing else that failed**, and that qualification is the
+correction to the move rather than a footnote on it. Carrying the whole `!shortfall` condition
+down with the copy quietly changed the shipped-default rule: an export that *was* present stopped
+being delivered because a different declared output was missing, or because the rebase conflicted
+— and a conflicted attempt is not resumable, so nothing ever delivered it. The rule is the one
+`main` had, and the rebase block one screen up states it about its own placement: what an attempt
+produced "is a durable record of what happened and is worth keeping whether or not its diff still
+applies". Copy what is present; let the shortfall be the shortfall; only a check that **refused**
+withholds the copy. A stop that lands mid-check copies too — the run finished and produced what
+it promised, no verdict was given either way, and recording `exported: []` about files the probe
+had just seen was the alternative.
 
 Then the honest asymmetry. A result's **value is read back** — `readFileSync`, trimmed,
 onto the row (`src/results.ts:139`). An artifact's is not: `collectArtifacts` stats,

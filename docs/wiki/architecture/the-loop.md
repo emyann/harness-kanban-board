@@ -11,7 +11,7 @@ covers:
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
-    sha: 4f641c68ffb6006f4b8c393723bfdc2f0edf9fbd
+    sha: f7ad36d78481f66cd84913e0042dc7140c085c6a
   - path: src/worktree.ts
     sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
   - path: src/db-url.ts
@@ -19,8 +19,8 @@ covers:
   - path: src/schema.ts
     sha: ee1920b789eb96be121c8bba20cc92e452ddf818
   - path: src/check.ts
-    sha: cb1fdd8e77ee5bb873236c82ed8adbe65032a4af
-generated_at_commit: d2d7f31
+    sha: e225be2cfbd5b4fa089ad80f4cbc9264eba630ef
+generated_at_commit: 6075a95
 last_refreshed: 2026-09-08
 related: [architecture/job-kind, architecture/runtime-layer, decisions/adr-007-workload-scheduler, decisions/adr-016-the-pod-spec-is-the-map, concepts/worker-identity, features/check]
 ---
@@ -30,6 +30,12 @@ related: [architecture/job-kind, architecture/runtime-layer, decisions/adr-007-w
 `hkb run` reconciles once, in the foreground. `hkb up` runs the same pass on a timer
 in a detached process (`src/daemon.ts`). Nothing about the pass changes — the
 daemon is a caller, not a second control plane.
+
+Both wire the same `AbortController` to `deps.signal`, and both handlers only *ask*: exiting is
+what would leave a lease held, since the release is written on the way out of `reconcile`
+(`src/hkb.ts`). `hkb run` wired none at all until it was found that `Ctrl-C` there killed the CLI
+and left the pass's detached completion check running in the worktree with nothing left to bound
+it — `deps.signal` is the only route a stop has into `runCheck` (`features/check`).
 
 ## It is level-triggered, and that is a decision
 
@@ -82,9 +88,12 @@ and the order of it is load-bearing (`src/controller.ts`):
    (`features/rebase-and-verify`);
 4. the Job's **check** is run, in the checkout, and its exit code decides the attempt
    (`features/check`, ADR-016 §3). After the rebase so that it tests what would actually merge,
-   and so the tree it ran in agrees with what the next attempt will resume into;
+   and so the tree it ran in agrees with what the next attempt will resume into. Not for a
+   proposing Job, which changes nothing in the tree for a command to judge;
 5. the declared outputs are **copied out** into the repository — after the check, so an attempt
-   the check refused writes nothing into the operator's tree;
+   the check *refused* writes nothing into the operator's tree. Only the check withholds this: an
+   export that is present is still delivered when a different declaration fell short, because what
+   a run produced is a durable record whether or not the rest of it held up;
 6. the gate, the phase, and the tidy are decided and the attempt and Job rows are written;
 7. the lease is **released** — last, and fenced on the token, so a holder that lost it mid-run
    writes nothing outside its own attempt row.
@@ -95,6 +104,12 @@ each read wrongly, and that a ten-minute check stretched to ten minutes
 (`concepts/leases-and-liveness`). The renewer runs throughout, and the token is verified by a
 *read* immediately before the writes in step 6; `heldToTheEnd` gates every step that touches the
 repository, the remote or the checkout, because those are contended state too.
+
+**And steps 1 to 7 are one `try` block.** Being last is not the same as being reached: a throw
+anywhere in that sequence used to skip both the renewer's `clearInterval` and the release, leaving a
+Lease row that advanced for the rest of the daemon's life on a Job nothing could cancel. The
+release is a `finally`, and the `catch` beside it closes the attempt `crashed` and puts the Job back
+to `pending` or `failed` before re-raising.
 
 ## A stream out, and still no subscription in
 

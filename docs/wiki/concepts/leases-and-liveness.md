@@ -9,7 +9,7 @@ covers:
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
-    sha: 4f641c68ffb6006f4b8c393723bfdc2f0edf9fbd
+    sha: f7ad36d78481f66cd84913e0042dc7140c085c6a
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/worktree.ts
@@ -18,7 +18,7 @@ covers:
     sha: 61b65c43e2fd7c28f952c403e02d073ca9907561
   - path: prisma/schema.prisma
     sha: 34921e6803578d6831938ada63d477d55a95eb6a
-generated_at_commit: d2d7f31
+generated_at_commit: 6075a95
 last_refreshed: 2026-09-08
 related: [architecture/the-loop, architecture/the-board, architecture/job-kind, concepts/ceilings]
 ---
@@ -201,14 +201,37 @@ completion check in that stretch (`features/check`), the window was up to ten
 minutes long.
 
 So the claim is now **held to the end** and the fence is a *read*: the token is
-compared against the live row (`src/controller.ts:1481`), the attempt and Job
-rows are written, and only then is the row deleted. The renewer keeps ticking
-throughout, which is what makes the verified claim a live one rather than an
-expiring one, and it is why a ten-minute check fits inside a five-minute
-`LEASE_GRACE_MS` — the grace is the margin for teardown, not the budget for the
-check. `heldToTheEnd` finally means what its name says; an earlier read
-(`src/controller.ts:1203`) still catches a lost lease before anything contended
-is written.
+compared against the live row, the attempt and Job rows are written, and only
+then is the row deleted. The renewer keeps ticking throughout, which is what
+makes the verified claim a live one rather than an expiring one, and it is why a
+ten-minute check fits inside a five-minute `LEASE_GRACE_MS` — the grace is the
+margin for teardown, not the budget for the check. `heldToTheEnd` finally means
+what its name says; an earlier read still catches a lost lease before anything
+contended is written.
+
+### The release is a `finally`, and that is the whole of it
+
+Holding the claim to the end put the `clearInterval` and the fenced delete about
+three hundred lines below the runtime call, reached **only on the way through**.
+Anything that threw in between — a `SQLITE_BUSY` on the fence read, an fs error
+in `collectResults`, a rejection out of `runCheck` — skipped both: the renewer
+went on pushing the Lease row forward every `leaseMs / 3` for the rest of the
+daemon's life, so the Job stayed `running`, `reclaimExpired` never found an
+expired lease to take, and `whileUnleased` refused `hkb cancel` and `hkb rm`
+*because* a Lease row was there. Nothing on the machine could end it short of
+deleting the row by hand. Measured with a three-second lease: it was still
+advancing minutes after the pass had thrown.
+
+A lease is a claim with a deadline, and a claim whose holder has stopped must
+lapse — which is a property of the **release**, not of the happy path arriving at
+it. So the whole post-run section is wrapped: the renewer is cleared and the
+fenced `deleteMany` runs in a `finally`, unconditionally, on every path including
+the `!heldToTheEnd` early return (where the token no longer matches, so it
+deletes nothing — which is exactly right). The `catch` beside it closes the
+attempt with `crashed` and the error text, and puts the Job back to `pending` or
+`failed`, because an attempt row left open is a Job that reads as `running` for
+ever and `running` with no live holder is the one state nothing can act on
+(`src/controller.ts`). The error is then re-thrown, so the pass still reports it.
 
 ## The daemon's belt and braces: skip one reclaim after a wake
 

@@ -7,9 +7,9 @@ audience: [dev]
 read_when: "authoring a workflow, adding a flag to `hkb new`, or deciding whether something belongs in the format (machinery) or in a workflow file (content)"
 covers:
   - path: src/templates.ts
-    sha: a01b0239ebb80af9b1e7e601e3c2b6bd7165ae23
+    sha: 729c86b66042a5ad7aa3f38791fedf2b78a77707
   - path: src/hkb.ts
-    sha: 45c571d3e74827c4648f2b13f16a5192863fe727
+    sha: 842354d38af4478ef10bf7cbd8c5f5beede56223
   - path: src/inputs.ts
     sha: ffd76fce7689fe1c9a1dc0db3756cdf343d2b623
 related:
@@ -21,7 +21,7 @@ related:
     concepts/ceilings,
     features/proposals,
   ]
-generated_at_commit: d2d7f31
+generated_at_commit: 6075a95
 last_refreshed: 2026-09-08
 ---
 
@@ -99,11 +99,24 @@ lists, no nesting, no anchors and no continuation lines. Blank lines and `#` com
 holds together; a matched pair of surrounding quotes is stripped (`src/templates.ts:197-201`).
 
 One exemption, and it is this grammar meeting a shell: a **scalar** key whose value starts with
-`[ ` and ends with ` ]` is a value, not a list (`src/templates.ts:297-306`). `check: [ -f
-dist/index.js ]` is the POSIX spelling of `test -f dist/index.js`, and the generic bracket rule
-refused it with a suggested fix — `check: -f dist/index.js` — that would have filed a command
-exiting 127 on every attempt of that Job. The two forms are told apart by the spaces `[` needs in
-order to be a command at all; no list this grammar accepts is written with them.
+`[ `, ends with ` ]` **and contains no comma** is a value, not a list (`src/templates.ts`).
+`check: [ -f dist/index.js ]` is the POSIX spelling of `test -f dist/index.js`, and the generic
+bracket rule refused it with a suggested fix — `check: -f dist/index.js` — that would have filed a
+command exiting 127 on every attempt of that Job.
+
+The comma is not decoration: without it the exemption covered **all thirteen scalar keys** and every
+mistake shaped like inner spaces. `model: [ opus, sonnet ]` was filed as that literal string, and
+`check: [ a, b ]` as a command exiting 2 on every attempt — an exemption written for one shape
+swallowing its whole neighbourhood. A shell `[ … ]` test is one command with one argument list and
+no commas in it; a list is exactly the thing with commas. What is left over — brackets and commas
+genuinely meant as a value — is reachable by quoting, which has always worked here and is now named
+in the refusal as something that *does* work rather than as a hope: the bracket test runs on the raw
+line, before the surrounding quotes are stripped.
+
+`check: none` is refused where it is written, with the file and the line (`src/templates.ts`). It
+used to reach `hkb new` as though it had been typed, so the author of a workflow file was told to
+"leave `--check` out" — about a flag they had not used, on a verb where deleting the *line* is the
+only fix there is.
 
 **No YAML dependency**, and the habit that rule protects is the point (`CLAUDE.md`). The nearest
 prior art is in this repository already: `.repolore/scripts/lib.mjs` parses exactly the controlled

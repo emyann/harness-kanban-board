@@ -55,12 +55,21 @@ meet one in the git history, that is what it was.
   and this reconstructs one for behaviour, which is why it sits in the completion condition rather
   than in a hooks list (ADR-016 §3). The command comes from the Job row, the board row or a merged
   workflow file — **never** the worktree, or a worker would be marking its own homework. Null is
-  the shipped default and `''` is one Job opting out of its board's (*features/check*).
+  the shipped default and `''` is one Job opting out of its board's; on `hkb job set` and
+  `hkb boards set`, `none` puts the column back to null and therefore back to inheriting. A
+  proposing Job runs none, because it changes nothing in the tree (*features/check*).
 - **Check failed** — an `Outcome`: the session ended, everything declared arrived, and the check
   refused it. Transient and resumable, unlike `no_output` — the session that wrote the code is
   precisely the one worth continuing — so it goes to `pending` while retries remain and `failed`
-  when none do, and the next attempt is told the command, the exit code and the tail of what it
-  printed. It burns a retry and spends nothing else (ADR-016 §4, *features/check*).
+  when none do, and the next attempt is told the command, the exit code and the tails of what it
+  printed — but only while it will resume the very session the check refused. It burns a retry and
+  spends nothing else (ADR-016 §4, *features/check*).
+- **Check drain** — the short grace the stdout and stderr pipes get *after* the shell has exited,
+  before the tails are taken as final (`CHECK_DRAIN_MS`, `src/check.ts`). The exit code is the
+  verdict and settles the check; `close` waits on pipes every descendant inherited, so a background
+  process holding one is not the check still running. Bounding them separately is what stopped
+  `node server.js & mocha` being recorded as a ten-minute timeout, and a descendant outside the
+  process group from making a check unsettleable altogether.
 - **Checkout base** — the ref a Job's worktree is cut from and its branch is kept on top of
   (`Job.base`, `baseFor` in `src/worktree.ts`). Null is the repository's default branch. It is the
   connector between one Job and the next, because a coding Job's output is a branch — and it is a

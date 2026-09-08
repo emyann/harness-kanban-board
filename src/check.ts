@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 
 /**
  * `check` — the exit code hkb does not have.
@@ -39,18 +39,40 @@ import { spawn } from 'node:child_process';
  * writes, and released only once the outcome is on the row. The grace is the margin for teardown,
  * not the budget for the check.
  *
- * **`CHECK_TAIL_BYTES` — 4 KB, of the END.** The tail, because a test runner puts its verdict last
- * and its progress first; 4 KB because this is paid for twice — once in `hkb show` and once in the
- * next attempt's prompt, on every request of that attempt — and it is the same cap `src/results.ts`
- * puts on a value the board keeps, for the same reason. A check that needs more than 4 KB to explain
- * itself is one whose output belongs in an artifact.
+ * **`CHECK_TAIL_BYTES` — 4 KB, of the END, PER STREAM.** The tail, because a test runner puts its
+ * verdict last and its progress first; 4 KB because this is paid for twice — once in `hkb show` and
+ * once in the next attempt's prompt, on every request of that attempt — and it is the same cap
+ * `src/results.ts` puts on a value the board keeps, for the same reason. A check that needs more
+ * than 4 KB to explain itself is one whose output belongs in an artifact.
+ *
+ * **Per stream**, and that is a correction rather than a generosity. Joining stdout and stderr and
+ * re-cutting the join to 4 KB drops the stdout verdict entirely the moment stderr alone reaches
+ * 4 KB — which is the ordinary shape of `cargo test`, mocha, vitest and `node --test`, all of which
+ * write progress and warnings to stderr and the summary to stdout. Two windows, both kept, both
+ * shown: 8 KB is the worst case and the thing being paid for is a verdict that survives.
  */
 
 /** How long a check may take before it is killed and the attempt fails. See the header. */
 export const CHECK_TIMEOUT_MS = 10 * 60_000;
 
-/** How much of stdout+stderr is kept — the END of it. See the header. */
+/** How much of EACH of stdout and stderr is kept — the END of it. See the header. */
 export const CHECK_TAIL_BYTES = 4 * 1024;
+
+/**
+ * The longest shell line that may be filed as a check.
+ *
+ * Not a style rule — a bound the kernel already has. `execve` refuses a single argument longer than
+ * `MAX_ARG_STRLEN`, 32 pages (128 KB on Linux), and `sh -c <command>` passes the whole check as one
+ * argument: past that, `spawn` throws `E2BIG` **synchronously**, so a Job filed with such a command
+ * would fail its check on every attempt for a reason that has nothing to do with the work. Refusing
+ * it at file time is the cheaper half of the same fix (`runCheck` resolves the record for a row that
+ * arrived some other way).
+ *
+ * 8 KB rather than the kernel's own 128 KB, because the honest limit is smaller than the mechanical
+ * one: a check longer than this is a script, and a script belongs in the repository where a human
+ * reviews it and where `--check ./scripts/verify.sh` names it in one line.
+ */
+export const CHECK_COMMAND_MAX_BYTES = 8 * 1024;
 
 /**
  * How long a check killed on the timeout gets to die politely before it is killed properly.
@@ -58,8 +80,34 @@ export const CHECK_TAIL_BYTES = 4 * 1024;
  * `SIGTERM` first, because a runner that traps it flushes its output and that output is the whole
  * point of keeping a tail. `SIGKILL` after, because a runner that traps it and then ignores it
  * would otherwise hold the pass open past every bound this module has.
+ *
+ * **The `SIGKILL` is unconditional**, and that is the correction: it used to be cancelled the
+ * moment `close` fired, which is the moment the SHELL died — so a suite that ignored `SIGTERM` and
+ * had its stdio redirected let the shell close, cancelled the kill, and went on running in the
+ * worktree while the record said it "was killed". `close` says nothing about the group.
  */
 export const CHECK_KILL_GRACE_MS = 5_000;
+
+/**
+ * How long the pipes get to drain after the shell has EXITED, before the tail is taken as final.
+ *
+ * Two events, two owners, and conflating them was one bug in each direction. `exit` is the shell's
+ * own answer — the exit code is the verdict and it is complete the instant it arrives. `close` is
+ * about stdout and stderr, which are inherited: any background process the check started holds
+ * those pipes open after the shell is gone. `--check 'node server.js & mocha'` is the ordinary
+ * shape of that, and waiting for `close` there waited for the server: a suite that passed in two
+ * seconds burnt the full ten minutes and was recorded as a timeout. Worse, a descendant that left
+ * the group (`setsid …`) could not be killed by the timeout either, so nothing — not the timeout,
+ * not `deps.signal` — could settle the promise at all, and the reconcile pass hung with the lease
+ * renewed for ever.
+ *
+ * So the verdict settles on `exit` and the pipes get their own, much shorter bound. Two seconds is
+ * far more than draining a kernel pipe buffer needs — it is a `read()` from a buffer that is
+ * already full, not a round trip — and short enough to be invisible beside a suite measured in
+ * minutes. When both pipes end first, which is the normal case, `close` settles it immediately and
+ * this timer never runs.
+ */
+export const CHECK_DRAIN_MS = 2_000;
 
 /**
  * Why a check has no exit code, when it has none — and it is a closed set because the SENTENCE
@@ -89,13 +137,21 @@ export type CheckRecord = {
   /** Which of the three above. See `CheckKind`. */
   kind: CheckKind;
   /**
-   * The last `CHECK_TAIL_BYTES` of what it printed: stdout, then stderr.
+   * The last `CHECK_TAIL_BYTES` of stdout, and the last `CHECK_TAIL_BYTES` of stderr — **two
+   * windows, kept apart**.
    *
-   * Concatenated rather than interleaved, because two pipes cannot be re-interleaved after the
-   * fact and pretending otherwise would invent an ordering. Keeping the TAIL puts stderr on the
-   * right side of the cut, which is where a runner writes the reason it failed.
+   * Apart, because two pipes cannot be re-interleaved after the fact and pretending otherwise would
+   * invent an ordering. Two WINDOWS rather than one, because joining them and re-cutting the join
+   * to 4 KB means the louder stream evicts the other one entirely: `cargo test`, mocha, vitest and
+   * `node --test` all put progress and warnings on stderr and the summary on stdout, so 4 KB of
+   * stderr noise silently dropped the one line anybody wanted. Both are shown by `hkb show` and
+   * both are briefed to the next attempt, each labelled with which pipe it came from.
+   *
+   * Either may be empty, and an empty one is printed as nothing rather than as a blank block.
    */
-  tail: string;
+  stdout: string;
+  /** The last `CHECK_TAIL_BYTES` of stderr. See `stdout`. */
+  stderr: string;
   /** How long it ran, in milliseconds. */
   ms: number;
   /** Why it never produced an exit code, when it did not. A complete predicate — see above. */
@@ -183,8 +239,8 @@ export type SpawnLike = {
   error?: Error & { code?: string };
   stdout?: string | null;
   stderr?: string | null;
-  /** Bytes the caller dropped before handing the tails over. See `tailOf`. */
-  dropped?: number;
+  /** Bytes the caller dropped before handing each tail over — one count per stream. See `tailOf`. */
+  dropped?: { stdout?: number; stderr?: number };
 };
 
 /**
@@ -202,10 +258,13 @@ export type SpawnLike = {
  * says so on stderr, which is a better message than anything this function could write.
  */
 export function readCheck(command: string, r: SpawnLike, ms: number, timeoutMs = CHECK_TIMEOUT_MS): CheckResult {
-  const tail = tailOf([r.stdout ?? '', r.stderr ?? ''].filter((s) => s.trim()).join('\n'), CHECK_TAIL_BYTES, r.dropped ?? 0);
+  // Two windows, cut independently. Joining them first and cutting the join is what let 4 KB of
+  // stderr noise evict a one-line stdout verdict.
+  const stdout = tailOf(r.stdout ?? '', CHECK_TAIL_BYTES, r.dropped?.stdout ?? 0);
+  const stderr = tailOf(r.stderr ?? '', CHECK_TAIL_BYTES, r.dropped?.stderr ?? 0);
   const took = `${Math.round(ms / 1000)}s`;
   const unfinished = (why: string): CheckResult =>
-    ({ ok: false, record: { command, exitCode: null, kind: 'unfinished', tail, ms, why } });
+    ({ ok: false, record: { command, exitCode: null, kind: 'unfinished', stdout, stderr, ms, why } });
 
   // A TIMEOUT IS ONLY `ETIMEDOUT`, and the ordering below is the whole of that rule.
   //
@@ -224,7 +283,7 @@ export function readCheck(command: string, r: SpawnLike, ms: number, timeoutMs =
   if (r.error) {
     return {
       ok: false,
-      record: { command, exitCode: null, kind: 'unstartable', tail, ms, why: `could not be started: ${r.error.message}` },
+      record: { command, exitCode: null, kind: 'unstartable', stdout, stderr, ms, why: `could not be started: ${r.error.message}` },
     };
   }
   // Killed by something that is not us: SIGKILL from the OOM killer, SIGSEGV from a native crash.
@@ -234,7 +293,7 @@ export function readCheck(command: string, r: SpawnLike, ms: number, timeoutMs =
   // No status, no signal and no error: not a shape Node produces, and "exited null" is what
   // believing it would print into a prompt.
   if (r.status == null) return unfinished(`ended after ${took} without an exit code`);
-  return { ok: false, record: { command, exitCode: r.status, kind: 'exit', tail, ms } };
+  return { ok: false, record: { command, exitCode: r.status, kind: 'exit', stdout, stderr, ms } };
 }
 
 /**
@@ -261,35 +320,88 @@ export function readCheck(command: string, r: SpawnLike, ms: number, timeoutMs =
  *     the only version of "killed on the timeout" that is true.
  *   - **nothing could stop it.** `deps.signal` is how `hkb down` reaches a run; a check that did
  *     not honour it was ten minutes the operator could not shorten.
+ *
+ * ## The three events, and which question each of them answers
+ *
+ * A subprocess ends in stages, and this function used to treat one stage as all of them — it
+ * settled on `close`, which is neither the verdict nor a bound.
+ *
+ *   - **`exit` is the VERDICT.** The exit code is the whole of what a check says (ADR-016 §3), and
+ *     it is complete the moment it arrives. Waiting past it for anything is waiting for something
+ *     that cannot change the answer.
+ *   - **`close` is the PIPES**, which are inherited by every descendant. It is bounded separately,
+ *     by `CHECK_DRAIN_MS` after the exit, because a background process holding stdout is not the
+ *     check still running: `node server.js & mocha` exited 0 in seconds and was recorded as a
+ *     ten-minute timeout, and `setsid sleep 30 & exit 0` could not be settled by the timeout or by
+ *     `deps.signal` at all — the promise never resolved and the reconcile pass hung with the lease
+ *     renewed for ever.
+ *   - **the hard kill is UNCONDITIONAL.** See `CHECK_KILL_GRACE_MS`: `close` is the shell's pipes
+ *     closing and says nothing about whether the group is gone.
+ *
+ * And it **never rejects**. `spawn` throws synchronously — measured, all three — for a `cwd` that
+ * is not a directory (`ENOTDIR`), a command longer than the kernel's `MAX_ARG_STRLEN` (`E2BIG`)
+ * and a command containing a NUL byte (`ERR_INVALID_ARG_VALUE`); an unhandled rejection out of the
+ * controller's post-run section is a Job stuck `running`. Every one of those is the `unstartable`
+ * record this module's own contract already promises. `runCheck` resolves, always.
  */
 export function runCheck(
   cwd: string,
   command: string,
-  opts: { timeoutMs?: number; signal?: AbortSignal; now?: () => number; killGraceMs?: number } = {},
+  opts: {
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    now?: () => number;
+    killGraceMs?: number;
+    /** How long the pipes get after `exit`. See `CHECK_DRAIN_MS`. */
+    drainMs?: number;
+  } = {},
 ): Promise<CheckResult> {
   const timeoutMs = opts.timeoutMs ?? CHECK_TIMEOUT_MS;
   const graceMs = opts.killGraceMs ?? CHECK_KILL_GRACE_MS;
+  const drainMs = opts.drainMs ?? CHECK_DRAIN_MS;
   const clock = opts.now ?? (() => Date.now());
   const started = clock();
   const out = new Tail(CHECK_TAIL_BYTES);
   const err = new Tail(CHECK_TAIL_BYTES);
+  const tails = () => ({
+    stdout: out.text,
+    stderr: err.text,
+    dropped: { stdout: out.dropped, stderr: err.dropped },
+  });
 
   return new Promise<CheckResult>((resolve) => {
-    const child = spawn(command, {
-      cwd,
-      shell: true,
-      // The group, and the reason is the kill below. It also detaches the check from the daemon's
-      // own controlling terminal, so a `Ctrl-C` meant for `hkb run` is not delivered to a suite
-      // behind its back — the abort path below is how a stop reaches it, deliberately and once.
-      detached: true,
-      env: process.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
     let settled = false;
+    const done = (r: SpawnLike) => {
+      if (settled) return false;
+      settled = true;
+      resolve(readCheck(command, r, clock() - started, timeoutMs));
+      return true;
+    };
+
+    let child: ChildProcess;
+    try {
+      child = spawn(command, {
+        cwd,
+        shell: true,
+        // The group, and the reason is the kill below. It also detaches the check from the daemon's
+        // own controlling terminal, so a `Ctrl-C` meant for `hkb run` is not delivered to a suite
+        // behind its back — the abort path below is how a stop reaches it, deliberately and once.
+        detached: true,
+        env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (e) {
+      // Synchronous, and therefore not reachable by any listener below. See the header: this is a
+      // check that never began, which is exactly `unstartable` — not a rejected promise for the
+      // controller to turn into a Job nobody can cancel.
+      done({ status: null, signal: null, error: e as Error & { code?: string }, ...tails() });
+      return;
+    }
+
     /** Why we killed it, when we did — the child's own exit cannot say which of the two it was. */
     let killedFor: 'timeout' | 'abort' | null = null;
     let hard: ReturnType<typeof setTimeout> | null = null;
+    let drain: ReturnType<typeof setTimeout> | null = null;
 
     const killGroup = (sig: NodeJS.Signals) => {
       const pid = child.pid;
@@ -297,14 +409,50 @@ export function runCheck(
       // `-pid` is the process GROUP. Signalling the shell alone leaves the suite running.
       try { process.kill(-pid, sig); } catch { try { child.kill(sig); } catch { /* already gone */ } }
     };
+    /** Ours, so `readCheck` can tell "we ran out of patience" from "something else killed it". */
+    const ours = () => (killedFor === 'timeout'
+      ? Object.assign(new Error(`the check ran longer than ${timeoutMs}ms`), { code: 'ETIMEDOUT' })
+      : killedFor === 'abort'
+        ? Object.assign(new Error('the run was stopped'), { code: 'ABORT_ERR' })
+        : undefined);
+
+    const finish = (status: number | null, signal: NodeJS.Signals | null) => {
+      if (!done({ status, signal, error: ours(), ...tails() })) return;
+      if (drain) clearTimeout(drain);
+      clearTimeout(timer);
+      opts.signal?.removeEventListener('abort', onAbort);
+      // `hard` is deliberately NOT cleared: see `CHECK_KILL_GRACE_MS`. The `SIGKILL` it carries is
+      // owed to the process GROUP, and settling here says only that we have the answer.
+      //
+      // Stop reading, and stop being read. A descendant that kept the pipe would otherwise hold a
+      // reader in the daemon for as long as it lives, appending to a window nobody will look at
+      // again — which is the other half of the same bug.
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      child.unref();
+    };
+
     const stop = (why: 'timeout' | 'abort') => {
-      if (settled || killedFor) return;
-      killedFor = why;
+      if (settled || killedFor === why) return;
+      // The FIRST reason is the true one — a timeout that fired is why the group was signalled,
+      // whatever happened after it — but a second, DIFFERENT stop is still let through. An abort
+      // after a timeout that could not settle (a descendant outside the group holding the pipe) is
+      // the operator's last resort, and returning early here made `hkb down` a no-op against
+      // exactly the check that most needed it.
+      killedFor ??= why;
       killGroup('SIGTERM');
-      hard = setTimeout(() => killGroup('SIGKILL'), graceMs);
-      // A grace timer must never be the reason a process stays up: if the group is already gone
-      // and only this is left, there is nothing to kill.
-      hard.unref?.();
+      // Armed once. A second stop re-signals but does not push the deadline out: the `SIGKILL` is
+      // already coming, and re-arming would let repeated stops defer it indefinitely.
+      if (!hard) {
+        hard = setTimeout(() => {
+          killGroup('SIGKILL');
+          // And settle on it. Whatever still holds the pipe, the group has now had `SIGTERM` and
+          // `SIGKILL`, and there is no further bound to wait for.
+          finish(null, 'SIGKILL');
+        }, graceMs);
+        // A grace timer must never be the reason the daemon stays up.
+        hard.unref?.();
+      }
     };
 
     const timer = setTimeout(() => stop('timeout'), timeoutMs);
@@ -312,33 +460,27 @@ export function runCheck(
     opts.signal?.addEventListener('abort', onAbort, { once: true });
     if (opts.signal?.aborted) stop('abort');
 
-    const finish = (r: SpawnLike) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (hard) clearTimeout(hard);
-      opts.signal?.removeEventListener('abort', onAbort);
-      resolve(readCheck(command, r, clock() - started, timeoutMs));
-    };
-
     child.stdout?.on('data', (b: Buffer) => out.push(b));
     child.stderr?.on('data', (b: Buffer) => err.push(b));
-    const tails = () => ({ stdout: out.text, stderr: err.text, dropped: out.dropped + err.dropped });
-    // A spawn that never began. `close` does not follow it, so this is a terminal path of its own.
-    child.on('error', (e: Error & { code?: string }) => finish({ status: null, signal: null, error: e, ...tails() }));
-    // `close` rather than `exit`: the pipes are the evidence, and `exit` can arrive before they
-    // have been drained — which would keep the tail of exactly the output that explains the failure.
-    child.on('close', (status, signal) => finish({
-      status,
-      signal,
-      // Ours, so that `readCheck` can tell "we ran out of patience" from "something else killed it".
-      error: killedFor === 'timeout'
-        ? Object.assign(new Error(`the check ran longer than ${timeoutMs}ms`), { code: 'ETIMEDOUT' })
-        : killedFor === 'abort'
-          ? Object.assign(new Error('the run was stopped'), { code: 'ABORT_ERR' })
-          : undefined,
-      ...tails(),
-    }));
+    // A spawn that failed asynchronously. `exit` does not follow it, so this is a path of its own.
+    child.on('error', (e: Error & { code?: string }) => {
+      if (!done({ status: null, signal: null, error: e, ...tails() })) return;
+      if (drain) clearTimeout(drain);
+      clearTimeout(timer);
+      opts.signal?.removeEventListener('abort', onAbort);
+    });
+    // The verdict, the moment it exists. The pipes get `drainMs` and no more.
+    //
+    // NOT unref'd, and that is the difference between this timer and the two above them: settling
+    // the promise is the work, so a process with nothing else to do must stay up for it. The other
+    // two only ever kill something that is already doomed.
+    child.on('exit', (status, signal) => {
+      if (settled) return;
+      drain = setTimeout(() => finish(status, signal), drainMs);
+    });
+    // Both pipes ended, which is the normal case and is what makes the drain timer above cost
+    // nothing: the tail is complete, so there is nothing left to wait for.
+    child.on('close', (status, signal) => finish(status, signal));
   });
 }
 
@@ -417,14 +559,24 @@ export function storedCheck(value: unknown): CheckRecord | null {
   // Derived when it is absent or unrecognisable, never trusted blindly: a number is a verdict, and
   // the absence of one is a check that did not give one. That is also the right answer for a row
   // written before this field existed.
-  const kind: CheckKind = v.kind === 'exit' || v.kind === 'unfinished' || v.kind === 'unstartable'
-    ? v.kind
+  //
+  // `exit` with no number is refused as well as nonsense is, and for a sharper reason than tidiness:
+  // `exit` is the ONE kind that makes a claim — "the work is there and it does not do what it must"
+  // — and every renderer of it quotes `exitCode`. Believed, that row reaches an operator and a
+  // prompt as `exited null`, which asserts a verdict nobody gave. The absence of a number is what
+  // `unfinished` means, so that is what it reads as.
+  const named = v.kind === 'exit' || v.kind === 'unfinished' || v.kind === 'unstartable' ? v.kind : null;
+  const kind: CheckKind = named && !(named === 'exit' && exitCode == null)
+    ? named
     : exitCode == null ? 'unfinished' : 'exit';
   return {
     command: v.command,
     exitCode,
     kind,
-    tail: typeof v.tail === 'string' ? v.tail : '',
+    // Two windows since the tail was split per stream; a row written with the single joined `tail`
+    // reads as stdout, which is where the bulk of it came from and is better than dropping it.
+    stdout: typeof v.stdout === 'string' ? v.stdout : typeof v.tail === 'string' ? v.tail : '',
+    stderr: typeof v.stderr === 'string' ? v.stderr : '',
     ms: typeof v.ms === 'number' ? v.ms : 0,
     ...(typeof v.why === 'string' && v.why ? { why: v.why } : {}),
     // Both or neither: `onBase` without the ref it is about says nothing anybody can act on.

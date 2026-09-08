@@ -16,7 +16,7 @@ covers:
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/spec.ts
     sha: d3fba5cc6bb9a1cebeea496bf445f4165c3cecbc
-generated_at_commit: d2d7f31
+generated_at_commit: 6075a95
 last_refreshed: 2026-09-08
 related:
   [

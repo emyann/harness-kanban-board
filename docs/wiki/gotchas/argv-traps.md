@@ -1,29 +1,29 @@
 ---
-title: What `parseArgs` does quietly, and the two bugs it shipped
-summary: "`strict: false` makes an undeclared long option a BOOLEAN, and a value that lost its quotes falls through as positionals the greedy verbs join into prose. Both shipped, both silent, both corrupted the field a person was trying to fix. What the guards are and which invocations they must not break."
+title: What `parseArgs` does quietly, and the bugs it shipped
+summary: "`strict: false` makes an undeclared long option a BOOLEAN, a value that lost its quotes falls through as positionals the greedy verbs join into prose, a DECLARED flag with no value is a boolean too — and a declared flag handed the NEXT FLAG swallows it as its value. Four traps, all silent, all of which corrupted the field a person was trying to fix."
 category: gotchas
 kind: explanation
 audience: [dev]
-read_when: "adding a flag, adding a verb that joins positionals, or wondering why a value arrived as one word"
+read_when: "adding a flag, adding a verb that joins positionals, or wondering why a value arrived as one word — or as the word `true`, or as another flag"
 covers:
   - path: src/hkb.ts
-    sha: 45c571d3e74827c4648f2b13f16a5192863fe727
+    sha: 842354d38af4478ef10bf7cbd8c5f5beede56223
 related:
   [
     architecture/transitions,
     features/workflow-templates,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: d2d7f31
+generated_at_commit: 6075a95
 last_refreshed: 2026-09-08
 ---
 
-# What `parseArgs` does quietly, and the two bugs it shipped
+# What `parseArgs` does quietly, and the bugs it shipped
 
 > hkb parses arguments with `node:util`'s `parseArgs` under `strict: false`, chosen because the
 > retired CLI's hand-rolled parser silently ate a value beginning with two dashes. It is the right
-> parser and it has two behaviours that are entirely reasonable and entirely invisible, and both
-> reached `main` in September 2026.
+> parser and it has four behaviours that are entirely reasonable and entirely invisible, and every
+> one of them reached `main` in September 2026.
 
 ## 1. An undeclared long option is a boolean
 
@@ -159,13 +159,47 @@ whether it allows*). It reached three verbs at once, because all three shared th
 (`src/hkb.ts`) is that test in one place, and the flags that were reading their value with
 `String(...)` now go through it.
 
-## Why all three of these are the same bug
+**And a REPEATABLE flag is `[true]`, not `true`.** `multiple: true` wraps it, so a bare `--export`,
+`--result`, `--artifact`, `--input`, `--label`, `--allow-tool` or `--plugin-dir` walked straight
+past a guard written for the scalar case: `hkb new x --export` declared an output called `true`,
+and the attempt failed for not producing it. `givenList` is `given` per item, for exactly that.
 
-None is a parser fault. All three are hkb accepting something malformed and *writing it down*
+## 4. A declared flag hands over the NEXT FLAG as its value
+
+The last turn of the same screw, and the one that gets past both earlier guards. A `type: 'string'`
+option consumes exactly one token and **does not look at what that token is**, so the next flag on
+the line becomes its value:
+
+```
+$ hkb new "investigate the parser" --brief "…" --check --json
+#12 investigate the parser  [pending]  on hkb
+  must pass     --json  [job]
+```
+
+Two things are wrong and neither says so. The Job's check — the command that judges every attempt of
+it, run with the daemon's privileges — is the string `--json`, which no shell can run. And `--json`
+is *not in effect*, because it was eaten: the operator asked for machine output and got prose.
+
+`unknownFlags` cannot see it (both flags are declared) and `strayWords` cannot either (the token was
+consumed, so nothing fell through as a positional). What catches it is the value's own shape:
+`given` (`src/hkb.ts`) refuses a value beginning with `-`, on every flag that shares it.
+
+Nothing legitimate is lost. A shell line, a git ref, a repo-relative path, a model name and a
+comma-separated list all begin with something else, and a value that really does start with a dash
+is reachable as `--check " -x"` or after `--`. Where a checker existed already — `checkRef` refuses
+a ref beginning with a dash, because a ref reaches git as a bare argv token and `--upload-pack=…`
+runs a command — this guard now speaks first, with a different sentence and the same refusal.
+
+**The rule this leaves:** a string flag's value is not just "a string". `given` is where all four of
+these questions are asked once, and a new flag gets the answers by using it.
+
+## Why all four of these are the same bug
+
+None is a parser fault. All four are hkb accepting something malformed and *writing it down*
 rather than saying so — which is the failure the fifth value names outright: *never a silent
 failure*. The board is a record, and a record that quietly contains what somebody did not type is
 worse than a board that refused them.
 
 The pattern to watch for when adding an argument: ask what happens when the value is **absent**,
-when it is **unquoted**, and when the flag is **misspelled**. Under `strict: false` all three
-succeed by default.
+when it is **unquoted**, when the flag is **misspelled**, and when the next thing on the line is
+**another flag**. Under `strict: false` all four succeed by default.

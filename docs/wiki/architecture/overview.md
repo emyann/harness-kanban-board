@@ -9,9 +9,9 @@ covers:
   - path: bin/hkb.ts
     sha: 698dd0e673a442929b7314d6bb409f87f89b8251
   - path: src/hkb.ts
-    sha: 45c571d3e74827c4648f2b13f16a5192863fe727
+    sha: 842354d38af4478ef10bf7cbd8c5f5beede56223
   - path: src/controller.ts
-    sha: 4f641c68ffb6006f4b8c393723bfdc2f0edf9fbd
+    sha: f7ad36d78481f66cd84913e0042dc7140c085c6a
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/db.ts
@@ -25,13 +25,13 @@ covers:
   - path: src/proposals.ts
     sha: fd5e1eee8b847c9b4024d1bf5f635a85907baae4
   - path: src/templates.ts
-    sha: a01b0239ebb80af9b1e7e601e3c2b6bd7165ae23
+    sha: 729c86b66042a5ad7aa3f38791fedf2b78a77707
   - path: src/labels.ts
     sha: b524ef31fce5611a1a676dfb4631aaa83ecba926
   - path: src/watch.ts
     sha: 992b53f9dc3ef4284c2a1bf0201794490afee393
   - path: src/brief.ts
-    sha: 7e993bae2f97e12c77c6cc5e426aeab2a2573b20
+    sha: e34bc16f6bcd9864078e47ff114f0790e32a359e
   - path: src/worktree.ts
     sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
   - path: src/pulls.ts
@@ -48,7 +48,7 @@ related:
     decisions/adr-009-retiring-the-first-system,
     decisions/adr-011-proposals-not-board-access,
   ]
-generated_at_commit: d2d7f31
+generated_at_commit: 6075a95
 last_refreshed: 2026-09-08
 ---
 

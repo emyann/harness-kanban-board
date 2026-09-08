@@ -11,14 +11,14 @@ supersedes: [decisions/adr-004-roles-and-adoption, decisions/adr-005-control-pla
 superseded_by: ~
 covers:
   - path: package.json
-    sha: 02ee69e9b3b3113a1826ffc0798b80a91a2c02ba
+    sha: 0ba34d2cf5ae7e5fc2107bc0ebd9dea0d337ca3d
   - path: bin/hkb.ts
     sha: 698dd0e673a442929b7314d6bb409f87f89b8251
   - path: src/hkb.ts
-    sha: 45c571d3e74827c4648f2b13f16a5192863fe727
+    sha: 842354d38af4478ef10bf7cbd8c5f5beede56223
   - path: scripts/smoke-pack.mjs
     sha: abccc0340f0034e8f40aa9a30796fac84655f603
-generated_at_commit: d2d7f31
+generated_at_commit: 6075a95
 last_refreshed: 2026-09-08
 related: [decisions/adr-007-workload-scheduler, architecture/overview, architecture/job-kind]
 ---

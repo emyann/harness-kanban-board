@@ -15,14 +15,14 @@ covers:
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
   - path: src/controller.ts
-    sha: 4f641c68ffb6006f4b8c393723bfdc2f0edf9fbd
+    sha: f7ad36d78481f66cd84913e0042dc7140c085c6a
   - path: src/admission.ts
     sha: aab84ccd1178b085cea79d2c4566149145027b9e
   - path: src/runtime/index.ts
     sha: 55007f26fe6b9e4ec107997eef5aba74ec4643e6
   - path: package.json
-    sha: 02ee69e9b3b3113a1826ffc0798b80a91a2c02ba
-generated_at_commit: d2d7f31
+    sha: 0ba34d2cf5ae7e5fc2107bc0ebd9dea0d337ca3d
+generated_at_commit: 6075a95
 last_refreshed: 2026-09-08
 related: [decisions/adr-006-local-store, architecture/job-kind, architecture/runtime-layer, concepts/admission-control, architecture/store-seam]
 ---

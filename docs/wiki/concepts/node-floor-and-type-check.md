@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "changing engines.node, adding a devDependency, editing the tsconfigs or the publish transpile, or making `npm run lint` fail on something that is not a type error"
 covers:
   - path: package.json
-    sha: 02ee69e9b3b3113a1826ffc0798b80a91a2c02ba
+    sha: 0ba34d2cf5ae7e5fc2107bc0ebd9dea0d337ca3d
   - path: tsconfig.json
     sha: b080b89e99af5295b81b32d725d2a7272cbb57d9
   - path: tsconfig.build.json
@@ -20,8 +20,8 @@ covers:
     sha: abccc0340f0034e8f40aa9a30796fac84655f603
   - path: .github/workflows/test.yml
     sha: dc92f1dac39f60b6cc056eca38c9daf0a56033b9
-generated_at_commit: 39498a0
-last_refreshed: 2026-09-06
+generated_at_commit: 6075a95
+last_refreshed: 2026-09-08
 related: [decisions/adr-009-retiring-the-first-system, decisions/adr-007-workload-scheduler, architecture/overview]
 ---
 

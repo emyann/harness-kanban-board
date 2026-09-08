@@ -299,10 +299,17 @@ export function readTemplate(repoPath: string | null, name: string): Template {
     // `check: [ -f dist/index.js ]` is the POSIX spelling of `test -f dist/index.js`, and the
     // generic bracket rule read it as a list and refused it with a suggested fix —
     // `check: -f dist/index.js` — that would have filed a command exiting 127. The two forms are
-    // told apart by the spaces `[` requires to be a command at all: `[a, b]` is a list, `[ x ]` is
-    // an argument list ending in `]`, and no list this grammar accepts is written with both.
-    // Narrowed to keys that take one value, so nothing about an actual list changes.
-    const shellTest = kind !== 'list' && rest.startsWith('[ ') && rest.endsWith(' ]');
+    // told apart by the spaces `[` requires to be a command at all: `[a, b]` is a list and `[ x ]`
+    // is an argument list ending in `]`.
+    //
+    // **And by the comma**, which is the narrowing this needed. `kind !== 'list'` is thirteen scalar
+    // keys, not one, and inner spaces are how a person writes a list they expect to be read as one:
+    // `model: [ opus, sonnet ]` was filed as the literal thirteen-character model name, and
+    // `check: [ a, b ]` as a command exiting 2 on every attempt — an exemption meant for one shape
+    // silently swallowing every mistake in that shape's neighbourhood. A shell `[ … ]` test is one
+    // command with one argument list and no commas in it; a list is exactly the thing with commas.
+    // What is left over — `[ a, b ]` genuinely meant as a shell test — is reachable by quoting.
+    const shellTest = kind !== 'list' && rest.startsWith('[ ') && rest.endsWith(' ]') && !rest.includes(',');
     const isList = rest.startsWith('[') && rest.endsWith(']') && !shellTest;
     const items = isList
       ? rest.slice(1, -1).split(',').map((s) => unquote(s)).filter(Boolean)
@@ -316,10 +323,13 @@ export function readTemplate(repoPath: string | null, name: string): Template {
     } else if (isList) {
       // The quoted form is named as well as the bare one, because for a shell line the bare
       // suggestion is wrong: `check: [a,b]` really is a list mistake, but a value that only LOOKS
-      // like one is fixed by quoting it, not by stripping the brackets that are part of it.
+      // like one is fixed by quoting it, not by stripping the brackets that are part of it. And it
+      // is named as something that WORKS rather than as a hope: the bracket test above runs on the
+      // raw `rest`, before `unquote`, so a quoted value never reaches it at all.
       refuse(
         `${file}, line ${i + 2}: \`${key}\` takes one value, not a list — \`${key}: ${items[0] ?? 'value'}\`.`
-        + ` If the brackets are part of the value, quote it: \`${key}: "${rest}"\`.`,
+        + ` If the brackets are part of the value, quote the whole thing and it is taken verbatim:`
+        + ` \`${key}: "${rest}"\`.`,
       );
     } else if (kind === 'boolean') {
       const v = items[0].toLowerCase();
@@ -328,6 +338,19 @@ export function readTemplate(repoPath: string | null, name: string): Template {
       }
       spec[key] = v === 'true';
     } else {
+      // `check: none` is refused HERE, where the file and the line are in hand. It reached `hkb new`
+      // as though it had been typed, so the refusal an author saw was about a flag they had not
+      // used — "leave `--check` out", against a file where leaving the key out is the fix and the
+      // only fix. A workflow always files a NEW Job, whose check column is already null, so there
+      // is nothing for `none` to clear: it would file the literal command `none`, which exits 127.
+      if (key === 'check' && items[0] === 'none') {
+        refuse(
+          `${file}, line ${i + 2}: \`check: none\` would file the literal shell command \`none\`, which `
+          + 'exits 127 — every attempt would fail its check and burn a retry. Delete the line: a Job '
+          + 'filed without a check already inherits the board\'s. For a Job that runs NO check and '
+          + 'inherits nothing, write `check: ""`.',
+        );
+      }
       spec[key] = items[0];
     }
   }

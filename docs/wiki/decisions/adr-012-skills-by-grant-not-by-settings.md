@@ -25,7 +25,7 @@ related:
     architecture/runtime-layer,
     architecture/overview,
   ]
-generated_at_commit: d2d7f31
+generated_at_commit: 6075a95
 last_refreshed: 2026-09-08
 ---
 

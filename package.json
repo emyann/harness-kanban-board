@@ -1,7 +1,7 @@
 {
   "name": "hkb-cli",
   "version": "0.3.0",
-  "description": "hkb \u2014 a workload scheduler for coding agents: file a Job, and one agent runs one brief to completion in its own worktree. A SQLite board per machine, the Claude Agent SDK as the runtime, GitHub as the forge.",
+  "description": "hkb — a workload scheduler for coding agents: file a Job, and one agent runs one brief to completion in its own worktree. A SQLite board per machine, the Claude Agent SDK as the runtime, GitHub as the forge.",
   "type": "module",
   "bin": {
     "hkb": "dist/bin/hkb.js"
@@ -16,7 +16,7 @@
     "test": "node --test test/*.test.ts",
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "prepack": "npm run build",
-    "lint": "if [ -x node_modules/.bin/tsc ]; then node_modules/.bin/tsc --noEmit; else echo 'hkb: type check skipped \u2014 no local typescript. Run `npm install` first.' >&2; fi",
+    "lint": "if [ -x node_modules/.bin/tsc ]; then node_modules/.bin/tsc --noEmit; else echo 'hkb: type check skipped — no local typescript. Run `npm install` first.' >&2; fi",
     "smoke": "node scripts/smoke-pack.mjs"
   },
   "devDependencies": {
@@ -55,5 +55,10 @@
     "@anthropic-ai/claude-agent-sdk": "0.3.261",
     "@prisma/adapter-better-sqlite3": "7.10.0",
     "@prisma/client": "7.10.0"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.11.1": true,
+    "@prisma/engines@7.10.0": true,
+    "prisma@7.10.0": true
   }
 }

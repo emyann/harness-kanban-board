@@ -376,9 +376,13 @@ It is a shell line, run in the attempt's own checkout **after the run and after 
 declined (a pull request somebody has taken out of draft, a base that could not be fetched) the record and
 `hkb show` say which base the tree was really on, rather than leaving the claim overstated. A non-zero exit
 fails the attempt, and the failure is *transient*: the retry resumes the same session and is told the
-command, the exit code and the last 4 KB of what it printed, because a retry that does not know why it is
-retrying produces the same tree. A check that hangs is killed after ten minutes — the whole process group,
-not just the shell — and fails the same way; `hkb down` interrupts one rather than waiting it out.
+command, the exit code and the last 4 KB of each of stdout and stderr — two windows, so a loud stderr
+cannot evict the one-line verdict on stdout — because a retry that does not know why it is retrying
+produces the same tree. The verdict is the **exit code**, so a check that exits while a background process
+it started still holds the pipe is read as having exited; the pipes get a couple of seconds to drain and
+no more. A check that hangs is killed after ten minutes — the whole process group, not just the shell,
+`SIGTERM` then `SIGKILL` — and fails the same way; `hkb down` and `Ctrl-C` interrupt one rather than
+waiting it out, and an interrupted check leaves the run's own outcome alone and simply runs again.
 
 The controller reads 0 / not-0 and **knows nothing else about the command** — the way the kubelet knows
 nothing about a container. There is no test-runner integration and no parsing of output into findings.
@@ -396,8 +400,13 @@ On a board that sets `--check` for everything, one Job opts out with the empty s
 hkb new "read the parser and report what it does" --check ""   # an investigation has no suite to pass
 ```
 
-`--check none` is refused by name, because it would file the literal command `none`. On the *board*,
-`--check none` still clears the default, which is what `none` means everywhere else.
+On `hkb new`, `--check none` is refused by name — a Job filed without `--check` already inherits the
+board's, so there is nothing to clear and the literal command `none` is what it would file. On
+`hkb job set` and `hkb boards set`, `--check none` clears the column and so goes *back* to inheriting,
+which is what `none` means everywhere else on those verbs.
+
+A **proposing** Job runs no check: it changes nothing in the tree, so there is nothing for a command to
+judge, and `hkb new --propose --check` is refused.
 
 ### What a Job is given
 
