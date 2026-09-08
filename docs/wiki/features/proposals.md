@@ -15,8 +15,8 @@ covers:
   - path: prisma/schema.prisma
     sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
   - path: src/hkb.ts
-    sha: ad82bb3c7ed6e991781246b941525708d8407a05
-generated_at_commit: 2fcca6f
+    sha: ce7b940fb6303bf71bebb166987fd80519bbde26
+generated_at_commit: 421f60b
 last_refreshed: 2026-09-07
 related:
   [

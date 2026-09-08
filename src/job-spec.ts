@@ -1,6 +1,6 @@
 import type { Prisma } from './generated/prisma/client.ts';
 import type { openBoard } from './db.ts';
-import type { Actor } from './transitions.ts';
+import { whileUnleased, type Actor } from './transitions.ts';
 
 /**
  * Changing what a Job will run with, after it has been filed.
@@ -70,10 +70,13 @@ function refuse(message: string): never {
  * not silently become settable because somebody forgot to think about it.
  */
 export const SETTABLE = [
-  'name', 'brief', 'model', 'effort', 'maxTurns', 'maxBudgetUsd', 'maxRetries', 'timeoutMs',
+  'name', 'brief', 'model', 'effort', 'maxTurns', 'maxBudgetUsd', 'maxRetries',
   'base', 'guide', 'gate', 'allowedTools', 'pluginPaths', 'labels',
   'exports', 'results', 'artifacts', 'inputs',
 ] as const;
+// `timeoutMs` is deliberately absent: no flag reaches it, and the column is non-nullable, so a
+// caller clearing it would get a raw Prisma error instead of a refusal. The list is what the CLI
+// can set, and a test holds the two together in both directions.
 
 export type Settable = (typeof SETTABLE)[number];
 
@@ -100,11 +103,33 @@ export type SpecEdit = { id: number; changed: SpecChange[]; phase: string };
  * recorded, because an Event stream that says "the model was changed from opus to opus" makes the
  * one that says something real harder to find.
  */
+export type SetOpts = {
+  by: Actor;
+  /**
+   * The new brief, as a PRODUCER rather than a string.
+   *
+   * `--brief -` blocks until EOF on stdin, and reading it before the guards turns
+   * `hkb job set 999 --brief -` from an instant refusal into a process that never returns. It is
+   * called in the one place that knows the Job exists and is not running — the same shape and the
+   * same reason as `queueJob`.
+   */
+  brief?: () => Promise<string>;
+  /**
+   * Interpolate `{{name}}` against the `value:` inputs, exactly as `hkb new` does at file time.
+   *
+   * Supplied by the caller rather than imported, because rendering belongs to `src/inputs.ts` and
+   * this module has no business knowing the syntax. Without it a brief set here reached the worker
+   * with its placeholders intact while the identical flags on `hkb new` interpolated them — the
+   * same words meaning two things depending on the verb.
+   */
+  render?: (text: string, inputs: { name: string }[]) => { text: string; used: Set<string> };
+};
+
 export async function setJobSpec(
   db: Db,
   id: number,
   changes: Partial<Record<Settable, unknown>>,
-  opts: { by: Actor },
+  opts: SetOpts,
 ): Promise<SpecEdit> {
   for (const field of Object.keys(changes)) {
     if (REFUSED[field]) refuse(`\`${field}\` cannot be set: ${REFUSED[field]}.`);
@@ -112,18 +137,48 @@ export async function setJobSpec(
       refuse(`\`${field}\` is not a field of a Job's spec — settable: ${SETTABLE.join(', ')}.`);
     }
   }
-  if (!Object.keys(changes).length) {
+  if (!Object.keys(changes).length && !opts.brief) {
     refuse(`#${id}: nothing to set — name a field, as in \`hkb job set ${id} --max-budget 5\`. \`hkb show ${id}\` prints the spec it has.`);
   }
 
-  const job = await db.job.findUnique({ where: { id }, include: { lease: true } });
+  const job = await db.job.findUnique({ where: { id } });
   if (!job) refuse(`no Job #${id} — \`hkb ls\` shows what is on the board`);
-  if (job.lease) {
+
+  // The invariants `hkb new` refuses at file time, refused here too. An edit that can reach a state
+  // filing could not is a back door into it, and both of these end in silence rather than an error:
+  // a proposer with no gate runs, writes `proposal.json`, succeeds terminally and is never applied;
+  // an un-isolated Job with a base stores a field nothing reads and `hkb show` does not even print.
+  if (job.proposes && 'gate' in changes && !changes.gate) {
     refuse(
-      `#${id} is leased by ${job.lease.holder} — it is running, and its spec is what that attempt `
-      + `was admitted under. \`hkb down\` stops the daemon, or wait for the run to finish (the lease `
-      + `lapses by ${job.lease.expiresAt.toISOString()}), then \`hkb job set ${id}\` again.`,
+      `#${id} proposes work, and a proposal with no approver is a proposal nothing ever reads `
+      + `(ADR-011). The controller only suspends a Job that has a gate — clearing it here would let `
+      + `this one succeed with its proposal parsed and never applied, silently.`,
     );
+  }
+  if (!job.isolate && changes.base) {
+    refuse(
+      `#${id} runs with --no-isolate, so it cuts no branch and has nothing to base one on. `
+      + `\`hkb new\` refuses the same pair at file time; a base stored here would never be read.`,
+    );
+  }
+
+  // The brief is read HERE, after the Job is known to exist and the invariants have passed, and
+  // rendered against the effective `value:` inputs — the ones this command is setting if it is
+  // setting any, otherwise the ones the Job already carries.
+  if (opts.brief) {
+    const text = await opts.brief();
+    const effective = ('inputs' in changes ? changes.inputs : job.inputs) as { name: string }[] | null;
+    if (opts.render && effective?.length) {
+      const out = opts.render(text, effective);
+      changes.brief = out.text;
+      // A value that went into the brief does not also arrive as a data block — one rule, the same
+      // one `hkb new` keeps: everything in `inputs` is rendered, and nothing is rendered twice.
+      if (out.used.size) {
+        changes.inputs = effective.filter((i) => !out.used.has(i.name));
+      }
+    } else {
+      changes.brief = text;
+    }
   }
 
   // Only what actually moves. `JSON.stringify` rather than `===` because half of these are Json
@@ -141,25 +196,39 @@ export async function setJobSpec(
   // The write and the record of it together, for the reason every other transition is a
   // transaction: a spec that moved with no Event to explain it makes `hkb show` disagree with the
   // attempts behind it and leaves nothing to reconcile the two.
-  await db.$transaction([
-    db.job.updateMany({
+  //
+  // `whileUnleased` rather than a lease check written again here. The first version of this WAS
+  // written again — a conditional `updateMany` in the array form of `$transaction`, whose `count`
+  // nothing could look at, so a Job claimed mid-edit got an Event describing a change that never
+  // happened and the CLI said "1 field set". A guard spelled out in full and doing nothing is this
+  // project's recurring defect, and the fix is always to use the one that exists.
+  await whileUnleased(
+    db,
+    id,
+    (holder, expiresAt) =>
+      `#${id} is leased by ${holder} — it is running, and its spec is what that attempt was `
+      + `admitted under. \`hkb down\` stops the daemon, or wait for the run to finish (the lease `
+      + `lapses by ${expiresAt.toISOString()}), then \`hkb job set ${id}\` again.`,
+    (tx) => tx.job.updateMany({
       where: { id, lease: { is: null } },
       data: Object.fromEntries(changed.map((c) => [c.field, c.to])),
     }),
-    db.event.create({
-      data: {
-        kind: 'spec_set',
-        jobId: id,
-        boardId: job.boardId,
-        actor: opts.by,
-        // Cast at the boundary: `from`/`to` are genuinely `unknown` (a string, a number, a list,
-        // a label map) and Prisma's Json input type cannot see that they are all serialisable.
-        payload: {
-          changed: changed.map((c) => ({ field: c.field, from: c.from, to: c.to })),
-        } as unknown as Prisma.InputJsonValue,
-      },
-    }),
-  ]);
+    [
+      (tx) => tx.event.create({
+        data: {
+          kind: 'spec_set',
+          jobId: id,
+          boardId: job.boardId,
+          actor: opts.by,
+          // Cast at the boundary: `from`/`to` are genuinely `unknown` (a string, a number, a list,
+          // a label map) and Prisma's Json input type cannot see they are all serialisable.
+          payload: {
+            changed: changed.map((c) => ({ field: c.field, from: c.from, to: c.to })),
+          } as unknown as Prisma.InputJsonValue,
+        },
+      }),
+    ],
+  );
 
   return { id, changed, phase: job.phase };
 }
@@ -177,7 +246,13 @@ export function describeChange(c: SpecChange): string {
 
 function show(v: unknown): string {
   if (v === null || v === undefined) return '(none)';
-  if (Array.isArray(v)) return v.length ? v.join('|') : '(empty)';
+  // Before the plain-array case, because `inputs` is an array of OBJECTS and `join` renders those
+  // as `[object Object]` — the exact thing this function's docstring says it exists to avoid, in
+  // the one shape the unit test did not cover.
+  if (Array.isArray(v)) {
+    if (!v.length) return '(empty)';
+    return v.map((x) => (x && typeof x === 'object' ? show(x) : String(x))).join('|');
+  }
   if (typeof v === 'object') {
     const pairs = Object.entries(v as Record<string, unknown>).map(([k, x]) => `${k}=${String(x)}`);
     return pairs.length ? pairs.join(',') : '(empty)';

@@ -463,6 +463,11 @@ export async function main(argv: string[]): Promise<number> {
       'plugin-dir': { type: 'string', multiple: true },
       'default-plugin-dirs': { type: 'string' },
       guide: { type: 'string' },
+      // `hkb new` takes the name as a positional; `hkb job set` needs a flag for it. Declared here
+      // and NOT optional to declare: `parseArgs` runs with `strict: false`, where an undeclared
+      // long option is a boolean — so `--name "a better name"` yielded `true`, and the Job was
+      // renamed to the literal string "true" with the words pushed into positionals.
+      name: { type: 'string' },
       input: { type: 'string', multiple: true },
       gate: { type: 'string' },
       // The ref the checkout is cut from. One value, never repeatable: a branch has one base, and
@@ -1599,29 +1604,56 @@ export async function main(argv: string[]): Promise<number> {
       number('max-turns', 'maxTurns', (n) => Number.isInteger(n) && n >= 1, 'a whole number of turns, 1 or more');
       number('max-budget', 'maxBudgetUsd', (n) => n > 0, 'dollars above zero');
       number('max-retries', 'maxRetries', (n) => Number.isInteger(n) && n >= 0, 'a whole number of retries, 0 or more');
-      list('allow-tool', 'allowedTools', (v) => v);
       list('plugin-dir', 'pluginPaths', checkPluginPath);
       list('export', 'exports', checkExportPath);
       list('result', 'results', checkResultName);
       list('artifact', 'artifacts', checkArtifactName);
       list('input', 'inputs', checkInputSpec);
-      if (values['allow-tools'] !== undefined) {
+      // `--allow-tool` WINS over `--allow-tools`, which is `hkb new`'s precedence and must not be
+      // the other way round here: this field is the ceiling `src/admission.ts` enforces, and two
+      // verbs resolving the same pair of flags differently is a security surface that depends on
+      // which command you typed.
+      if (values['allow-tool'] !== undefined) {
+        list('allow-tool', 'allowedTools', (v) => v);
+      } else if (values['allow-tools'] !== undefined) {
         const raw = String(values['allow-tools']).trim();
         if (!raw) throw usage(`--allow-tools was given nothing — pass a comma-separated list, or "${CLEAR}" to clear it`);
         changes.allowedTools = raw === CLEAR ? null : raw.split(',').map((t) => t.trim()).filter(Boolean);
       }
       if (values.label !== undefined) {
         const given = (values.label as string[]).map((v) => v.trim()).filter(Boolean);
-        changes.labels = given.length === 1 && given[0] === CLEAR ? null : parseLabels(given);
+        // `null` for an empty list as well as for `none`: `hkb new` stores null for an unlabelled
+        // Job, and `{}` here would be a second spelling of the same absence.
+        changes.labels = !given.length || (given.length === 1 && given[0] === CLEAR)
+          ? null
+          : parseLabels(given);
       }
       // The brief, which `hkb queue` calls rewritable nowhere else — true of the note-becomes-an-
       // instruction moment, and never a reason a typo should cost a Job its id and its history.
       // Settable here and RECORDED, like every other field (`src/job-spec.ts`).
-      if (values.brief !== undefined || values['brief-file'] !== undefined) {
-        changes.brief = await readBrief(values);
-      }
+      //
+      // RENDERED the way `hkb new` renders it, against the `value:` inputs — the ones being set in
+      // this same command if any, otherwise the ones the Job already carries. Without it a brief
+      // set here reached the worker with `{{page}}` in it literally, while the identical flags on
+      // `hkb new` would have interpolated: the same words, two meanings, depending on the verb.
+      //
+      // Read through a PRODUCER, so `--brief -` cannot block on stdin for a Job that does not
+      // exist. `queueJob` documents that trap and this verb had reintroduced it.
+      const brief = values.brief !== undefined || values['brief-file'] !== undefined
+        ? () => readBrief(values)
+        : null;
 
-      const r = await setJobSpec(db, id, changes, { by: operator() });
+      const r = await setJobSpec(db, id, changes, {
+        by: operator(),
+        ...(brief ? { brief } : {}),
+        render: (text, inputs) => {
+          const supplied = new Map(
+            inputs.filter((i): i is { name: string; value: string } => 'value' in i).map((i) => [i.name, i.value]),
+          );
+          const out2 = renderBrief(text, supplied, new Set(inputs.map((i) => i.name)));
+          return { text: out2.text, used: out2.used };
+        },
+      });
       emit(out, r, () => {
         if (!r.changed.length) return console.log(`#${r.id} unchanged — every value given is the one it already had`);
         console.log(`#${r.id} ${r.changed.length === 1 ? '1 field' : `${r.changed.length} fields`} set  (${r.phase})`);

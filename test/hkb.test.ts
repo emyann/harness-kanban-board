@@ -1406,6 +1406,27 @@ test('hkb job set edits a filed Job, with the same flags `hkb new` takes', async
   assert.equal((await db.job.findUniqueOrThrow({ where: { id } })).model, null);
 });
 
+test('hkb job set --name takes the words, not the boolean parseArgs would make of it', async () => {
+  // `parseArgs` runs with strict:false, where an UNDECLARED long option is a boolean — so
+  // `--name "a much better name"` yielded `true` and renamed the Job to the literal string "true",
+  // with the words pushed silently into positionals.
+  const r = scratchRepo('jobset-name');
+  await hkb('boards', 'add', 'jobset-name', '--repo', r);
+  const id = json((await hkb('new', 'original name', '--brief', 'do it', '--board', 'jobset-name', '--json')).out).id;
+  await hkb('job', 'set', String(id), '--board', 'jobset-name', '--name', 'a much better name');
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id } })).name, 'a much better name');
+});
+
+test('hkb job set resolves --allow-tool over --allow-tools, the way `hkb new` does', async () => {
+  // The same two flags must not mean opposite things depending on the verb — this field is the
+  // ceiling `src/admission.ts` enforces, not a preference.
+  const r = scratchRepo('jobset-tools');
+  await hkb('boards', 'add', 'jobset-tools', '--repo', r);
+  const id = json((await hkb('new', 'x', '--brief', 'do it', '--board', 'jobset-tools', '--json')).out).id;
+  await hkb('job', 'set', String(id), '--board', 'jobset-tools', '--allow-tool', 'Read', '--allow-tools', 'Write,Bash');
+  assert.deepEqual((await db.job.findUniqueOrThrow({ where: { id } })).allowedTools, ['Read']);
+});
+
 test('hkb job set refuses the subcommand that is not there, and the flag that sets nothing', async () => {
   const r = scratchRepo('jobset-refuse');
   await hkb('boards', 'add', 'jobset-refuse', '--repo', r);

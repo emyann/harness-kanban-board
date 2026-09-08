@@ -7,11 +7,11 @@ audience: [dev]
 read_when: "building a second consumer, adding a verb that changes a Job's phase, or wondering why a guard lives in a module rather than beside the argument parsing"
 covers:
   - path: src/transitions.ts
-    sha: 91b7343cd0c6493ac9fb6278a8353c5540e55aa9
+    sha: d5b3f7dcaab594fa94e844d7d0a30ddd7a97b5c2
   - path: src/job-spec.ts
-    sha: 1aad211df4a804d600b9eff4ebb060e7b9ef57c4
+    sha: fec027c2c9edb0f79feec719ea1c75f23869cc79
   - path: src/hkb.ts
-    sha: ad82bb3c7ed6e991781246b941525708d8407a05
+    sha: ce7b940fb6303bf71bebb166987fd80519bbde26
   - path: prisma/schema.prisma
     sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
 related:
@@ -21,7 +21,7 @@ related:
     decisions/adr-010-the-human-gate,
     architecture/the-board,
   ]
-generated_at_commit: 2fcca6f
+generated_at_commit: 421f60b
 last_refreshed: 2026-09-07
 ---
 
@@ -123,8 +123,23 @@ part at the end. That extraction is a `fileJob(db, spec)` and it has not been do
 **Editing a Job's spec is a sibling, not a transition.** `hkb job set` changes what a Job will run
 *as* rather than where it is in its life, and it lives in `src/job-spec.ts` for that reason — a
 phase and a spec fail for different reasons and answer to different rules. It shares this module's
-shape: a closed list of what may be written, refusals by name for what may not, a lease refused
-outright, and every change on the Event stream.
+shape: a closed list of what may be written, refusals by name for what may not, and every change on
+the Event stream, because a spec is what the **next** attempt gets and the ones behind it ran under
+something else.
+
+It also shares `whileUnleased`, and that is the point of exporting it. The first version wrote its
+own conditional `updateMany` in the array form of `$transaction` — where nothing can inspect the
+count — so a Job claimed mid-edit got an Event describing a change the `WHERE` had just prevented,
+and the CLI said "1 field set". That is the *fourth* guard in this codebase spelled out in full and
+doing nothing. The rule the four have in common: **when a check already exists, use it; do not write
+it again beside itself.**
+
+The other thing a spec edit must not become is a back door into a state `hkb new` refuses. Two are
+enforced in the module for that reason — a proposer may not have its gate cleared (ADR-011: the
+controller only suspends a gated Job, so the proposal would be parsed and never applied, silently),
+and an un-isolated Job may not be given a base it cuts no branch to use. A brief set here is
+rendered against its `value:` inputs exactly as `hkb new` renders one, or the same words would mean
+two things depending on which verb was typed.
 
 **Board operations are not here either** — `board_added`, `ceilings_set`, `board_stopped`,
 `board_removed` remain in the switch. They are a different object's lifecycle, and they should move

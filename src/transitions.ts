@@ -113,7 +113,7 @@ type Tx = Prisma.TransactionClient;
  * nothing ever got here holding a lease. An inert guard that reads like the load-bearing one is how
  * this project has shipped three checks that did nothing.
  */
-async function whileUnleased(
+export async function whileUnleased(
   db: Db,
   id: number,
   leased: (holder: string, expiresAt: Date) => string,
