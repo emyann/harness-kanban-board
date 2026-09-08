@@ -17,7 +17,7 @@ covers:
   - path: src/runtime/index.ts
     sha: 55007f26fe6b9e4ec107997eef5aba74ec4643e6
   - path: src/hkb.ts
-    sha: ce7b940fb6303bf71bebb166987fd80519bbde26
+    sha: a33ff66368b4d6248281a0a74e94910891c77862
   - path: src/inputs.ts
     sha: ffd76fce7689fe1c9a1dc0db3756cdf343d2b623
 related:
@@ -28,7 +28,7 @@ related:
     architecture/job-kind,
     architecture/overview,
   ]
-generated_at_commit: 421f60b
+generated_at_commit: c7bd3d1
 last_refreshed: 2026-09-07
 ---
 

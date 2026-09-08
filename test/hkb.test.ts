@@ -1186,7 +1186,7 @@ test('hkb version prints the package version, and opens no board doing it', () =
  * produce something, and the listing must actually print the marker — a predicate nothing renders is
  * the silently-inert guard this project has shipped three times.
  */
-const { producedNothing, declaredExports, describeDefaults } = await import('../src/hkb.ts');
+const { producedNothing, declaredExports, describeDefaults, strayWords } = await import('../src/hkb.ts');
 
 test('producedNothing refuses every Job that left something behind', () => {
   const bare = { phase: 'succeeded', pr: null, exports: [] as string[] };
@@ -1404,6 +1404,95 @@ test('hkb job set edits a filed Job, with the same flags `hkb new` takes', async
   // `none` clears, the way it does on `hkb boards set`.
   await hkb('job', 'set', String(id), '--board', 'jobset', '--model', 'none');
   assert.equal((await db.job.findUniqueOrThrow({ where: { id } })).model, null);
+});
+
+/**
+ * A value that lost its quotes (triage #40).
+ *
+ * The pure half first, exhaustively, because the decision is where the bug lives: which positionals
+ * count as stray, which flag to blame, and which invocations must stay legal.
+ */
+test('strayWords: a positional after a flag is a value that lost its quotes', () => {
+  // hkb new "x" --input page=value:the wiki page
+  const tokens = [
+    { kind: 'positional', index: 0, value: 'new' },
+    { kind: 'positional', index: 1, value: 'x' },
+    { kind: 'option', index: 2, name: 'input', value: 'page=value:the' },
+    { kind: 'positional', index: 4, value: 'wiki' },
+    { kind: 'positional', index: 5, value: 'page' },
+  ];
+  assert.deepEqual(strayWords(tokens), { words: ['wiki', 'page'], after: '--input' });
+});
+
+test('strayWords: the flag it blames is the one whose value spilled, not the first on the line', () => {
+  const tokens = [
+    { kind: 'positional', index: 0, value: 'new' },
+    { kind: 'option', index: 1, name: 'board', value: 'b' },
+    { kind: 'option', index: 3, name: 'brief', value: 'do' },
+    { kind: 'positional', index: 5, value: 'the' },
+  ];
+  assert.equal(strayWords(tokens).after, '--brief');
+});
+
+test('strayWords: the invocations that must stay legal', () => {
+  // A multi-word name, unquoted, BEFORE the flags — `hkb new` joins positionals on purpose.
+  assert.deepEqual(strayWords([
+    { kind: 'positional', index: 0, value: 'new' },
+    { kind: 'positional', index: 1, value: 'my' },
+    { kind: 'positional', index: 2, value: 'great' },
+    { kind: 'positional', index: 3, value: 'job' },
+    { kind: 'option', index: 4, name: 'json' },
+  ]).words, []);
+
+  // An option BEFORE the verb: `hkb --json new x` still means what it says.
+  assert.deepEqual(strayWords([
+    { kind: 'option', index: 0, name: 'json' },
+    { kind: 'positional', index: 1, value: 'new' },
+    { kind: 'positional', index: 2, value: 'x' },
+  ]).words, []);
+
+  // Nothing at all, and a bare verb.
+  assert.deepEqual(strayWords([]).words, []);
+  assert.deepEqual(strayWords([{ kind: 'positional', index: 0, value: 'ls' }]).words, []);
+});
+
+test('an unquoted multi-word value is REFUSED rather than absorbed into the name', async () => {
+  // Measured before the fix: `--input page=value:the wiki page` filed a Job named
+  // "review the parser wiki page" whose input was the single word `the`. Two fields silently
+  // wrong, no complaint.
+  const r = scratchRepo('stray');
+  await hkb('boards', 'add', 'stray', '--repo', r);
+  await assert.rejects(
+    () => hkb('new', 'review the parser', '--brief', 'do it', '--board', 'stray',
+      '--input', 'page=value:the', 'wiki', 'page'),
+    /2 stray words after `--input`.*`wiki`, `page`/s,
+  );
+
+  // Quoted, it does what it says.
+  const ok = json((await hkb('new', 'review the parser', '--brief', 'do it', '--board', 'stray',
+    '--input', 'page=value:the wiki page', '--json')).out);
+  assert.equal(ok.name, 'review the parser');
+  assert.deepEqual(ok.inputs, [{ name: 'page', value: 'the wiki page' }], 'the whole value, not its first word');
+
+  // And an unquoted multi-word NAME, before the flags, still works — that join is deliberate.
+  const named = json((await hkb('new', 'my', 'great', 'job', '--brief', 'do it', '--board', 'stray', '--json')).out);
+  assert.equal(named.name, 'my great job');
+});
+
+test('the same trap in the other verbs that join positionals into prose', async () => {
+  const r = scratchRepo('stray-verbs');
+  await hkb('boards', 'add', 'stray-verbs', '--repo', r);
+  const id = json((await hkb('new', 'note', '--triage', '--board', 'stray-verbs', '--json')).out).id;
+  // `queue` would have taken "the thing" as the inline brief, silently beating `--brief do`.
+  await assert.rejects(
+    () => hkb('queue', String(id), '--board', 'stray-verbs', '--brief', 'do', 'the', 'thing'),
+    /stray words after `--brief`/,
+  );
+  // And a verb that takes a FIXED number of positionals is untouched: an id after a flag is real.
+  await assert.rejects(
+    () => hkb('watch', '--board', 'stray-verbs', '999999'),
+    /no Job #999999|999999/,
+  );
 });
 
 test('hkb job set --name takes the words, not the boolean parseArgs would make of it', async () => {

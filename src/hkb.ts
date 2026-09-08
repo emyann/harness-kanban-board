@@ -439,11 +439,62 @@ export function parseDuration(input: string, flag = '--since'): number {
   return n * ms;
 }
 
+/**
+ * A `parseArgs` token, as much of one as this needs. Structural rather than imported, so the
+ * decision below can be tested against plain objects with no parser in the way.
+ */
+export type ArgToken = { kind: string; index: number; name?: string; value?: string };
+
+/**
+ * Words that ended up as positionals *after* a flag, which almost always means a value lost its
+ * quotes.
+ *
+ * The bug this exists for, filed as triage #40 and reproduced exactly:
+ *
+ *     hkb new "review the parser" --input page=value:the wiki page
+ *
+ * `--input` takes one token, so it gets `page=value:the`; `wiki` and `page` fall through as
+ * positionals; and `hkb new` joins every positional into the Job's NAME. The result is a Job called
+ * *"review the parser wiki page"* whose input is the single word `the`, filed with no complaint.
+ * Two fields silently wrong, and nothing said. `hkb queue`, `done`, `cancel`, `approve` and
+ * `reject` join positionals the same way and take the same damage.
+ *
+ * **Only the greedy verbs, and only after the verb.** `hkb watch --board other 999` is a real
+ * invocation — an id after a flag — and verbs that take a fixed number of positionals cannot absorb
+ * a stray one into prose. Options *before* the verb are ignored too, so `hkb --json new x` still
+ * means what it says.
+ *
+ * Returns the strays in order. Empty is the overwhelmingly common case and costs one scan.
+ */
+export function strayWords(tokens: ArgToken[]): { words: string[]; after: string | null } {
+  const verbAt = tokens.find((t) => t.kind === 'positional')?.index;
+  if (verbAt === undefined) return { words: [], after: null };
+  const firstFlag = tokens.find((t) => t.kind === 'option' && t.index > verbAt);
+  if (!firstFlag) return { words: [], after: null };
+  const words = tokens
+    .filter((t) => t.kind === 'positional' && t.index > firstFlag.index)
+    .map((t) => t.value ?? '');
+  if (!words.length) return { words: [], after: null };
+  // The flag immediately before the first stray, which is the one whose value spilled — far more
+  // use than naming the first flag on the line.
+  const firstStrayAt = tokens.find((t) => t.kind === 'positional' && t.index > firstFlag.index)!.index;
+  const culprit = [...tokens]
+    .filter((t) => t.kind === 'option' && t.index < firstStrayAt)
+    .pop();
+  // `name` and not `value`: on an option token `value` is the ARGUMENT it consumed, so naming that
+  // told the operator their spilled value was the flag they should quote.
+  return { words, after: culprit?.name ? `--${culprit.name}` : null };
+}
+
+/** The verbs that join every remaining positional into one string, and so can swallow a stray. */
+const GREEDY = new Set(['new', 'queue', 'done', 'cancel', 'approve', 'reject']);
+
 export async function main(argv: string[]): Promise<number> {
-  const { values, positionals } = parseArgs({
+  const { values, positionals, tokens } = parseArgs({
     args: argv,
     allowPositionals: true,
     strict: false,
+    tokens: true,
     options: {
       json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
@@ -513,6 +564,20 @@ export async function main(argv: string[]): Promise<number> {
 
   const [verb, ...rest] = positionals;
   const out: Out = { json: !!values.json };
+  // A value that lost its quotes, before anything is written. See `strayWords` — the reason this is
+  // a refusal rather than a best guess is that the two readings need opposite fixes and only the
+  // person who typed it knows which they meant.
+  if (GREEDY.has(verb)) {
+    const stray = strayWords(tokens as ArgToken[]);
+    if (stray.words.length) {
+      throw usage(
+        `hkb ${verb}: ${stray.words.length === 1 ? 'a stray word' : `${stray.words.length} stray words`} after `
+        + `${stray.after ? `\`${stray.after}\`` : 'a flag'} — ${stray.words.map((w) => `\`${w}\``).join(', ')}. `
+        + `A value with spaces in it needs quoting${stray.after ? `, as in ${stray.after} "…"` : ''}; `
+        + `text that belongs to the ${verb === 'new' ? 'name' : 'message'} goes before the flags.`,
+      );
+    }
+  }
   // `help` as a verb as well as a flag: it is what a person types first, and answering "unknown
   // verb: help" to it is the kind of small friction this project treats as a bug.
   if (!verb || verb === 'help' || values.help) { process.stdout.write(HELP); return 0; }
