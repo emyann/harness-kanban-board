@@ -11,16 +11,18 @@ covers:
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
-    sha: 41c7fbd41f65c61a80c6fcfa9ec56236d0811a7f
+    sha: 6ae87908660b007837d6f366cf4ddd64f3546d3b
   - path: src/worktree.ts
     sha: c0875d3a1d3f1d0cbee2737ab8d5d48bd073f3b0
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/schema.ts
     sha: ee1920b789eb96be121c8bba20cc92e452ddf818
-generated_at_commit: 9ce6588
+  - path: src/check.ts
+    sha: 519c03f9885b4fac05b2470cb6dc2c6d1931b7ea
+generated_at_commit: cad6595
 last_refreshed: 2026-09-07
-related: [architecture/job-kind, architecture/runtime-layer, decisions/adr-007-workload-scheduler, concepts/worker-identity]
+related: [architecture/job-kind, architecture/runtime-layer, decisions/adr-007-workload-scheduler, decisions/adr-016-the-pod-spec-is-the-map, concepts/worker-identity, features/check]
 ---
 
 # The loop
@@ -65,6 +67,27 @@ what is unusual in this file:
 1. A "tick" can last thirty minutes, where a Kubernetes sync is sub-millisecond.
 2. The lease has to outlive the run it covers, not the pass.
 3. `hkb down` has to reach in and interrupt a worker. A controller would just exit.
+
+## What follows the run, in order
+
+Because the pass is also the kubelet, the end of a run is a sequence rather than a return value,
+and the order of it is load-bearing (`src/controller.ts`):
+
+1. the lease is **released** — fenced on the token, so a holder that lost it mid-run writes
+   nothing outside its own attempt row;
+2. the declared outputs are **collected** out of the sandbox before the checkout can go
+   (`features/declared-outputs`);
+3. the pull request is **read back** from the forge, which is what says whether a person is
+   already looking at this branch;
+4. the branch is **rebased** onto the base as it is now, and force-pushed under a lease
+   (`features/rebase-and-verify`);
+5. the Job's **check** is run, in the checkout, and its exit code decides the attempt
+   (`features/check`, ADR-016 §3). After the rebase so that it tests what would actually merge,
+   and so the tree it ran in agrees with what the next attempt will resume into;
+6. the gate, the phase, and the tidy.
+
+Steps 2 to 5 all run *unleased*, and each is gated on `heldToTheEnd` for that reason: the
+repository, the remote and the checkout are contended state too.
 
 ## A stream out, and still no subscription in
 

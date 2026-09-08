@@ -966,11 +966,12 @@ test('hkb boards set carries the spec defaults, and none clears one', async () =
     'boards', 'set', 'defaults', '--model', 'claude-haiku-4-5', '--effort', 'low',
     '--max-turns', '8', '--max-budget', '0.25', '--max-retries', '0',
     '--allow-tools', 'Read,Grep', '--default-plugin-dirs', '.claude', '--guide', 'CLAUDE.md',
-    '--base', 'origin/develop', '--json',
+    '--base', 'origin/develop', '--check', 'npm test', '--json',
   )).out);
   assert.deepEqual(set.defaults, {
     model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 0,
     allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'], guide: 'CLAUDE.md', base: 'origin/develop',
+    check: 'npm test',
   });
 
   const cleared = json((await hkb('boards', 'set', 'defaults', '--model', 'none', '--json')).out);
@@ -979,6 +980,14 @@ test('hkb boards set carries the spec defaults, and none clears one', async () =
   assert.equal(cleared.defaults.maxRetries, 0, 'including a default of zero, which is a real answer');
   assert.deepEqual(cleared.defaults.pluginPaths, ['.claude'], 'and the board-wide grant survives clearing a model');
   assert.equal(cleared.defaults.guide, 'CLAUDE.md', 'and so does the guide (ADR-013)');
+  assert.equal(cleared.defaults.check, 'npm test', 'and so does the board-wide completion check (ADR-016)');
+
+  // A shell command with an option-looking word in it is a command, not a flag: `boards set` stores
+  // it verbatim, because what it does is not hkb's business — only what it exits with.
+  const shell = json((await hkb('boards', 'set', 'defaults', '--check', 'npm test -- --run', '--json')).out);
+  assert.equal(shell.defaults.check, 'npm test -- --run');
+  const noCheck = json((await hkb('boards', 'set', 'defaults', '--check', 'none', '--json')).out);
+  assert.equal(noCheck.defaults.check, null, '"none" clears it, so the board verifies nothing again');
 
   // The guide is a path the BOARD reads with the operator's authority and puts in front of a model,
   // so it sits behind the same fence the grant does.
@@ -1143,7 +1152,7 @@ test('hkb boards prints a defaults line only for the boards that have one', asyn
   const bare = rows.find((r) => r.board !== 'listed-defaults' && !r.hasDefaults);
   assert.ok(bare, 'a board with no defaults exists in this suite');
   assert.deepEqual(bare.defaults,
-    { model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null, base: null },
+    { model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null, base: null, check: null },
     '--json carries the key either way: a consumer inferring absence from a missing key reads a shape, not a record');
 });
 
@@ -1345,16 +1354,17 @@ test('the board defaults line names every grant, including the ones nobody can o
     describeDefaults({
       model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 0,
       allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'], guide: 'CLAUDE.md', base: 'origin/develop',
+      check: 'npm test',
     }),
-    'model=claude-haiku-4-5 effort=low maxTurns=8 maxBudget=$0.25 maxRetries=0 allowTools=Read|Grep plugins=.claude guide=CLAUDE.md base=origin/develop',
+    'model=claude-haiku-4-5 effort=low maxTurns=8 maxBudget=$0.25 maxRetries=0 allowTools=Read|Grep plugins=.claude guide=CLAUDE.md base=origin/develop check=npm test',
   );
   assert.equal(
-    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null, base: null }),
+    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null, base: null, check: null }),
     '(none)',
   );
   // An empty list is a value and says so; a null is an absence and says nothing.
   assert.match(
-    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: [], pluginPaths: [], guide: null, base: null }),
+    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: [], pluginPaths: [], guide: null, base: null, check: null }),
     /allowTools=\(none\) plugins=\(none\)/,
   );
 });
@@ -1888,4 +1898,64 @@ test('a label that is not `key=value` is refused before the Job exists', async (
   // empty listing that reads as "nothing matches".
   await assert.rejects(() => hkb('ls', '--label', 'workflow', '--board', 'suite-repo'), /no `=`/);
   assert.equal(await db.job.count(), before, 'a refused label must not leave a Job behind');
+});
+
+// ---------------------------------------------------------------- the completion check (ADR-016 §3)
+
+test('--check files the command, and `hkb show` names it with where it came from', async () => {
+  const repo = scratchRepo('checked');
+  await hkb('boards', 'add', 'checked', '--repo', repo);
+
+  // The shipped default first: no Job says anything, no board says anything, and `hkb show` says
+  // so rather than leaving the line out — "nothing verifies this" is the answer to "why did this
+  // succeed with the suite red".
+  const bare = json((await hkb('new', 'unchecked', '--brief', 'x', '--board', 'checked', '--json')).out);
+  const shown = (await hkb('show', String(bare.id), '--board', 'checked')).out;
+  assert.match(shown, /check\s+\(none — nothing verifies the work\)\s+\[built-in\]/);
+
+  const j = json((await hkb('new', 'checked-job', '--brief', 'x', '--check', 'npm run lint && npm test', '--board', 'checked', '--json')).out);
+  assert.equal(j.check, 'npm run lint && npm test', '--json carries it');
+  const out = (await hkb('show', String(j.id), '--board', 'checked')).out;
+  assert.match(out, /check\s+npm run lint && npm test\s+\[job\]/, 'and its source is traced like every other field');
+
+  // The board answers for a Job that says nothing, and the Job still wins where it speaks.
+  await hkb('boards', 'set', 'checked', '--check', 'make verify');
+  assert.match((await hkb('show', String(bare.id), '--board', 'checked')).out, /check\s+make verify\s+\[board\]/);
+  assert.match((await hkb('show', String(j.id), '--board', 'checked')).out, /check\s+npm run lint && npm test\s+\[job\]/);
+});
+
+test('--check with nothing after it is refused rather than filed as an empty command', async () => {
+  await assert.rejects(
+    () => main(['new', 'blank-check', '--brief', 'x', '--check', '  ', '--board', 'blank-check-board']),
+    (e: Error & { exitCode?: number }) => e.exitCode === 2 && /says whether the work behaves/.test(e.message),
+  );
+});
+
+test('hkb job set --check changes what a filed Job must pass, and "none" clears it', async () => {
+  const b = 'set-a-check-board';
+  const j = json((await hkb('new', 'set-a-check', '--brief', 'x', '--board', b, '--json')).out);
+  const set = json((await hkb('job', 'set', String(j.id), '--check', 'npm test', '--board', b, '--json')).out);
+  assert.deepEqual(set.changed.map((c: { field: string }) => c.field), ['check']);
+  assert.match((await hkb('show', String(j.id), '--board', b)).out, /check\s+npm test\s+\[job\]/);
+
+  const cleared = json((await hkb('job', 'set', String(j.id), '--check', 'none', '--board', b, '--json')).out);
+  assert.equal(cleared.changed[0].to, null, '"none" clears it rather than filing a command called none');
+});
+
+test('a workflow file may name the check, because a workflow is what knows when a step is done', async () => {
+  // Safe HERE and nowhere near a worktree: a workflow is read from `Board.repoPath`, so the command
+  // that judges an attempt still arrives through a human merge (`src/templates.ts`).
+  const repo = scratchRepo('workflow-check');
+  fs.mkdirSync(path.join(repo, '.hkb', 'workflows'), { recursive: true });
+  fs.writeFileSync(
+    path.join(repo, '.hkb', 'workflows', 'shipped.md'),
+    '---\nname: shipped\ncheck: npm test\n---\nDo the work.\n',
+  );
+  await hkb('boards', 'add', 'workflow-check', '--repo', repo);
+  const j = json((await hkb('new', '--from', 'shipped', '--board', 'workflow-check', '--json')).out);
+  assert.equal(j.check, 'npm test');
+
+  // And the flag still wins over the file, the way it does for every other key.
+  const typed = json((await hkb('new', '--from', 'shipped', '--check', 'make check', '--board', 'workflow-check', '--json')).out);
+  assert.equal(typed.check, 'make check');
 });

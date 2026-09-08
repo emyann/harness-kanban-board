@@ -7,14 +7,14 @@ audience: [dev]
 read_when: "adding a flag, adding a verb that joins positionals, or wondering why a value arrived as one word"
 covers:
   - path: src/hkb.ts
-    sha: 58995038dfcf0e00183f7331b57f1a4350a5994c
+    sha: ce35e824d6a97dbc5fb88846f81332828dfae3b1
 related:
   [
     architecture/transitions,
     features/workflow-templates,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: 3c57c88
+generated_at_commit: cad6595
 last_refreshed: 2026-09-07
 ---
 

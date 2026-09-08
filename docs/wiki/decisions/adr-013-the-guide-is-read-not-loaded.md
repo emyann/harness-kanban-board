@@ -13,16 +13,16 @@ covers:
   - path: src/guide.ts
     sha: 835b973b5ae725eb1c7a811601260bfbe6e07abb
   - path: src/brief.ts
-    sha: 2d3db74f559f4310ccd91b7117395c24ebb398bd
+    sha: 21211336a1311d7caa925c08c93c48eca3a5a5fa
   - path: src/runtime/claude.ts
     sha: 5ae775633cae411b71443add232b79f1325c4075
   - path: src/controller.ts
-    sha: 41c7fbd41f65c61a80c6fcfa9ec56236d0811a7f
+    sha: 6ae87908660b007837d6f366cf4ddd64f3546d3b
   - path: src/spec.ts
-    sha: 8924cf095921bd72fd50912552ec348d2b139b3a
+    sha: d918b65379babd9235d294239eaa26322bc3eb2f
   - path: prisma/schema.prisma
-    sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
-generated_at_commit: 9ce6588
+    sha: 34921e6803578d6831938ada63d477d55a95eb6a
+generated_at_commit: cad6595
 last_refreshed: 2026-09-07
 related:
   [

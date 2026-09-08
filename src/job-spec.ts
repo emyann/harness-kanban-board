@@ -72,7 +72,7 @@ function refuse(message: string): never {
 export const SETTABLE = [
   'name', 'brief', 'model', 'effort', 'maxTurns', 'maxBudgetUsd', 'maxRetries',
   'base', 'guide', 'gate', 'allowedTools', 'pluginPaths', 'labels',
-  'exports', 'results', 'artifacts', 'inputs',
+  'exports', 'results', 'artifacts', 'inputs', 'check',
 ] as const;
 // `timeoutMs` is deliberately absent: no flag reaches it, and the column is non-nullable, so a
 // caller clearing it would get a raw Prisma error instead of a refusal. The list is what the CLI

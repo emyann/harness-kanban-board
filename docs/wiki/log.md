@@ -368,3 +368,6 @@ history.
 ## 2026-09-07 — refreshed architecture/transitions (hkb job set and src/job-spec.ts: editing what a Job runs AS, the sibling of moving it through its life) + GLOSSARY (Spec edit)
 ## 2026-09-07 — added gotchas/argv-traps (parseArgs under strict:false — an undeclared long option is a boolean, and an unquoted value falls through as positionals the greedy verbs join into prose; both shipped and both were silent) + GLOSSARY (Stray word)
 ## 2026-09-08 — added decisions/adr-017-the-workflow-is-content (the vision written into the record: the developer workflow is content hkb executes and the board shows; a review is a step, an effect is a step with no agent, lineage is kept, the PR protocol is a step's content not core prose; four drifts named) + GLOSSARY (Effect, Step; Workflow amended)
+
+## 2026-09-07 — added features/check (`check` — the exit code hkb does not have, ADR-016 §3)
+## 2026-09-07 — refreshed architecture/the-loop, architecture/job-kind, architecture/the-board (what follows a run, `check_failed` in the decision table, the nullable spec columns)

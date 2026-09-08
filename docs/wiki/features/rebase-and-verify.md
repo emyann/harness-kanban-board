@@ -11,11 +11,11 @@ covers:
   - path: src/worktree.ts
     sha: c0875d3a1d3f1d0cbee2737ab8d5d48bd073f3b0
   - path: src/controller.ts
-    sha: 41c7fbd41f65c61a80c6fcfa9ec56236d0811a7f
+    sha: 6ae87908660b007837d6f366cf4ddd64f3546d3b
   - path: src/brief.ts
-    sha: 2d3db74f559f4310ccd91b7117395c24ebb398bd
+    sha: 21211336a1311d7caa925c08c93c48eca3a5a5fa
   - path: prisma/schema.prisma
-    sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
+    sha: 34921e6803578d6831938ada63d477d55a95eb6a
 related:
   [
     features/the-checkout-base,
@@ -25,7 +25,7 @@ related:
     features/declared-outputs,
     decisions/adr-014-no-preset-three-rules,
   ]
-generated_at_commit: 9ce6588
+generated_at_commit: cad6595
 last_refreshed: 2026-09-07
 ---
 
