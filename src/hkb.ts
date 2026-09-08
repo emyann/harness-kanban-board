@@ -440,62 +440,11 @@ export function parseDuration(input: string, flag = '--since'): number {
 }
 
 /**
- * A `parseArgs` token, as much of one as this needs. Structural rather than imported, so the
- * decision below can be tested against plain objects with no parser in the way.
+ * Every flag hkb parses, in one place so that two things can read it: `parseArgs`, and the check
+ * that refuses a flag nobody declared. Under `strict: false` an unknown long option is silently a
+ * boolean, so the table is the only thing that knows what a real flag is (`unknownFlags`).
  */
-export type ArgToken = { kind: string; index: number; name?: string; value?: string };
-
-/**
- * Words that ended up as positionals *after* a flag, which almost always means a value lost its
- * quotes.
- *
- * The bug this exists for, filed as triage #40 and reproduced exactly:
- *
- *     hkb new "review the parser" --input page=value:the wiki page
- *
- * `--input` takes one token, so it gets `page=value:the`; `wiki` and `page` fall through as
- * positionals; and `hkb new` joins every positional into the Job's NAME. The result is a Job called
- * *"review the parser wiki page"* whose input is the single word `the`, filed with no complaint.
- * Two fields silently wrong, and nothing said. `hkb queue`, `done`, `cancel`, `approve` and
- * `reject` join positionals the same way and take the same damage.
- *
- * **Only the greedy verbs, and only after the verb.** `hkb watch --board other 999` is a real
- * invocation — an id after a flag — and verbs that take a fixed number of positionals cannot absorb
- * a stray one into prose. Options *before* the verb are ignored too, so `hkb --json new x` still
- * means what it says.
- *
- * Returns the strays in order. Empty is the overwhelmingly common case and costs one scan.
- */
-export function strayWords(tokens: ArgToken[]): { words: string[]; after: string | null } {
-  const verbAt = tokens.find((t) => t.kind === 'positional')?.index;
-  if (verbAt === undefined) return { words: [], after: null };
-  const firstFlag = tokens.find((t) => t.kind === 'option' && t.index > verbAt);
-  if (!firstFlag) return { words: [], after: null };
-  const words = tokens
-    .filter((t) => t.kind === 'positional' && t.index > firstFlag.index)
-    .map((t) => t.value ?? '');
-  if (!words.length) return { words: [], after: null };
-  // The flag immediately before the first stray, which is the one whose value spilled — far more
-  // use than naming the first flag on the line.
-  const firstStrayAt = tokens.find((t) => t.kind === 'positional' && t.index > firstFlag.index)!.index;
-  const culprit = [...tokens]
-    .filter((t) => t.kind === 'option' && t.index < firstStrayAt)
-    .pop();
-  // `name` and not `value`: on an option token `value` is the ARGUMENT it consumed, so naming that
-  // told the operator their spilled value was the flag they should quote.
-  return { words, after: culprit?.name ? `--${culprit.name}` : null };
-}
-
-/** The verbs that join every remaining positional into one string, and so can swallow a stray. */
-const GREEDY = new Set(['new', 'queue', 'done', 'cancel', 'approve', 'reject']);
-
-export async function main(argv: string[]): Promise<number> {
-  const { values, positionals, tokens } = parseArgs({
-    args: argv,
-    allowPositionals: true,
-    strict: false,
-    tokens: true,
-    options: {
+const OPTIONS = {
       json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
       version: { type: 'boolean' },
@@ -559,22 +508,132 @@ export async function main(argv: string[]): Promise<number> {
       // The watch cursor. An id, not a duration — `--since` is "how far back", `--after` is
       // "resume exactly here", and only the second one survives a restart without gaps.
       after: { type: 'string' },
-    },
-  });
+} as const;
 
+/**
+ * A `parseArgs` token, as much of one as this needs. Structural rather than imported, so the
+ * decisions below can be tested against plain objects with no parser in the way.
+ *
+ * `value` is present on an option token **only when it consumed one**, which is the field both
+ * checks below turn on: a boolean flag swallows nothing, so nothing after it can have spilled.
+ */
+export type ArgToken = { kind: string; index: number; name?: string; value?: string };
+
+/**
+ * Words that ended up as positionals after a flag ate the first word of their value.
+ *
+ * The bug, filed as triage #40 and reproduced exactly:
+ *
+ *     hkb new "review the parser" --input page=value:the wiki page
+ *
+ * `--input` takes one token, so it gets `page=value:the`; `wiki` and `page` fall through as
+ * positionals; and `hkb new` joins every positional into the Job's NAME. A Job called *"review the
+ * parser wiki page"* whose input is the single word `the`, filed with no complaint. `queue`,
+ * `done`, `cancel`, `approve` and `reject` join positionals into prose the same way.
+ *
+ * ## Three conditions, and the first version of this had only one
+ *
+ * It shipped as "any positional after any option", which broke four legal invocations that no test
+ * covered — the reason being that the tests asserted only what it must *refuse*. The mirror was
+ * missing, and CLAUDE.md's rule about proving a guard by making it refuse has a second half nobody
+ * had written down: a guard also has to be proven not to refuse the things people actually type.
+ *
+ * So: a positional is stray only when
+ *
+ *  1. **a positional already appeared before the flags.** That is what says the verb has what it
+ *     came for — the name, or the id. Without it the first positional after a flag IS the thing:
+ *     `hkb new --triage "capture this"`, `hkb cancel --board other 12 "superseded"` and
+ *     `hkb new --from tmpl "My Name"` are all ordinary, and the first version refused every one;
+ *  2. **`--` has not been seen.** It is the standard way to say *everything after this is a
+ *     positional*, and a guard with no override is a guard that will eventually be in the way.
+ *
+ * What a *value-taking* flag changes is the **advice**, not the verdict. A word after `--json` was
+ * still silently joined into the name, so it is still refused; but only a flag that actually
+ * consumed something can have spilled it, so only then is quoting the fix worth naming. Telling
+ * somebody to write `--json "…"` is advice that produces a different error.
+ */
+export function strayWords(tokens: ArgToken[]): { words: string[]; after: string | null } {
+  const none = { words: [], after: null };
+  const verbAt = tokens.find((t) => t.kind === 'positional')?.index;
+  if (verbAt === undefined) return none;
+
+  const terminator = tokens.find((t) => t.kind === 'option-terminator')?.index ?? Infinity;
+  const after = tokens.filter((t) => t.index > verbAt && t.index < terminator);
+  const firstFlag = after.find((t) => t.kind === 'option');
+  if (!firstFlag) return none;
+  // Condition 1: the verb already got its leading positional, before any flag at all.
+  if (!after.some((t) => t.kind === 'positional' && t.index < firstFlag.index)) return none;
+
+  const strays = after.filter((t) => t.kind === 'positional' && t.index > firstFlag.index);
+  if (!strays.length) return none;
+  // The flag the words came straight after — named ONLY if it consumed a value, because only then
+  // can it have spilled one and only then is "quote it" the fix. `--brief x --json b` blames
+  // nothing: `b` did not fall out of `--brief`, it fell in after a boolean.
+  const nearest = after.filter((t) => t.kind === 'option' && t.index < strays[0].index).pop();
+  const spilled = nearest?.value !== undefined ? nearest : undefined;
+  return { words: strays.map((t) => t.value ?? ''), after: spilled?.name ? `--${spilled.name}` : null };
+}
+
+/**
+ * Flags nobody declared, which `parseArgs` accepts as booleans rather than refusing.
+ *
+ * This is the *other* half of the same bug and the reason `hkb job set --name "a better name"`
+ * renamed a Job to the literal string `"true"`: under `strict: false` an undeclared long option is
+ * not an error, it is a boolean, and its intended argument falls through as a positional.
+ *
+ * Checked here rather than by turning on `strict: true` because strict mode throws Node's own error
+ * — no exit code of ours, no message naming the fix, and it fires before the `--help` path that a
+ * person mistyping a flag is most likely to want next.
+ */
+export function unknownFlags(tokens: ArgToken[], declared: Iterable<string>): string[] {
+  const known = new Set(declared);
+  const seen = new Set<string>();
+  for (const t of tokens) {
+    if (t.kind !== 'option' || !t.name || known.has(t.name)) continue;
+    seen.add(t.name);
+  }
+  return [...seen];
+}
+
+/** The verbs that join every remaining positional into one string, and so can swallow a stray. */
+const GREEDY = new Set(['new', 'queue', 'done', 'cancel', 'approve', 'reject']);
+
+export async function main(argv: string[]): Promise<number> {
+  const { values, positionals, tokens } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+    options: OPTIONS,
+  });
   const [verb, ...rest] = positionals;
   const out: Out = { json: !!values.json };
+  // A flag nobody declared, before anything is written. Under `strict: false` it is silently a
+  // boolean and its argument falls through as a positional — which is how `hkb job set --name "a
+  // better name"` renamed a Job to the literal string "true" (`gotchas/argv-traps`). Checked for
+  // every verb, because a misspelling is a misspelling whichever one it follows.
+  const unknown = unknownFlags(tokens as ArgToken[], Object.keys(OPTIONS));
+  if (unknown.length) {
+    throw usage(
+      `unknown ${unknown.length === 1 ? 'flag' : 'flags'}: ${unknown.map((f) => `\`--${f}\``).join(', ')}`
+      + ` — \`hkb --help\` lists what each verb takes. An undeclared flag is not an error to the`
+      + ` argument parser, it is a boolean, so this would otherwise have been accepted and its value`
+      + ` filed as something else.`,
+    );
+  }
   // A value that lost its quotes, before anything is written. See `strayWords` — the reason this is
   // a refusal rather than a best guess is that the two readings need opposite fixes and only the
   // person who typed it knows which they meant.
   if (GREEDY.has(verb)) {
     const stray = strayWords(tokens as ArgToken[]);
     if (stray.words.length) {
+      const where = verb === 'new' ? 'name' : 'message';
       throw usage(
         `hkb ${verb}: ${stray.words.length === 1 ? 'a stray word' : `${stray.words.length} stray words`} after `
         + `${stray.after ? `\`${stray.after}\`` : 'a flag'} — ${stray.words.map((w) => `\`${w}\``).join(', ')}. `
-        + `A value with spaces in it needs quoting${stray.after ? `, as in ${stray.after} "…"` : ''}; `
-        + `text that belongs to the ${verb === 'new' ? 'name' : 'message'} goes before the flags.`,
+        + (stray.after
+          ? `A value with spaces in it needs quoting, as in ${stray.after} "…"; text that belongs to the ${where} goes before the flags.`
+          : `Text that belongs to the ${where} goes before the flags, or after \`--\`.`),
       );
     }
   }

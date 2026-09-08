@@ -7,14 +7,14 @@ audience: [dev]
 read_when: "adding a flag, adding a verb that joins positionals, or wondering why a value arrived as one word"
 covers:
   - path: src/hkb.ts
-    sha: a33ff66368b4d6248281a0a74e94910891c77862
+    sha: de723e5a29b4eecb20165522e7f8aba7a059d7be
 related:
   [
     architecture/transitions,
     features/workflow-templates,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: c7bd3d1
+generated_at_commit: 238e866
 last_refreshed: 2026-09-07
 ---
 
@@ -43,8 +43,21 @@ The Job was renamed to the literal string `"true"`. On the one field a person is
 there to fix.
 
 **The rule this leaves:** a flag that a verb reads must be in the options table, and adding one to a
-verb body is not adding a flag. There is no "unknown flag" error under `strict: false` to catch the
-omission for you.
+verb body is not adding a flag.
+
+`unknownFlags` (`src/hkb.ts`) now refuses any option token whose name is not in the declared table,
+for every verb — which is the general form of this trap and also what makes a *misspelling* say so:
+
+```
+$ hkb new "n" --brefi "do it"
+hkb: unknown flag: `--brefi` — `hkb --help` lists what each verb takes. An undeclared
+flag is not an error to the argument parser, it is a boolean, so this would otherwise
+have been accepted and its value filed as something else.
+```
+
+It is a check rather than `strict: true` because strict mode throws Node's own error: no exit code
+of ours, no message naming the fix, and it fires before the `--help` path a person mistyping a flag
+most wants next.
 
 ## 2. A value that lost its quotes becomes positionals
 
@@ -73,18 +86,34 @@ quoting, as in --input "…"; text that belongs to the name goes before the flag
 the value* and *this is part of the name* — need opposite fixes, and only the person who typed it
 knows which they meant. Guessing would be the same silence in a different costume.
 
-### The three invocations it must not break
+### The rule, and how it got narrower
 
-The guard is narrow because the obvious wide version breaks real usage, and each of these has a test:
+The first version was "any positional after any option", and it broke **four** legal invocations
+that no test covered. That is the finding behind the finding: the tests asserted only what the guard
+must *refuse*. CLAUDE.md's rule about proving a guard by making it refuse has a second half nobody
+had written down — **a guard also has to be proven not to refuse what people actually type**, and
+without those cases 538 tests passed with four regressions live.
 
-- **`hkb new my great job --brief …`** — an unquoted multi-word *name* before the flags. `hkb new`
-  joins positionals on purpose, so this is legal and must stay so. Only positionals appearing
-  **after a flag** are stray.
-- **`hkb watch --board other 999`** — a positional after a flag, and entirely real. A verb that
-  takes a *fixed* number of positionals cannot absorb a stray one into prose, so the check applies
-  only to the six verbs that join.
-- **`hkb --json new x`** — an option before the verb. Flags preceding the verb are ignored, or the
-  verb itself would read as stray.
+A positional is stray only when:
+
+1. **a positional already appeared before the flags.** That is what says the verb has what it came
+   for. Without it, the first positional after a flag *is* the thing — `hkb new --triage "capture
+   this"` is the frictionless-capture path, `hkb cancel --board other 12 "superseded"` puts the id
+   after a flag because there is nowhere else for it to go, and `hkb new --from tmpl "My Name"` is
+   documented on the templates page. All three were refused, the last two with advice that could not
+   be followed.
+2. **`--` has not been seen.** The standard way to say *everything after this is a positional*, and
+   the only override the guard has.
+
+And two things the check is scoped by rather than conditioned on: it runs for the six verbs that
+join positionals into prose (`hkb watch --board other 999` is real, and a verb taking a fixed number
+of positionals cannot absorb a stray one), and options *before* the verb are ignored, or `hkb --json
+new x` would read its own verb as stray.
+
+**A boolean flag changes the advice, not the verdict.** A word after `--json` was still silently
+joined into the name, so it is still refused — but only a flag that consumed something can have
+spilled it, and telling somebody to write `--json "…"` is advice that produces a different error. So
+the flag is named only when it took a value, and never across an intervening boolean.
 
 ## Why both of these are the same bug
 
