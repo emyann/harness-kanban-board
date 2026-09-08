@@ -89,6 +89,9 @@ pages:
   - slug: decisions/adr-016-the-pod-spec-is-the-map
     summary: "hkb's Kubernetes mapping has only ever covered scheduling. Everything a workload needs *around* it — what runs before, what runs alongside, what says it finished, what it may reach — is unmapped, and the temptation is to invent a vocabulary. We take the Pod spec's answers instead, row by row, and say plainly where hkb is off the map."
     status: seeded
+  - slug: decisions/adr-017-the-workflow-is-content
+    summary: "hkb's records were all written from the machinery outward and none from the product inward, so the thing hkb exists for — a developer's own workflow, *implement → open a PR → review → notify*, authored as data and shown as a diagram — is nowhere a worker or a reviewer can read it, and four parts of the code and the record have drifted against it. This writes it down and names the drift."
+    status: seeded
   - slug: features/watch
     summary: "The third question about the board, after \"what is true now\" and \"what happened\": tell me when something happens. Cursors rather than state, woken by the filesystem rather than polled, and resumable because an id never expires."
     status: seeded

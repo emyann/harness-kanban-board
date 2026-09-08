@@ -28,6 +28,7 @@ related:
     decisions/adr-015-machinery-and-consumer,
     architecture/job-kind,
     features/declared-outputs,
+    decisions/adr-017-the-workflow-is-content,
   ]
 ---
 

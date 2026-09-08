@@ -65,6 +65,9 @@ meet one in the git history, that is what it was.
   compare-and-swap as a `Lease` (`acquireBoard`, `src/daemon.ts`). It is leader election, not
   exclusion: a second daemon takes the boards it can and idles on the rest. It replaced a pid file,
   and it is what `hkb up --status` reads (*architecture/the-loop*, *howto/running-the-daemon*).
+- **Effect** — a step with no agent in it: post the message, call the API. Deterministic, refusable and
+  recorded like any other step; the primitive is named by *decisions/adr-017-the-workflow-is-content*
+  decision 3 and does not exist as code (triage card #37).
 - **Export** — a path a Job *declares* it will produce (`--export`, repeatable), copied out of the
   worktree into the repository before the checkout is torn down — the one of the three declared outputs
   whose destination is the repository rather than the board; a declared path the run did not
@@ -189,6 +192,10 @@ meet one in the git history, that is what it was.
   `proposes` and `isolate` refused by name, a lease refused outright, and every change on the Event
   stream — because a spec is what the NEXT attempt gets and the ones behind it ran under something
   else (*architecture/transitions*).
+- **Step** — one workload in a developer's workflow: *implement*, *review*, *notify*. A step that runs
+  an agent is a Job; a review is a Job with a reviewer's brief and a read-only tool surface; a step with
+  no agent is an *effect*. What makes two steps different is a different tool surface, model,
+  repository or trust level — study §5's criterion, adopted by *decisions/adr-017-the-workflow-is-content*.
 - **Transition** — a Job moving between phases because a *person* decided (`src/transitions.ts`:
   queue, triage, approve, reject, retry, done/cancel, remove), as opposed to the moves the
   controller makes by observing. Each is a lookup, a set of refusals and a group of writes that
@@ -221,7 +228,9 @@ meet one in the git history, that is what it was.
 - **Workflow** — a file at `.hkb/workflows/<name>.md` in the board's repository whose frontmatter is a
   Job's spec and whose body is its brief. `hkb new --from <name>` expands one into a Job at file time;
   the keys are `hkb new`'s flags, so one vocabulary documents both (`src/templates.ts`;
-  *features/workflow-templates*). Not a graph: it templates ONE Job, not an ordering between several.
+  *features/workflow-templates*). The file templates ONE Job — a *step* — not an ordering between
+  several; the multi-step thing a developer calls their workflow is *decisions/adr-017-the-workflow-is-content*'s
+  object, and the run that sequences its steps does not exist yet.
 - **Workload** — a unit of work hkb takes and executes. A workload has a *kind*; the kanban DAG and a
   propose-approve grooming pass are two further shapes, neither of which exists as code
   (*decisions/adr-007-workload-scheduler*).
