@@ -81,6 +81,13 @@ export const BUILT_IN = {
    * every repository hkb ever runs in, which is exactly the constant `Job.base` exists to remove.
    */
   base: null,
+  /**
+   * Null, and the null is the whole shipped default: **nothing runs**. A check is a shell command
+   * executed with the daemon's privileges, and one hkb invented for a repository it knows nothing
+   * about would be a guess with a shell in it. It reaches a worker only because a person wrote it
+   * on the Job, on the board, or in a workflow file that was merged.
+   */
+  check: null,
 } as const;
 
 /** The nullable half of a Job's spec — the fields a Board can supply a default for. */
@@ -97,6 +104,7 @@ export type JobSpec = {
   pluginPaths?: unknown;
   guide?: unknown;
   base?: unknown;
+  check?: unknown;
 };
 
 /** The Board's side. Named `default*` so no call site has to guess what `board.model` would mean. */
@@ -110,6 +118,7 @@ export type BoardDefaults = {
   defaultPluginPaths?: unknown;
   defaultGuide?: unknown;
   defaultBase?: unknown;
+  defaultCheck?: unknown;
 };
 
 export type Traced<T> = { value: T; from: SpecSource };
@@ -124,6 +133,7 @@ export type ResolvedSpec = {
   pluginPaths: Traced<string[] | null>;
   guide: Traced<string | null>;
   base: Traced<string | null>;
+  check: Traced<string | null>;
 };
 
 /**
@@ -174,6 +184,11 @@ export function resolveSpec(
     // Same shape as `guide`: a ref or nothing, with a blank normalised to the absence. There is no
     // third state to protect here — "branch from no base" is not a thing a checkout can do.
     base: pick(str(j.base), str(b.defaultBase), BUILT_IN.base as string | null),
+    // The completion condition, resolved exactly like `guide` and for the same reasons: one value
+    // or none, a blank normalised to the absence, and the Job's own answer outranking the board's.
+    // There is no third state — "check nothing" IS the absence — and the built-in is that absence,
+    // so at the shipped defaults this field costs a resolution and changes nothing (ADR-016 §3).
+    check: pick(str(j.check), str(b.defaultCheck), BUILT_IN.check as string | null),
   };
 }
 
@@ -182,7 +197,7 @@ export function hasDefaults(b: BoardDefaults): boolean {
   return b.defaultModel != null || b.defaultEffort != null || b.defaultMaxTurns != null
     || b.defaultMaxBudgetUsd != null || b.defaultMaxRetries != null || toolList(b.defaultAllowedTools) != null
     || pluginList(b.defaultPluginPaths) != null || str(b.defaultGuide) != null
-    || str(b.defaultBase) != null;
+    || str(b.defaultBase) != null || str(b.defaultCheck) != null;
 }
 
 /** A board's defaults, under the names the Job knows them by. What `--json` carries. */
@@ -197,5 +212,6 @@ export function boardDefaults(b: BoardDefaults) {
     pluginPaths: pluginList(b.defaultPluginPaths),
     guide: str(b.defaultGuide),
     base: str(b.defaultBase),
+    check: str(b.defaultCheck),
   };
 }

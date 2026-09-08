@@ -15,9 +15,9 @@ covers:
   - path: src/admission.ts
     sha: aab84ccd1178b085cea79d2c4566149145027b9e
   - path: src/spec.ts
-    sha: 8924cf095921bd72fd50912552ec348d2b139b3a
+    sha: d918b65379babd9235d294239eaa26322bc3eb2f
   - path: prisma/schema.prisma
-    sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
+    sha: 34921e6803578d6831938ada63d477d55a95eb6a
 related:
   [
     decisions/adr-007-workload-scheduler,
@@ -25,7 +25,7 @@ related:
     architecture/runtime-layer,
     architecture/overview,
   ]
-generated_at_commit: aa34c9c
+generated_at_commit: cad6595
 last_refreshed: 2026-09-07
 ---
 

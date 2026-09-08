@@ -9,11 +9,11 @@ covers:
   - path: src/transitions.ts
     sha: d5b3f7dcaab594fa94e844d7d0a30ddd7a97b5c2
   - path: src/job-spec.ts
-    sha: fec027c2c9edb0f79feec719ea1c75f23869cc79
+    sha: ae8c0550120f393b15fcd48c7061240aac55031a
   - path: src/hkb.ts
-    sha: 58995038dfcf0e00183f7331b57f1a4350a5994c
+    sha: ce35e824d6a97dbc5fb88846f81332828dfae3b1
   - path: prisma/schema.prisma
-    sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
+    sha: 34921e6803578d6831938ada63d477d55a95eb6a
 related:
   [
     decisions/adr-015-machinery-and-consumer,
@@ -21,7 +21,7 @@ related:
     decisions/adr-010-the-human-gate,
     architecture/the-board,
   ]
-generated_at_commit: 3c57c88
+generated_at_commit: cad6595
 last_refreshed: 2026-09-07
 ---
 

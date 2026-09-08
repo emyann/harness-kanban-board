@@ -88,6 +88,14 @@ enum Outcome {
               // base moved, and the fix is a hand rebase rather than another run. A push that never
               // REACHED the remote is deliberately not here — that is ours, and it is said out loud
               // without failing an attempt whose work is already pushed.
+  check_failed // the session ended and everything declared is there, and the command the Job named
+              // as its completion condition exited non-zero in the rebased checkout (ADR-016 §3,
+              // `src/check.ts`). hkb's container is an agent session and it always finishes
+              // successfully, so hkb has no exit code of its own; `exports`/`results`/`artifacts`
+              // reconstruct one for files and this reconstructs one for BEHAVIOUR. Transient and
+              // resumable, unlike `no_output`: the session is worth continuing precisely because it
+              // is the session that wrote the code the check refused, and the next attempt is told
+              // the command, the exit code and the tail of what it printed.
   lost        // the lease expired with nobody reporting — the attempt was never heard from again
   stopped     // the operator stopped the daemon mid-run. Resumable, and it does NOT spend a retry:
               // `kb down` is not a failure of the work, and charging one would mean a Job could be
@@ -159,6 +167,11 @@ model Board {
   /// trunk is not what `origin/HEAD` points at — a protected `main` with an integration branch in
   /// front of it is the case that exists. Null keeps the repository's own default branch.
   defaultBase         String?
+
+  /// The completion check every Job on this board runs unless it says otherwise (`Job.check`
+  /// wins). One `hkb boards set <slug> --check "npm test"` is how a repository's own gate reaches
+  /// every worker on it. Null — the shipped default — means nothing runs.
+  defaultCheck        String?
 
   events Event[]
 
@@ -323,6 +336,28 @@ model Job {
   /// The file IS the value, so the file is what is durable, and `src/artifacts.ts` never removes
   /// one. That is a deliberate cost — see the size in `hkb show`.
   artifacts    Json?
+
+  /// The command that says whether this Job's work *behaves*: a shell line run in the attempt's
+  /// checkout after the run and after the rebase, whose non-zero exit fails the attempt
+  /// (ADR-016 §3, `src/check.ts`).
+  ///
+  /// **Beside the declared outputs, not in a hooks list.** A Kubernetes Job is complete when its
+  /// container exits 0, which is why Kubernetes needs no "run this afterwards" hook. hkb's
+  /// container is an agent session and it always finishes successfully, so hkb has no exit code:
+  /// `exports`, `results` and `artifacts` are hkb reconstructing one for files, and this is the
+  /// same question asked for behaviour. The controller reads 0 / not-0 and knows nothing else
+  /// about the command — the way the kubelet knows nothing about the container.
+  ///
+  /// **From this row, the board's default, or a workflow file under `Board.repoPath` — never the
+  /// worktree.** Same fence as `guide` and `pluginPaths`, for the sharpest version of the reason:
+  /// a worker that could author what judges its own next attempt would be marking its own work.
+  /// A human merge is the boundary. It is deliberately not a proposal key either
+  /// (`src/proposals.ts`).
+  ///
+  /// Null on both levels is the shipped default, and it means NOTHING RUNS — a Job whose brief is
+  /// an investigation has no suite to pass, and a check hkb chose for a repository it knows
+  /// nothing about would be a guess with a shell in it.
+  check        String?
   /// How this Job is GROUPED: a JSON object of string → string, the way Kubernetes labels an
   /// object. `{"workflow":"release","step":"draft"}`.
   ///
@@ -545,6 +580,19 @@ model Attempt {
   /// one in to record that it exists would give back the cap by another route. The same two layers
   /// as `results`: declared names are required, volunteered ones are kept and never required.
   artifacts Json?
+
+  /// What the completion check said, when this attempt ran one and it refused:
+  /// `{ command, exitCode, tail, ms, why? }` (`src/check.ts`). Null for an attempt that ran no
+  /// check and for one whose check passed — a passing check is the absence of a finding, and a row
+  /// per success would be a log rather than a record.
+  ///
+  /// It is here rather than in `reason` because it is not a sentence: `reason` is 300 characters of
+  /// prose for a person reading `hkb show`, and this is the captured tail of a test run, read back
+  /// by the controller to tell the NEXT attempt what failed. `docs/rebuild-plan.md` records that
+  /// "the practice that has actually worked is briefing: tell the second attempt what the first
+  /// collided with", and a retry that does not know why it is retrying is the failure mode this
+  /// project has already measured.
+  check   Json?
 
   turns   Int?
   /// How often the admission gate refused this run a tool. A non-zero count on a succeeding attempt

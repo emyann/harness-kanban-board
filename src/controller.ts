@@ -7,9 +7,12 @@ import {
 import { rebaseNote, rebaseOntoBase, rebaseShortfall } from './rebase.ts';
 import { prForBranch } from './pulls.ts';
 import {
-  approvedPrompt, withArtifacts, withGuide, withInputs, withProposal, withProtocol, withResults,
-  withStandingRules, withWorktree,
+  approvedPrompt, withArtifacts, withCheckFailure, withGuide, withInputs, withProposal,
+  withProtocol, withResults, withStandingRules, withWorktree,
 } from './brief.ts';
+import {
+  checkShortfall, describeCheck, runCheck, storedCheck, type CheckRecord,
+} from './check.ts';
 import { resolvePlugins } from './plugins.ts';
 import { readGuide, missingGuide } from './guide.ts';
 import {
@@ -165,7 +168,7 @@ const LEASE_GRACE_MS = 5 * 60_000;
  */
 export type Decision = {
   phase: 'succeeded' | 'failed' | 'pending' | 'suspended';
-  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped' | 'no_output' | 'no_input' | 'conflicted';
+  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped' | 'no_output' | 'no_input' | 'conflicted' | 'check_failed';
   resumable: boolean;
   /**
    * What to write on the Job's `lastError`, when the reason it stopped is something a *human* has
@@ -217,7 +220,33 @@ export function nextPhase(
   maxRetries: number,
   /** The cap this attempt ran under — which is precisely the cap a retry would get. */
   maxBudgetUsd?: number,
+  /**
+   * The Job's own completion check, when it ran and refused (ADR-016 §3, `src/check.ts`).
+   *
+   * Passed in rather than read here, because this function is pure and a check is a subprocess.
+   * The controller runs it after the rebase and calls back in with what it said.
+   */
+  failedCheck?: CheckRecord | null,
 ): Decision {
+  // First, and it outranks `completed` — which is exactly the point. A check only ever runs after a
+  // session that ended cleanly and produced everything it declared, so `outcome.status` here is
+  // always `completed`; taking that as the answer is what having no exit code MEANS, and this is
+  // the reconstruction of one. `resumable` is true and not negotiable: the session that wrote the
+  // code the check refused is precisely the session worth continuing, and the checkout it wrote it
+  // in is kept for it (`decision.resumable && phase === 'pending'` below).
+  if (failedCheck) {
+    const worthRetrying = attempt <= maxRetries;
+    return {
+      phase: worthRetrying ? 'pending' : 'failed',
+      outcome: 'check_failed',
+      resumable: true,
+      // Written whether it is retrying or not, and it is one of only two outcomes that carries its
+      // own line. ADR-016 §4: a failed check is a missing output, not a crash — it burns a retry
+      // and spends nothing more — and there is no runtime error to fall back on, because as far as
+      // the runtime is concerned this attempt succeeded.
+      lastError: checkShortfall(failedCheck, worthRetrying),
+    };
+  }
   if (outcome?.status === 'completed') {
     return { phase: 'succeeded', outcome: 'completed', resumable: false, lastError: null };
   }
@@ -852,6 +881,22 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       : null;
     const approvalPrompt = approval ? approvedPrompt(approval.actor, (approval.payload as { note?: string } | null)?.note) : null;
 
+    // ---- what the attempt before this one failed its check on, if that is why there is another
+    // one. Read off the PREVIOUS attempt's row rather than remembered across the transition, like
+    // everything else here: a controller that is level-triggered cannot depend on having seen the
+    // failure happen, and a flag consumed on a transition is wrong after a restart.
+    //
+    // Only `k - 1`, and only when that attempt ended on the check. An older check failure two
+    // attempts back was already answered by the attempt in between, and quoting it now would brief
+    // this run against a tree that no longer exists.
+    const priorAttempt = k > 1
+      ? await db.attempt.findUnique({
+        where: { jobId_k: { jobId: job.id, k: k - 1 } },
+        select: { outcome: true, check: true },
+      })
+      : null;
+    const priorCheck = priorAttempt?.outcome === 'check_failed' ? storedCheck(priorAttempt.check) : null;
+
     // ---- the results this attempt is asked for, and the directory it writes them to. Created
     // before the run because the paths go into the prompt; outside every checkout, so writing one
     // cannot land in the worker's diff (`src/results.ts`).
@@ -1018,13 +1063,19 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // says and all it says.
     const opening = approvalPrompt
       ?? (wt ? (job.proposes ? withWorktree(job.brief, wt.branch) : withProtocol(job.brief, wt.branch, baseAdvice)) : job.brief);
+    // What the last attempt's check refused, on top of whatever this attempt was going to be told.
+    // ADR-016 §3 makes the check part of the completion condition, so a resumed attempt that is not
+    // told about it is one that wakes up believing it finished — the retry-that-does-not-know-why
+    // this project has already measured (`docs/rebuild-plan.md`). Composed rather than substituted,
+    // unlike `approvedPrompt`: the work has not changed, only what is now known about it.
+    const briefed = priorCheck ? withCheckFailure(opening, priorCheck) : opening;
     // The guide goes in FRONT of all of it, including an approval prompt: an approver's instruction
     // is the most recent word on what to do, and the repository's rules are the standing word on how
     // anything here is done. Neither replaces the other.
     // The three rules every worker gets (ADR-014), between the task and the output contracts. Not
     // conditional on anything: a rule that reaches only some Jobs is one nothing can rely on, and
     // that includes a resumed attempt carrying an approver's instruction.
-    const ruled = withStandingRules(opening);
+    const ruled = withStandingRules(briefed);
     const guided = guide ? withGuide(ruled, guide.text, spec.guide.value as string) : ruled;
     const asked = withInputs(
       withArtifacts(withResults(guided, wantedResults), wantedArtifacts),
@@ -1252,6 +1303,34 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       }
     }
 
+    // ---- the completion CHECK: the exit code hkb does not have (ADR-016 §3, `src/check.ts`).
+    //
+    // Nothing runs at the shipped defaults — `BUILT_IN.check` is null, so this whole block is a
+    // null test on a board nobody has configured, which is the property the tests hold.
+    //
+    // **After the rebase, and after its push.** Two reasons, and both of them are about agreement:
+    // it must test what would actually MERGE rather than what the branch was cut from, and the tree
+    // it runs in has to agree with what is on the remote — `src/rebase.ts` explains why a tree ahead
+    // of its branch strands the next attempt, and a check that ran before the replay would be
+    // reporting on a tree the resumed attempt never sees. It runs in the worktree, or in the
+    // repository itself for a `--no-isolate` Job, which is the same "where the work happened" either
+    // way.
+    //
+    // Gated exactly like the rebase above it: only a run that otherwise succeeded, only while we
+    // still hold the lease (this executes a command in a checkout, and a checkout a new holder is
+    // working in is not ours to touch), and only when nothing has already failed the attempt —
+    // running a suite over a tree that is missing a declared output would spend ten minutes to
+    // report a second cause for a failure that already has one.
+    let failedCheck: CheckRecord | null = null;
+    if (spec.check.value && ran.phase === 'succeeded' && heldToTheEnd && !shortfall) {
+      say(`  check ${spec.check.value}`);
+      const r = runCheck(wt ? wt.path : cwd, spec.check.value);
+      if (!r.ok) {
+        failedCheck = r.record;
+        say(`  ${describeCheck(r.record)}`);
+      }
+    }
+
     // A declared output that is not there fails the attempt, and that rule is what makes the
     // declaration worth writing down: without it `succeeded` still means only that a session ended.
     // Not retried — the session's own account is that it finished, so a resumed attempt wakes up
@@ -1268,7 +1347,13 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     const approved = job.gate && ran.phase === 'succeeded' && !shortfall
       ? await db.event.count({ where: { jobId: job.id, kind: 'approved' } })
       : 0;
-    const decision: Decision = shortfall
+    const decision: Decision = failedCheck
+      // Before the gate and before the success, and it cannot collide with the shortfall branch
+      // below because the check only runs when there is no shortfall. A gated Job whose check
+      // failed does not suspend: nobody should be asked to approve a diff the board already knows
+      // does not work, and the answer to it is another attempt rather than a person.
+      ? nextPhase(outcome, charged, spec.maxRetries.value, spec.maxBudgetUsd.value, failedCheck)
+      : shortfall
       // `conflicted` rather than `no_output` when the branch is the problem, because the two send an
       // operator to different places: `no_output` is a fault in the work and the answer is another
       // run, a conflict is the base having moved and the answer is a hand rebase in a checkout that
@@ -1287,8 +1372,10 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         sessionId: outcome?.sessionId ?? null,
         summary: outcome?.text?.slice(0, 2000) ?? null,
         // The shortfall wins: when a declared output is missing, that is why this attempt ended as
-        // it did, and the runtime has no error of its own to report — it thinks it succeeded.
-        reason: (shortfall ?? outcome?.error)?.slice(0, 300) ?? null,
+        // it did, and the runtime has no error of its own to report — it thinks it succeeded. A
+        // refused check is the same kind of fact and reads the same way in `hkb show`; the tail it
+        // captured is on `check` below rather than crammed into 300 characters of prose.
+        reason: (shortfall ?? (failedCheck ? describeCheck(failedCheck) : null) ?? outcome?.error)?.slice(0, 300) ?? null,
         costUsd: outcome?.costUsd ?? null,
         // Measured by the runtime, not reported by the agent. An attempt that never reached the
         // runtime has no measurement rather than a measurement of zero, hence `?? null`.
@@ -1313,6 +1400,11 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // was asked for, what was accepted and (once applied) what was created. A tool call leaves
         // no such record, which is ADR-011's audit argument in one column.
         ...(proposal ? { proposal } : {}),
+        // What the check said, when it refused. Nothing for a check that passed and nothing for an
+        // attempt that ran none: a passing check is the absence of a finding, and a row per success
+        // would be a log rather than a record. It is read back by the NEXT attempt, which is the
+        // whole reason it is a column and not a sentence (`prisma/schema.prisma`, `Attempt.check`).
+        ...(failedCheck ? { check: failedCheck } : {}),
       },
     });
 
@@ -1395,6 +1487,12 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // anything if the tree to resolve it in is still there when the operator reads the message.
         unlockWorktree(cwd, wt);
         say(`kept ${wt.path} — rebase it there`);
+      } else if (failedCheck) {
+        // Out of retries with a check that refused: the same argument as the conflict above, one
+        // question over. The tree is where the command can be run again, and the operator's first
+        // move is to run it — sweeping the checkout would make them recreate it to do that.
+        unlockWorktree(cwd, wt);
+        say(`kept ${wt.path} — run \`${failedCheck.command}\` there`);
       } else {
         // Everything this Job said it would produce is now in the repository, so whatever is left
         // in the checkout is undeclared — litter, in ADR-008's sense, and the one case where a

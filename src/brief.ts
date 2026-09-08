@@ -223,6 +223,55 @@ export function approvedPrompt(actor: string | null, note?: string | null): stri
 }
 
 /**
+ * What the attempt before this one failed its check on, put in front of the work.
+ *
+ * `docs/rebuild-plan.md` records what has actually worked here: *"the practice that has actually
+ * worked is briefing: tell the second attempt what the first collided with"*. A retry that does not
+ * know why it is retrying is a failure mode this project has already measured — it wakes up
+ * believing it finished, reads its own transcript, and produces the same tree.
+ *
+ * So this carries the three facts and nothing else: **the command, the exit code, and the tail of
+ * what it printed**. Not an interpretation of them — the controller does not know what the command
+ * does (`src/check.ts`), and a summary written by something that cannot read the output would be
+ * hkb guessing on the model's behalf.
+ *
+ * Framed as the operator's requirement rather than as data, which is the same distinction
+ * `withGuide` draws against `withInputs`: this is the condition the Job must satisfy, not material
+ * it was handed. It sits with `approvedPrompt` in that respect — both are the most recent word on
+ * what to do, and both are why a resumable stop keeps its session.
+ */
+export function withCheckFailure(
+  brief: string,
+  r: { command: string; exitCode: number | null; tail: string; why?: string },
+): string {
+  const what = r.why ?? `exited ${r.exitCode}`;
+  return [
+    brief.trimEnd(),
+    '',
+    '---',
+    '',
+    'Your previous attempt finished, and then the check this Job must pass refused it:',
+    '',
+    `  \`${r.command}\` — ${what}`,
+    '',
+    ...(r.tail
+      ? [
+        'The last of what it printed:',
+        '',
+        '`````',
+        r.tail.replace(/`````/g, '````\u200b`'),
+        '`````',
+        '',
+      ]
+      : []),
+    'You are continuing in the same checkout and the same session, so the work is still there. Fix',
+    'the cause and leave the tree so that command exits 0 — it is run again, in this checkout, after',
+    'you finish. Do not weaken it to pass it: the command comes from the board and editing it in the',
+    'checkout changes nothing, because that is not where it is read from.',
+  ].join('\n');
+}
+
+/**
  * The three rules every worker gets, whatever shape its Job is.
  *
  * These are what ADR-014 takes from the `claude_code` preset after declining the preset itself. The

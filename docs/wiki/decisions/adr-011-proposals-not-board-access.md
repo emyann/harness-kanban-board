@@ -15,13 +15,13 @@ covers:
   - path: src/results.ts
     sha: 0fc3dc145a1c515267534909aee79f034effa61b
   - path: src/controller.ts
-    sha: 41c7fbd41f65c61a80c6fcfa9ec56236d0811a7f
+    sha: 6ae87908660b007837d6f366cf4ddd64f3546d3b
   - path: src/runtime/claude.ts
     sha: 5ae775633cae411b71443add232b79f1325c4075
   - path: src/brief.ts
-    sha: 2d3db74f559f4310ccd91b7117395c24ebb398bd
+    sha: 21211336a1311d7caa925c08c93c48eca3a5a5fa
   - path: prisma/schema.prisma
-    sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
+    sha: 34921e6803578d6831938ada63d477d55a95eb6a
   - path: src/artifacts.ts
     sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
   - path: src/inputs.ts
@@ -35,7 +35,7 @@ related:
     architecture/job-kind,
     architecture/the-loop,
   ]
-generated_at_commit: 9ce6588
+generated_at_commit: cad6595
 last_refreshed: 2026-09-07
 ---
 
@@ -62,7 +62,7 @@ like it reversed a deliberate isolation decision.
 no board handle because nobody gave it one.
 
 **But the status quo is not the isolation it looks like.** `hkb new` is an ordinary command
-(`src/hkb.ts:400-402`), and a Job whose tool surface includes `Bash` can run it. Board mutation by a
+(`src/hkb.ts:415-417`), and a Job whose tool surface includes `Bash` can run it. Board mutation by a
 worker is therefore already possible today — with no lineage, no scope, and no refusal. The choice in
 front of us was never *board access or no board access*. It is **a modelled transport, or the
 unmodelled one that is already open.**
@@ -122,7 +122,7 @@ output, and the controller validates and applies it.**
    a proposal becomes rows only once ADR-010's approval has been recorded. That is not a demand for a
    human — the approver is a seat with three fillers, and the auto-approve policy is one of them — it
    is the requirement that *something with authority said yes*, and that the yes is on the Event
-   stream where the controller already reads it (`src/controller.ts:817-819`).
+   stream where the controller already reads it (`src/controller.ts:846-848`).
 
 6. **This does not make the Job kind into the DAG kind.** The distinction is ordering, not creation.
    A controller that creates Jobs and then forgets them is `CronJob`-shaped: the created Jobs are

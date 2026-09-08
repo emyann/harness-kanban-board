@@ -18,6 +18,7 @@ import { parseLabels, jobLabels, selects, describeLabels } from './labels.ts';
 import { PROPOSAL_ARTIFACT, describeProposal, storedProposal } from './proposals.ts';
 import { eventLine, watchEvents, watchWhere, WATCH_FALLBACK_MS } from './watch.ts';
 import { checkPluginPath, pluginList } from './plugins.ts';
+import { describeCheck, storedCheck } from './check.ts';
 import { checkInputSpec, declaredInputs, renderBrief, describeSource } from './inputs.ts';
 import { readTemplate, placeholders, WORKFLOW_DIR } from './templates.ts';
 import { fakeRuntime } from './runtime/fake.ts';
@@ -111,6 +112,13 @@ const HELP = `hkb — run one agent against one brief
                         standing instruction, so a worker follows the rules the repository
                         already writes down instead of the brief restating them. Follows one
                         level of \`@import\`. Defaults to the board's --guide.
+       --check "<cmd>"  the command that says whether the work BEHAVES: run in the attempt's
+                        checkout after the run and after the rebase onto the base, and a
+                        non-zero exit fails the attempt. hkb's worker is an agent session, so
+                        it has no exit code of its own — --export and --result reconstruct one
+                        for files, this one for behaviour. It runs through the shell, so
+                        \`npm run lint && npm test\` is one check. Defaults to the board's
+                        --check; nothing runs unless one of the two is set.
        --triage         file it WITHOUT queueing it: a Job in triage is never claimed, so this
                         is where something you noticed goes until you have decided it is work.
                         The brief is optional here — the name is the brief until \`hkb queue\`
@@ -180,6 +188,9 @@ const HELP = `hkb — run one agent against one brief
                         — \`CLAUDE.md\` is the usual one
        --base <ref>|none  the ref every Job on this board branches from, for a repository whose
                         trunk is not what \`origin/HEAD\` points at
+       --check "<cmd>"|none  the command every Job on this board must pass — usually the one
+                        the contributor guide names, as in \`npm run lint && npm test\`. A Job's
+                        own --check wins; with neither set, nothing runs.
 
   hkb migrate               apply this build's pending migrations to the board, deliberately
   hkb version               what this build is
@@ -396,6 +407,10 @@ export function describeDefaults(d: ReturnType<typeof boardDefaults>): string {
     // building on something other than the repository's default branch is a surprise waiting in a
     // diff nobody can explain.
     d.base !== null ? `base=${d.base}` : null,
+    // And the command every Job on this board has to pass. The loudest of them all, since it is a
+    // shell line that runs with the daemon's privileges and decides whether an attempt failed —
+    // a board-wide check nobody can see is exactly the surprise this line exists to prevent.
+    d.check !== null ? `check=${d.check}` : null,
   ].filter((p): p is string => p !== null);
   return parts.length ? parts.join(' ') : '(none)';
 }
@@ -463,6 +478,10 @@ const OPTIONS = {
       'plugin-dir': { type: 'string', multiple: true },
       'default-plugin-dirs': { type: 'string' },
       guide: { type: 'string' },
+      // The completion check: one shell line, never repeatable. Two commands are `a && b`, which
+      // the shell already spells better than a flag could, and a list would need a rule for what
+      // happens after the first non-zero exit — which is the one thing this feature is about.
+      check: { type: 'string' },
       // `hkb new` takes the name as a positional; `hkb job set` needs a flag for it. Declared here
       // and NOT optional to declare: `parseArgs` runs with `strict: false`, where an undeclared
       // long option is a boolean — so `--name "a better name"` yielded `true`, and the Job was
@@ -797,6 +816,15 @@ export async function main(argv: string[]): Promise<number> {
       // when the flag is absent, so the board's grant answers.
       const guide = values.guide !== undefined ? (String(values.guide).trim() || null) : undefined;
       if (guide) checkExportPath(guide);
+      // The completion check, stored verbatim. NOT validated beyond being non-empty, and that is
+      // the whole design: the controller reads 0 / not-0 and knows nothing about what the command
+      // does (ADR-016 §3), so anything hkb refused here would be hkb having an opinion about a
+      // shell line it does not run and cannot parse. Undefined when the flag is absent, so the
+      // board's default answers.
+      const check = values.check !== undefined ? String(values.check).trim() : undefined;
+      if (values.check !== undefined && !check) {
+        throw usage('--check needs the command that says whether the work behaves, as in --check "npm test" — leave it out to inherit the board\'s');
+      }
       let gate = typeof values.gate === 'string' ? values.gate.trim() : undefined;
       if (values.gate !== undefined && !gate) throw usage('--gate needs the question a human is being asked, as in --gate "does this migration look right?"');
       const rawBase = typeof values.base === 'string' ? values.base.trim() : undefined;
@@ -846,6 +874,7 @@ export async function main(argv: string[]): Promise<number> {
           ...(Object.keys(labels).length ? { labels } : {}),
           ...(gate ? { gate } : {}),
           ...(guide !== undefined ? { guide } : {}),
+          ...(check !== undefined ? { check } : {}),
           // The ref this Job branches from, or nothing. NOT resolved here: `hkb new` may be filing
           // the second step of a chain before the first has pushed the branch it names, and a
           // check at file time would refuse the one workflow the field exists for. It is checked
@@ -869,7 +898,7 @@ export async function main(argv: string[]): Promise<number> {
       await db.event.create({
         data: { kind: 'created', jobId: job.id, boardId: board.id, actor: whoami(), payload: { name, ...(triage ? { phase: 'triage' } : {}) } },
       });
-      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports, results, artifacts, inputs, labels, proposes, from: tpl?.name ?? null }, () =>
+      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports, results, artifacts, inputs, labels, proposes, check: check ?? null, from: tpl?.name ?? null }, () =>
         console.log(`#${job.id} ${job.name}  [${job.phase}]  on ${slug}`
           + (triage ? `  — noted, not queued. \`hkb queue ${job.id}\` when it is work` : '')
           // Named because the Job no longer remembers: a workflow is expanded at file time and gone,
@@ -882,7 +911,10 @@ export async function main(argv: string[]): Promise<number> {
           // Echoed back because a grouping nobody can see is a surprise — the same argument
           // `describeDefaults` makes for a board's defaults.
           + (Object.keys(labels).length ? `\n  labels        ${describeLabels(labels)}` : '')
-          + (proposes ? `\n  proposes      Jobs — it writes \`${PROPOSAL_ARTIFACT}\` and waits for you to approve` : '')));
+          + (proposes ? `\n  proposes      Jobs — it writes \`${PROPOSAL_ARTIFACT}\` and waits for you to approve` : '')
+          // Echoed for the same reason the declared outputs are: it is half the completion
+          // condition, and a Job whose attempt can fail on a command nobody printed is a surprise.
+          + (check ? `\n  must pass     ${check}` : '')));
       return 0;
     }
 
@@ -1005,6 +1037,10 @@ export async function main(argv: string[]): Promise<number> {
         // The other document a worker reads with the operator's authority, beside the skills. Named
         // even when absent, because "no guide" is the answer to "why did it not follow CLAUDE.md".
         console.log(`  guide    ${spec.guide.value ?? '(none granted)'}  [${spec.guide.from}]`);
+        // The other half of the completion condition, printed even when there is none: "no check"
+        // is the answer to "why did this succeed when the tests are red", and at the shipped
+        // defaults it is the answer every Job gives (ADR-016 §3).
+        console.log(`  check    ${spec.check.value ?? '(none — nothing verifies the work)'}  [${spec.check.from}]`);
         // One line per resolved field, with its source named. Three levels answer these five
         // questions, and printing only the winner turns "why did this run on Opus" into
         // archaeology across two tables — a spec you cannot trace is worse than one you repeat.
@@ -1123,7 +1159,17 @@ export async function main(argv: string[]): Promise<number> {
             console.log(`           kept ${kept.map((f) => `${f.name}${f.kind === 'dir' ? '/' : ''} ${bytes(f.bytes)}`).join(', ')}`);
             console.log(`           in ${artifactsDir(job.id, a.k)}`);
           }
-          if (a.reason) console.log(`           ${a.reason.slice(0, 100)}`);
+          // What the check said, when one refused this attempt. The tail is printed rather than
+          // summarised: it is the evidence, an operator's next move is to read it, and the
+          // alternative is asking them to go and run the command again to see what it already said.
+          const checked = storedCheck(a.check);
+          if (checked) {
+            console.log(`           ${describeCheck(checked)}`);
+            for (const line of checked.tail.split('\n')) console.log(`             ${line}`);
+          }
+          // Not when a check already spoke: `Attempt.reason` holds that same sentence for the
+          // benefit of `hkb ls` and `--json`, and printing it under the tail would say it twice.
+          if (a.reason && !checked) console.log(`           ${a.reason.slice(0, 100)}`);
         }
       });
       return 0;
@@ -1488,6 +1534,10 @@ export async function main(argv: string[]): Promise<number> {
           if (!raw) throw usage(`--base was given nothing — pass a ref like origin/develop, or "${CLEAR}" to go back to the repository's default branch`);
           data.defaultBase = raw === CLEAR ? null : checkRef(raw, '--base');
         }
+        // Stored verbatim, checked only for being non-empty: the controller reads an exit code and
+        // knows nothing about the command (ADR-016 §3), so validating it here would be hkb having
+        // an opinion about a shell line it cannot parse. `none` clears it, like every other default.
+        setString('check', 'defaultCheck');
         // One path, not a list: a repository has one contributor guide, and a second one would be
         // two documents disagreeing about the same rules with no way to say which wins.
         if (values.guide !== undefined) {
@@ -1521,7 +1571,8 @@ export async function main(argv: string[]): Promise<number> {
           throw usage(
             'hkb boards set needs something to set — a ceiling (--max-concurrent <n>, --daily-budget <usd>|none)'
             + ' or a spec default (--model, --effort, --max-turns, --max-budget,'
-            + ' --max-retries, --allow-tools, --default-plugin-dirs, --guide, --base; "none" clears one)',
+            + ' --max-retries, --allow-tools, --default-plugin-dirs, --guide, --base, --check;'
+            + ' "none" clears one)',
           );
         }
 
@@ -1756,6 +1807,9 @@ export async function main(argv: string[]): Promise<number> {
       });
       str('gate', 'gate');
       str('guide', 'guide', checkExportPath);
+      // Unvalidated beyond non-empty, exactly as `hkb new` takes it: what the command does is not
+      // hkb's business, only what it exits with (ADR-016 §3).
+      str('check', 'check');
       str('base', 'base', (v) => checkRef(v, '--base'));
       number('max-turns', 'maxTurns', (n) => Number.isInteger(n) && n >= 1, 'a whole number of turns, 1 or more');
       number('max-budget', 'maxBudgetUsd', (n) => n > 0, 'dollars above zero');

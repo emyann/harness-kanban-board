@@ -367,3 +367,6 @@ history.
 ## 2026-09-07 — added decisions/adr-016-the-pod-spec-is-the-map (the Kubernetes mapping extended from scheduling to the workload's ENVIRONMENT: init and sidecar are one list, check is the missing exit code, the failure semantics are k8s', and two rows are named off-map) + GLOSSARY (Off the map)
 ## 2026-09-07 — refreshed architecture/transitions (hkb job set and src/job-spec.ts: editing what a Job runs AS, the sibling of moving it through its life) + GLOSSARY (Spec edit)
 ## 2026-09-07 — added gotchas/argv-traps (parseArgs under strict:false — an undeclared long option is a boolean, and an unquoted value falls through as positionals the greedy verbs join into prose; both shipped and both were silent) + GLOSSARY (Stray word)
+
+## 2026-09-07 — added features/check (`check` — the exit code hkb does not have, ADR-016 §3)
+## 2026-09-07 — refreshed architecture/the-loop, architecture/job-kind, architecture/the-board (what follows a run, `check_failed` in the decision table, the nullable spec columns)
