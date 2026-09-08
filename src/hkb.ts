@@ -78,16 +78,19 @@ function given(raw: unknown, flag: string, clear?: string): string {
       + `${flag} "…"${clear ? `, or ${flag} ${clear} to clear it` : ''}.`,
     );
   }
-  const v = raw.trim();
-  if (v.startsWith('-')) {
+  // Tested on the RAW value, before the trim: `--flag " -x"` is the escape the message below
+  // prescribes, and trimming first refused it with the same message — no spelling reached a value
+  // that really starts with a dash.
+  if (raw.startsWith('-')) {
+    const v = raw.trim();
     throw usage(
       `${flag} was given \`${v}\`, which is a flag rather than a value — \`${flag} ${v}\` would file `
       + `\`${v}\` as ${flag}'s value and drop ${v} itself. The argument parser hands a string option `
-      + `the next token whatever it is. Quote a value that really starts with a dash, as in `
-      + `${flag} " ${v}".`,
+      + `the next token whatever it is. Quote a value that really starts with a dash, with a space in `
+      + `front of it: ${flag} " ${v}".`,
     );
   }
-  return v;
+  return raw.trim();
 }
 
 /**
@@ -391,7 +394,12 @@ async function readBrief(values: Record<string, unknown>): Promise<string> {
     if (!piped) throw usage('--brief - was given but nothing arrived on stdin');
     return piped;
   }
-  if (typeof values.brief === 'string' && values.brief.trim()) return values.brief.trim();
+  if (values.brief !== undefined) {
+    // `--brief --json` filed the word `--json` as a two-character brief and ran a paid session on
+    // it; `given` is the same guard every other string flag has.
+    const brief = given(values.brief, '--brief');
+    if (brief) return brief;
+  }
   throw usage('a Job needs a brief — pass --brief "…", --brief-file <path>, or --brief - to read stdin');
 }
 
@@ -404,7 +412,13 @@ async function readBrief(values: Record<string, unknown>): Promise<string> {
  * print, because it is the one that will run; `source` says which of the three levels answered, so
  * nothing is lost by not printing the column (`resolveSpec`, `src/spec.ts`).
  */
-const jsonCheck = (t: { value: string | null; from: string }) => ({ value: t.value, source: t.from });
+/**
+ * The check as the controller will RUN it. A proposing Job runs none whatever the board says
+ * (`runsCheck` in the controller), so `--json` says null for it rather than a resolved command the
+ * human line already qualifies away — the two verbs and the two forms answer the same.
+ */
+const jsonCheck = (t: { value: string | null; from: string }, proposes?: string | null) =>
+  (proposes ? { value: null, source: 'proposes' } : { value: t.value, source: t.from });
 
 /** Who did an operator-initiated thing. The same shape a lease holder uses, minus the runtime. */
 const whoami = () => `${os.hostname()}/${process.pid}@cli`;
@@ -537,6 +551,12 @@ export function describeDefaults(d: ReturnType<typeof boardDefaults>): string {
 
 const num = (v: unknown, flag: string): number | undefined => {
   if (v === undefined) return undefined;
+  // A bare `--max-turns` is the boolean `true`, and `Number(true)` is 1 — a ceiling of one turn,
+  // filed silently. The same idiom `given` refuses for strings.
+  if (typeof v !== 'string') throw usage(`${flag} was given nothing — a bare ${flag} is not a number. Pass one after it.`);
+  if (v.trim().startsWith('-') && !/^-\d/.test(v.trim())) {
+    throw usage(`${flag} was given \`${v}\`, which is a flag rather than a number — the parser hands a flag the next token whatever it is.`);
+  }
   const n = Number(v);
   if (!Number.isFinite(n)) throw usage(`${flag} wants a number, got ${JSON.stringify(v)}`);
   return n;
@@ -951,7 +971,7 @@ export async function main(argv: string[]): Promise<number> {
       // hkb having an opinion about a shell line it does not run and cannot parse. Undefined when
       // the flag is absent, so the board's default answers.
       const check = values.check !== undefined ? checkFlag(values.check) : undefined;
-      let gate = typeof values.gate === 'string' ? values.gate.trim() : undefined;
+      let gate = values.gate !== undefined ? given(values.gate, '--gate') : undefined;
       // A PROPOSING Job has nothing to check. It changes nothing in the tree — its whole output is
       // `proposal.json`, read by the controller and applied only after a person approves it — so
       // there is no behaviour for a command to judge and no state for it to judge in. Worse than
@@ -963,8 +983,11 @@ export async function main(argv: string[]): Promise<number> {
       if (values.propose && values.check !== undefined) {
         throw usage(
           'a proposing Job has nothing to check — its output is the proposal, not a change to the '
-          + 'tree, so there is nothing for a command to judge. Drop --check, or drop --propose and '
-          + 'file the work itself.',
+          + 'tree, so there is nothing for a command to judge. Drop the check '
+          + (tpl?.spec.check !== undefined && values.check === undefined
+            ? `(\`check:\` in workflow ${tpl.name})`
+            : '(--check)')
+          + ', or drop --propose and file the work itself.',
         );
       }
       if (values.gate !== undefined && !gate) throw usage('--gate needs the question a human is being asked, as in --gate "does this migration look right?"');
@@ -1047,7 +1070,7 @@ export async function main(argv: string[]): Promise<number> {
       // "an attempt can fail on a command nobody printed" surprise this echo exists to prevent. The
       // board row is already in hand, so this costs nothing and reads like `hkb show`.
       const filedCheck = resolveSpec(job, board).check;
-      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports, results, artifacts, inputs, labels, proposes, check: jsonCheck(filedCheck), from: tpl?.name ?? null }, () =>
+      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports, results, artifacts, inputs, labels, proposes, check: jsonCheck(filedCheck, proposes), from: tpl?.name ?? null }, () =>
         console.log(`#${job.id} ${job.name}  [${job.phase}]  on ${slug}`
           + (triage ? `  — noted, not queued. \`hkb queue ${job.id}\` when it is work` : '')
           // Named because the Job no longer remembers: a workflow is expanded at file time and gone,
@@ -1169,7 +1192,7 @@ export async function main(argv: string[]): Promise<number> {
       // object `hkb new --json` prints, so the two verbs cannot disagree about the command that
       // will judge this Job. See `jsonCheck`. Every other raw column is left as it is: they are
       // traced under `spec` alongside, and this is the one that was answering two ways.
-      emit(out, { ...job, check: jsonCheck(spec.check), spec }, () => {
+      emit(out, { ...job, check: jsonCheck(spec.check, job.proposes), spec }, () => {
         console.log(`#${job.id} ${job.name}`);
         // One board per machine, one Board per repository: a Job you did not expect is usually a
         // Job on a board you were not thinking about. Which board, and which checkout it will run
@@ -2004,8 +2027,10 @@ export async function main(argv: string[]): Promise<number> {
       // no way to remove a value at all.
       const list = (flag: string, field: Settable, check: (v: string) => unknown) => {
         if (values[flag] === undefined) return;
-        const given = (values[flag] as unknown as string[]).map((v) => v.trim()).filter(Boolean);
-        changes[field] = given.length === 1 && given[0] === CLEAR ? null : given.map(check);
+        // `givenList`, not a cast: a bare repeatable flag is `[true]` and `.trim()` on it threw a
+        // raw TypeError, and `--export --json` filed `--json` as the path.
+        const items = givenList(values[flag], `--${flag}`);
+        changes[field] = items.length === 1 && items[0] === CLEAR ? null : items.map(check);
       };
 
       str('name', 'name');

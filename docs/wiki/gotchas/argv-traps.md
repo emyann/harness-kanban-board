@@ -7,14 +7,14 @@ audience: [dev]
 read_when: "adding a flag, adding a verb that joins positionals, or wondering why a value arrived as one word — or as the word `true`, or as another flag"
 covers:
   - path: src/hkb.ts
-    sha: 842354d38af4478ef10bf7cbd8c5f5beede56223
+    sha: 9a0d90d2c6f06166e47f3576328577b1894da63f
 related:
   [
     architecture/transitions,
     features/workflow-templates,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: 6075a95
+generated_at_commit: 26814cb
 last_refreshed: 2026-09-08
 ---
 
@@ -186,12 +186,20 @@ consumed, so nothing fell through as a positional). What catches it is the value
 
 Nothing legitimate is lost. A shell line, a git ref, a repo-relative path, a model name and a
 comma-separated list all begin with something else, and a value that really does start with a dash
-is reachable as `--check " -x"` or after `--`. Where a checker existed already — `checkRef` refuses
+is reachable as `--check " -x"` — a leading space, which `given` tests for *before* it trims (a
+first version trimmed first and refused its own escape with the same message; `--check=-x` and
+`--` do not work, because the parser hands the flag `-x` either way). Where a checker existed already — `checkRef` refuses
 a ref beginning with a dash, because a ref reaches git as a bare argv token and `--upload-pack=…`
 runs a command — this guard now speaks first, with a different sentence and the same refusal.
 
 **The rule this leaves:** a string flag's value is not just "a string". `given` is where all four of
-these questions are asked once, and a new flag gets the answers by using it.
+these questions are asked once, and a new flag gets the answers by using it — *every* string flag,
+which took three passes to make true: `--brief` and `--gate` were still `typeof === 'string'` after
+the first (so `--brief --json` filed the word `--json` as a two-character brief and ran a session
+on it), and `hkb job set`'s list helper cast to `string[]` after the second. A numeric flag has the
+same trap in a different coat: a bare `--max-turns` is `true`, `Number(true)` is `1`, and a ceiling
+of one turn was filed silently — `num` refuses a non-string by name and a value that is a flag,
+while a negative number stays a number.
 
 ## Why all four of these are the same bug
 

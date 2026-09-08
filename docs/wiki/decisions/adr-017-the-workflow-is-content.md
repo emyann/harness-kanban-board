@@ -11,12 +11,12 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/brief.ts
-    sha: e34bc16f6bcd9864078e47ff114f0790e32a359e
+    sha: 9090eb71378c7dac7b89cf63c2140f1e97e98c69
   - path: src/templates.ts
-    sha: 729c86b66042a5ad7aa3f38791fedf2b78a77707
+    sha: fb6b019b10b138755c8f1b6e753dc19adb9d5735
   - path: prisma/schema.prisma
     sha: 34921e6803578d6831938ada63d477d55a95eb6a
-generated_at_commit: 6075a95
+generated_at_commit: 26814cb
 last_refreshed: 2026-09-08
 related:
   [

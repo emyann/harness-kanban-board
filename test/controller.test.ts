@@ -2309,7 +2309,7 @@ test('the briefing survives a `stopped` attempt in between — k-1 is not the wh
     async run(spec) {
       ac.abort();
       return {
-        status: 'completed', ok: true, sessionId: `s-${spec.taskId}-${spec.attempt}`, text: '',
+        status: 'completed', ok: true, sessionId: spec.resume ?? `s-${spec.taskId}-${spec.attempt}`, text: '',
         costUsd: 0, turns: 1, durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
       };
     },
@@ -2322,7 +2322,8 @@ test('the briefing survives a `stopped` attempt in between — k-1 is not the wh
   const seen: string[] = [];
   await runChecks('check-walkback', spyOn(seen));
   assert.equal(seen.length, 1, 'attempt 3 ran');
-  assert.match(seen[0], /test -f fixed/, 'and it was told what attempt 1 collided with, two rows back');
+  assert.match(seen[0], /refused it/, 'and it was told what attempt 1 collided with, two rows back — the refusal, not just the contract');
+  assert.match(seen[0], /test -f fixed/);
 });
 
 test('the briefing names the check as it is NOW, not the one that refused the last attempt', async () => {
@@ -2474,6 +2475,93 @@ test('the lease is RELEASED and the attempt closed even when the post-run sectio
   assert.equal(await db.lease.findUnique({ where: { jobId: job.id } }), null, 'and it stays gone');
 });
 
+
+test('the lease is released when the PRE-RUN section throws — the try begins at the renewer', async () => {
+  // The `try` began after the pre-run reads, ~330 lines past the renewer, so a throw in any of
+  // them — SQLITE_BUSY on the approval read, a file where the results directory should be, the
+  // log gone — still produced the immortal lease: a renewer ticking for the daemon's lifetime on
+  // a Job `running` that `hkb cancel` refused because a Lease row was there. The throw here lands
+  // where a real one does: in a `say` between the renewer and the runtime call.
+  const b = await checkBoard('lease-prerun');
+  const job = await db.job.create({
+    // A granted plugin directory that does not exist is dropped with a line — said BEFORE the run.
+    data: { boardId: b.id, name: 'throws-before-the-run', brief: 'x', pluginPaths: ['.nowhere-for-this-test'], maxRetries: 0 },
+  });
+  let ran = 0;
+  const runtime: Runtime = { ...fakeRuntime(), run: async (spec) => { ran++; return fakeRuntime().run(spec); } };
+  await assert.rejects(
+    () => reconcile({
+      runtime, cwd, board: 'lease-prerun', readPr: false, leaseMs: 3_000,
+      onEvent: (l: string) => { if (/granted plugin path/.test(l)) throw new Error('the log went away early'); },
+    }),
+    /the log went away early/,
+  );
+  assert.equal(ran, 0, 'the throw was before the runtime — nothing was bought');
+  assert.equal(await db.lease.findUnique({ where: { jobId: job.id } }), null, 'no Lease row: the renewer is stopped and the claim is gone');
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.attempts[0].outcome, 'crashed', 'the attempt is closed');
+  assert.notEqual(after.phase, 'running');
+  await new Promise((r) => setTimeout(r, 1_200));
+  assert.equal(await db.lease.findUnique({ where: { jobId: job.id } }), null, 'and it stays gone');
+});
+
+test('a failure AFTER the outcome is recorded rewrites nothing', async () => {
+  // The `catch` could not tell whether the rows were already right, so a throw on the way out —
+  // the event write losing a race, a closed log pipe on the final line — rewrote a `completed`
+  // attempt as `crashed` and flipped a `succeeded` Job back to `pending` with its session kept:
+  // the next pass re-claimed it and bought a second session for work already delivered.
+  const b = await checkBoard('recorded-then-throws');
+  const job = await db.job.create({ data: { boardId: b.id, name: 'done-then-log-dies', brief: 'x', maxRetries: 2 } });
+  await assert.rejects(
+    () => reconcile({
+      runtime: fakeRuntime(), cwd, board: 'recorded-then-throws', readPr: false,
+      // The final line of the pass, after the three writes.
+      onEvent: (l: string) => { if (/succeeded\s+completed/.test(l)) throw new Error('pipe closed at the end'); },
+    }),
+    /pipe closed at the end/,
+    'still raised — the operator is told',
+  );
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'succeeded', 'the Job stays what it earned');
+  assert.equal(after.attempts.length, 1);
+  assert.equal(after.attempts[0].outcome, 'completed', 'the attempt is not rewritten as crashed');
+  assert.equal(await db.event.count({ where: { jobId: job.id, kind: 'crashed' } }), 0, 'and no crashed event is invented');
+  assert.equal(await db.lease.findUnique({ where: { jobId: job.id } }), null, 'the lease is released all the same');
+  // And nothing to re-claim: a second pass finds no work.
+  const again = await reconcile({ runtime: fakeRuntime(), cwd, board: 'recorded-then-throws', readPr: false });
+  assert.deepEqual(again.claimed, [], 'the delivered work is not bought twice');
+});
+
+test('a holder whose lease was taken mid-run does not write the Job row from its catch either', async () => {
+  // The body refuses to touch the contended Job row once `heldToTheEnd` is false; the `catch`
+  // did not, so a stale holder that crashed while REPORTING that it had lost the lease wrote
+  // `pending` and its own stale session id over a Job another holder was running — or had already
+  // finished.
+  const b = await checkBoard('stale-catch');
+  const job = await db.job.create({ data: { boardId: b.id, name: 'taken-mid-run', brief: 'x', maxRetries: 2 } });
+  const runtime: Runtime = {
+    ...fakeRuntime(),
+    run: async (spec) => {
+      // Somebody else takes the lease while this run is in flight.
+      await db.lease.update({ where: { jobId: job.id }, data: { holder: 'other-host', token: 'theirs' } });
+      return { ...(await fakeRuntime().run(spec)), sessionId: 'stale-session' };
+    },
+  };
+  await assert.rejects(
+    () => reconcile({
+      runtime, cwd, board: 'stale-catch', readPr: false,
+      onEvent: (l: string) => { if (/lease was taken mid-run/.test(l)) throw new Error('log died while reporting the loss'); },
+    }),
+    /log died while reporting the loss/,
+  );
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+  assert.equal(after.phase, 'running', 'the Job row is the other holder\'s and was left alone');
+  assert.notEqual(after.lastSessionId, 'stale-session', 'and the stale session was not written over it');
+  assert.equal(await db.event.count({ where: { jobId: job.id, kind: 'crashed' } }), 0, 'no crashed event from a non-holder');
+  const lease = await db.lease.findUnique({ where: { jobId: job.id } });
+  assert.equal(lease?.holder, 'other-host', 'and the other holder\'s lease is untouched — the release is fenced on the token');
+});
+
 // ---------------------------------------------------------------- a stop that lands mid-check
 
 test('a stop during the check does not relabel a run that had already finished', async () => {
@@ -2513,9 +2601,17 @@ test('a stop during the check does not relabel a run that had already finished',
   assert.equal(one.outcome, 'completed', 'the run finished, and a stop is not a claim about that');
   assert.deepEqual(one.results, { answer: '42' }, 'and what it produced is kept on the attempt');
   assert.equal(one.check, null, 'no verdict was given, so none is recorded');
-  assert.deepEqual(one.exported, ['docs/out.md'], 'the exports were there, and saying `[]` about them was a lie');
+  // The exports are withheld, exactly as they are for a check that REFUSED: nothing verified this
+  // tree, and a copy made now is one the next attempt's check may refuse with no way to take it
+  // back. `[]` is the truth about what reached the repository.
+  assert.deepEqual(one.exported, [], 'nothing was copied — the check never answered');
+  assert.ok(!fs.existsSync(path.join(cwd, 'docs', 'out.md')), 'and nothing unverified is in the repository');
+  assert.equal(one.reason, 'check interrupted by a stop — the run stands, the check runs again');
   assert.equal(after.phase, 'pending', 'the check has not been answered, so it goes round again');
+  assert.equal(after.lastError, null, 'and nothing is asked of a human — the word `completed` is not an error');
   assert.ok(after.lastSessionId, 'in the same session — nothing about the work changed');
+  const stopEvent = await db.event.findFirst({ where: { jobId: job.id, kind: 'completed' }, orderBy: { id: 'desc' } });
+  assert.deepEqual(stopEvent?.payload, { k: 1, phase: 'pending', checkInterrupted: true }, 'the log says why a completed run is pending');
 
   // And the next attempt is briefed NOTHING about a check refusal, because there was none.
   const prompts: string[] = [];
@@ -2525,6 +2621,8 @@ test('a stop during the check does not relabel a run that had already finished',
   });
   assert.equal(prompts.length, 1, 'it did go round again');
   assert.doesNotMatch(prompts[0], /refused it/, 'no refusal happened, so none is quoted');
+  assert.match(prompts[0], /a stop landed while this command was being run/, 'but it is told the check never answered');
+  assert.match(prompts[0], /results are per attempt/, 'and that this attempt owes its own results');
   const ended = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
   assert.notEqual(ended.attempts[1].outcome, 'no_output', 'and it does not fail for results attempt 1 already gave');
   assert.equal(ended.phase, 'succeeded', 'the check ran to a verdict this time, and it passed');

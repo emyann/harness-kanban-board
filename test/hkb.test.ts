@@ -2229,3 +2229,79 @@ test('a workflow file may name the check, because a workflow is what knows when 
       && !/--check/.test(e.message),
   );
 });
+
+// ---------------------------------------------------------------- the traps the third review found open
+
+test('--brief and --gate refuse a bare flag and the next flag, like every other string flag', async () => {
+  // `readBrief` and `--gate` on `hkb new` were the two string flags still read with `typeof ===
+  // 'string'`, so `--brief --json` filed the word `--json` as a two-character brief — and ran a
+  // paid session on it — with `--json` silently not in effect.
+  const b = 'brief-json-board';
+  const isTrap = (e: Error & { exitCode?: number }) => e.exitCode === 2 && /which is a flag rather than a value/.test(e.message);
+  await assert.rejects(() => main(['new', 'b1', '--board', b, '--brief', '--json']), isTrap);
+  await assert.rejects(() => main(['new', 'b2', '--board', b, '--brief', 'x', '--gate', '--json']), isTrap);
+  await assert.rejects(
+    () => main(['new', 'b3', '--board', b, '--brief']),
+    (e: Error & { exitCode?: number }) => e.exitCode === 2 && /a bare --brief is not a value/.test(e.message),
+  );
+  const j = json((await hkb('new', 'b4', '--brief', 'real', '--board', b, '--json')).out) as { id: number };
+  await assert.rejects(() => main(['job', 'set', String(j.id), '--board', b, '--brief', '--json']), isTrap);
+  assert.equal((json((await hkb('show', String(j.id), '--board', b, '--json')).out) as { brief: string }).brief, 'real',
+    'and the brief was not overwritten');
+});
+
+test('a bare numeric flag is refused rather than filed as 1', async () => {
+  // `Number(true)` is 1: a bare `--max-turns` filed a ceiling of ONE turn, silently, on `hkb new`,
+  // `hkb job set` and `hkb boards set --max-concurrent`; the Job then ended `max_turns` after one
+  // tool call with no error ever shown.
+  const b = 'bare-number-board';
+  const bare = (flag: string) => (e: Error & { exitCode?: number }) => e.exitCode === 2 && new RegExp(`a bare ${flag} is not a number`).test(e.message);
+  await assert.rejects(() => main(['new', 'n1', '--board', b, '--brief', 'x', '--max-turns']), bare('--max-turns'));
+  const j = json((await hkb('new', 'n2', '--brief', 'x', '--board', b, '--json')).out) as { id: number };
+  await assert.rejects(() => main(['job', 'set', String(j.id), '--board', b, '--max-budget']), bare('--max-budget'));
+  await assert.rejects(() => main(['job', 'set', String(j.id), '--board', b, '--max-turns', '--json']),
+    (e: Error & { exitCode?: number }) => e.exitCode === 2 && /which is a flag rather than a number/.test(e.message));
+  // A negative number is still a number.
+  await assert.rejects(() => main(['job', 'set', String(j.id), '--board', b, '--max-budget', '-5']),
+    (e: Error & { exitCode?: number }) => e.exitCode === 2 && /dollars above zero/.test(e.message));
+});
+
+test('a value that really starts with a dash is reachable the way the refusal says', async () => {
+  // `given` trimmed before the leading-dash test, so the escape its own message prescribed —
+  // `--check " -x"` — was refused with the identical message, and no spelling reached the value.
+  const b = 'dash-value-board';
+  const j = json((await hkb('new', 'dashed', '--brief', 'x', '--board', b, '--check', ' -f dist/ok', '--json')).out) as { id: number; check: { value: string } };
+  assert.equal(j.check.value, '-f dist/ok', 'the leading space is the escape, and it is trimmed away');
+});
+
+test('hkb job set refuses the list flags a bare flag or the next flag, through givenList', async () => {
+  // The verb's `list()` helper cast to `string[]` and called `.trim()`: a bare `--export` threw a
+  // raw TypeError with no exit code and no fix, and `--export --json` filed `--json` as the path.
+  const b = 'set-list-board';
+  const j = json((await hkb('new', 'lists', '--brief', 'x', '--board', b, '--json')).out) as { id: number };
+  await assert.rejects(
+    () => main(['job', 'set', String(j.id), '--board', b, '--export']),
+    (e: Error & { exitCode?: number }) => e.exitCode === 2 && /a bare --export is not a value/.test(e.message),
+  );
+  await assert.rejects(
+    () => main(['job', 'set', String(j.id), '--board', b, '--export', '--json']),
+    (e: Error & { exitCode?: number }) => e.exitCode === 2 && /which is a flag rather than a value/.test(e.message),
+  );
+  assert.equal((json((await hkb('show', String(j.id), '--board', b, '--json')).out) as { exports: unknown }).exports, null,
+    'nothing was filed');
+});
+
+test('a proposing Job cannot be given a check by hkb job set, and --json says the controller runs none', async () => {
+  // Only `hkb new` refused the pair; `job set --check` on a proposer was accepted and `--json`
+  // then printed a resolved command the controller never runs — the contract `jsonCheck` was
+  // added to keep. A proposing Job's check is null on every verb, in every form.
+  const b = 'propose-check-board';
+  const j = json((await hkb('new', 'proposer', '--brief', 'break it down', '--board', b, '--propose', '--json')).out) as { id: number; check: { value: string | null; source: string } };
+  assert.deepEqual(j.check, { value: null, source: 'proposes' });
+  await assert.rejects(
+    () => main(['job', 'set', String(j.id), '--board', b, '--check', 'npm test']),
+    (e: Error & { exitCode?: number }) => e.exitCode === 2 && /a proposing Job runs no check/.test(e.message),
+  );
+  assert.deepEqual((json((await hkb('show', String(j.id), '--board', b, '--json')).out) as { check: unknown }).check,
+    { value: null, source: 'proposes' }, 'show agrees with new');
+});

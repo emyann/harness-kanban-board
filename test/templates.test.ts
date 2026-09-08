@@ -301,3 +301,16 @@ test('the shipped workflow declares every placeholder its brief refers to', () =
   const t = readTemplate(path.resolve(import.meta.dirname, '..'), 'draft-wiki-page');
   assert.deepEqual(placeholders(t.brief).sort(), ['cover', 'page', 'sources', 'wrong']);
 });
+
+test('the exemption is for ONE key: a single bracketed item on any other scalar is still a list', () => {
+  // The comma caught `[ a, b ]` and not `[ a ]`: `model: [ opus ]`, `guide: [ CLAUDE.md ]` and
+  // `gate: [ looks right? ]` were filed as those literal strings where `main` refused each with a
+  // fix. `check` is the one key whose value is a shell line; nothing else starts with `[ `.
+  for (const key of ['model', 'guide', 'base', 'gate']) {
+    const t = repo({ [wf('d.md')]: `---\nname: d\n${key}: [ opus ]\n---\nbody\n` });
+    assert.match(why(() => readTemplate(t, 'd')), new RegExp(`\`${key}\` takes one value, not a list`),
+      `${key}: [ opus ] is a list mistake, not a shell test`);
+  }
+  const shell = repo({ [wf('d.md')]: '---\nname: d\ncheck: [ -f dist/index.js ]\n---\nbody\n' });
+  assert.equal(readTemplate(shell, 'd').spec.check, '[ -f dist/index.js ]', 'and the shell test still parses on the key it is for');
+});

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -417,4 +418,51 @@ test('an abort AFTER a timeout still settles — the operator\'s last resort is 
   assert.equal(r.ok, false);
   assert.ok(took < 8_000, `it came back (${took}ms) rather than waiting out the drain`);
   assert.equal(r.record?.exitCode, null, 'nothing gave a verdict');
+});
+
+// ---------------------------------------------------------------- the verdict is frozen at exit
+
+test('a stop that lands INSIDE the drain window cannot rewrite a real exit status', async () => {
+  // `exit` armed the drain but left the wall clock running and recomputed the error at `finish`:
+  // a timeout firing two seconds after a passing `exit 0` — the shell gone, a same-group child
+  // still holding the pipe — killed a group that had already answered and recorded a timeout.
+  // At the shipped numbers that is `node server.js & mocha` finishing in the last two seconds.
+  const where = fs.mkdtempSync(path.join(dir, 'drain-race-'));
+  const r = await runCheck(where, 'echo PASSED; sleep 3 & exit 0', { timeoutMs: 400, drainMs: 1_500, killGraceMs: 200 });
+  assert.equal(r.ok, true, 'the shell said 0 and that is the verdict, whatever the clock did during the drain');
+
+  // And a real failure is not improved by the same race either.
+  const bad = await runCheck(where, 'echo NOPE >&2; sleep 3 & exit 7', { timeoutMs: 400, drainMs: 1_500, killGraceMs: 200 });
+  assert.equal(bad.record?.kind, 'exit');
+  assert.equal(bad.record?.exitCode, 7, 'exit 7 stays exit 7');
+});
+
+test('the SIGKILL is sent even by a process with nothing else to do — a single-pass `hkb run`', async () => {
+  // The grace timer was `unref`'d "so it is never the reason the daemon stays up" — and a process
+  // that had nothing else to do exited on `finish`, before the grace elapsed, so a `SIGTERM`-ignoring
+  // runner lived on in the worktree. The daemon never noticed because it always has a next tick.
+  // So: a child node process that calls `runCheck` and then has nothing left to wait for.
+  const where = fs.mkdtempSync(path.join(dir, 'hardkill-alone-'));
+  const pidFile = path.join(where, 'pid');
+  fs.writeFileSync(path.join(where, 'stubborn.sh'), '#!/bin/sh\ntrap "" TERM\necho $$ > "$1"\nsleep 30\n');
+  const probe = path.join(where, 'probe.mjs');
+  const checkTs = path.resolve(import.meta.dirname, '..', 'src', 'check.ts');
+  fs.writeFileSync(probe, [
+    `import { runCheck } from ${JSON.stringify(checkTs)};`,
+    `const r = await runCheck(${JSON.stringify(where)}, ${JSON.stringify(`sh stubborn.sh ${pidFile} </dev/null >/dev/null 2>&1 & wait`)}, { timeoutMs: 300, killGraceMs: 600, drainMs: 100 });`,
+    'process.stdout.write(String(r.ok));',
+    // Nothing after this: whether the process stays up for the kill is the whole question.
+  ].join('\n'));
+  const started = Date.now();
+  const out = spawnSync(process.execPath, [probe], { cwd: where, encoding: 'utf8', timeout: 15_000 });
+  const took = Date.now() - started;
+  assert.equal(out.status, 0, out.stderr);
+  assert.equal(out.stdout, 'false', 'the check ran out of time');
+  assert.ok(took >= 900, `the probe stayed up for the grace (${took}ms) instead of exiting on finish`);
+
+  const pid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+  assert.ok(Number.isInteger(pid) && pid > 0);
+  let alive = true;
+  try { process.kill(pid, 0); } catch { alive = false; }
+  assert.equal(alive, false, 'the TERM-ignoring child is dead: the SIGKILL was sent by a process that had nothing else to do');
 });

@@ -11,9 +11,9 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/brief.ts
-    sha: e34bc16f6bcd9864078e47ff114f0790e32a359e
+    sha: 9090eb71378c7dac7b89cf63c2140f1e97e98c69
   - path: src/controller.ts
-    sha: f7ad36d78481f66cd84913e0042dc7140c085c6a
+    sha: 90455e098974f28f31a507c7141a13f5309ee3b4
   - path: src/worktree.ts
     sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
   - path: prisma/schema.prisma
@@ -25,7 +25,7 @@ covers:
   - path: src/inputs.ts
     sha: ffd76fce7689fe1c9a1dc0db3756cdf343d2b623
 related: [decisions/adr-007-workload-scheduler, architecture/job-kind, architecture/the-loop]
-generated_at_commit: 6075a95
+generated_at_commit: 26814cb
 last_refreshed: 2026-09-08
 ---
 

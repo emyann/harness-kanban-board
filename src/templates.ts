@@ -309,7 +309,13 @@ export function readTemplate(repoPath: string | null, name: string): Template {
     // silently swallowing every mistake in that shape's neighbourhood. A shell `[ … ]` test is one
     // command with one argument list and no commas in it; a list is exactly the thing with commas.
     // What is left over — `[ a, b ]` genuinely meant as a shell test — is reachable by quoting.
-    const shellTest = kind !== 'list' && rest.startsWith('[ ') && rest.endsWith(' ]') && !rest.includes(',');
+    //
+    // **And by the key.** The comma caught the multi-item shape and not the single one: `model:
+    // [ opus ]`, `guide: [ CLAUDE.md ]`, `gate: [ looks right? ]` were still filed as those literal
+    // strings where `main` refused each with a fix. `check` is the one key whose value is a shell
+    // line; every other scalar takes a name, a ref, a path or a sentence, and none of those starts
+    // with `[ `.
+    const shellTest = key === 'check' && rest.startsWith('[ ') && rest.endsWith(' ]') && !rest.includes(',');
     const isList = rest.startsWith('[') && rest.endsWith(']') && !shellTest;
     const items = isList
       ? rest.slice(1, -1).split(',').map((s) => unquote(s)).filter(Boolean)

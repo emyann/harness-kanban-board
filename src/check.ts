@@ -85,6 +85,10 @@ export const CHECK_COMMAND_MAX_BYTES = 8 * 1024;
  * moment `close` fired, which is the moment the SHELL died — so a suite that ignored `SIGTERM` and
  * had its stdio redirected let the shell close, cancelled the kill, and went on running in the
  * worktree while the record said it "was killed". `close` says nothing about the group.
+ *
+ * And it is **ref'd**: unref'd, a single-pass `hkb run` exited on `finish` before the grace elapsed
+ * and the kill was never sent — the daemon never noticed because it always has a next tick to
+ * stay up for. A process with a kill to deliver stays up the five seconds it takes.
  */
 export const CHECK_KILL_GRACE_MS = 5_000;
 
@@ -402,6 +406,13 @@ export function runCheck(
     let killedFor: 'timeout' | 'abort' | null = null;
     let hard: ReturnType<typeof setTimeout> | null = null;
     let drain: ReturnType<typeof setTimeout> | null = null;
+    /**
+     * The verdict, frozen the moment the shell exits. A `stop` that lands inside the drain window —
+     * the wall clock running out two seconds after a passing `exit 0`, or `hkb down` — must not
+     * rewrite a real exit status into a timeout: `readCheck` reads `error` before `status`, so the
+     * error is captured here and not recomputed at `finish`.
+     */
+    let verdict: { status: number | null; signal: NodeJS.Signals | null; error: (Error & { code?: string }) | undefined } | null = null;
 
     const killGroup = (sig: NodeJS.Signals) => {
       const pid = child.pid;
@@ -417,7 +428,8 @@ export function runCheck(
         : undefined);
 
     const finish = (status: number | null, signal: NodeJS.Signals | null) => {
-      if (!done({ status, signal, error: ours(), ...tails() })) return;
+      const v = verdict ?? { status, signal, error: ours() };
+      if (!done({ status: v.status, signal: v.signal, error: v.error, ...tails() })) return;
       if (drain) clearTimeout(drain);
       clearTimeout(timer);
       opts.signal?.removeEventListener('abort', onAbort);
@@ -450,8 +462,10 @@ export function runCheck(
           // `SIGKILL`, and there is no further bound to wait for.
           finish(null, 'SIGKILL');
         }, graceMs);
-        // A grace timer must never be the reason the daemon stays up.
-        hard.unref?.();
+        // Deliberately NOT unref'd. The `SIGKILL` is owed to the process group whether or not this
+        // process has anything else to do, and unref'd it was never sent by a single-pass `hkb run`
+        // — the CLI exited on `finish` and a `SIGTERM`-ignoring runner lived on in the worktree the
+        // next attempt resumes in. Five seconds is the most it can hold a process up.
       }
     };
 
@@ -471,11 +485,15 @@ export function runCheck(
     });
     // The verdict, the moment it exists. The pipes get `drainMs` and no more.
     //
-    // NOT unref'd, and that is the difference between this timer and the two above them: settling
-    // the promise is the work, so a process with nothing else to do must stay up for it. The other
-    // two only ever kill something that is already doomed.
+    // Neither this timer nor the `SIGKILL` above is unref'd: settling the promise is the work, and
+    // the kill is owed, so a process with nothing else to do stays up for both. Only the wall-clock
+    // timer may be dropped, and it is cleared here rather than unref'd.
     child.on('exit', (status, signal) => {
       if (settled) return;
+      verdict = { status, signal, error: ours() };
+      // The wall clock bounded the run; the run is over. Leaving it armed let a timeout that fired
+      // inside the drain window kill a group that had already answered and call that a timeout.
+      clearTimeout(timer);
       drain = setTimeout(() => finish(status, signal), drainMs);
     });
     // Both pipes ended, which is the normal case and is what makes the drain timer above cost

@@ -155,6 +155,13 @@ export async function setJobSpec(
       + `this one succeed with its proposal parsed and never applied, silently.`,
     );
   }
+  if (job.proposes && 'check' in changes && changes.check) {
+    refuse(
+      `#${id} proposes work, and a proposing Job runs no check — its output is the proposal, not a `
+      + `change to the tree, so the controller never runs one and \`hkb show\` would print a command `
+      + `nothing honours. Drop --check.`,
+    );
+  }
   if (!job.isolate && changes.base) {
     refuse(
       `#${id} runs with --no-isolate, so it cuts no branch and has nothing to base one on. `

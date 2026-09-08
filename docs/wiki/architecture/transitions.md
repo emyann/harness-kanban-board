@@ -9,9 +9,9 @@ covers:
   - path: src/transitions.ts
     sha: d5b3f7dcaab594fa94e844d7d0a30ddd7a97b5c2
   - path: src/job-spec.ts
-    sha: ae8c0550120f393b15fcd48c7061240aac55031a
+    sha: 243eb793ee32572421b51e8c2968f7f43b9c0f89
   - path: src/hkb.ts
-    sha: 842354d38af4478ef10bf7cbd8c5f5beede56223
+    sha: 9a0d90d2c6f06166e47f3576328577b1894da63f
   - path: prisma/schema.prisma
     sha: 34921e6803578d6831938ada63d477d55a95eb6a
 related:
@@ -21,7 +21,7 @@ related:
     decisions/adr-010-the-human-gate,
     architecture/the-board,
   ]
-generated_at_commit: 6075a95
+generated_at_commit: 26814cb
 last_refreshed: 2026-09-08
 ---
 

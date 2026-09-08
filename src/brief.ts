@@ -314,12 +314,21 @@ export function withCheckFailure(
  * row, the board row or a merged workflow file, never the worktree. `withCheckFailure` has always
  * quoted it verbatim to the second attempt; the only thing withheld was telling the first.
  */
-export function withCheck(brief: string, command: string): string {
+export function withCheck(brief: string, command: string, interruptedBefore = false): string {
   return [
     brief.trimEnd(),
     '',
     '---',
     '',
+    ...(interruptedBefore
+      ? [
+        'Your previous attempt finished, and then a stop landed while this command was being run for',
+        'it — so it has not answered yet. Run it yourself now, and write every declared result again',
+        'for THIS attempt: results are per attempt, and the ones you wrote last time were read from',
+        'that attempt and stay there.',
+        '',
+      ]
+      : []),
     'This command must exit 0 in your checkout when you finish:',
     '',
     `  ${codeSpan(command)}`,

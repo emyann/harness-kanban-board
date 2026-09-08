@@ -11,7 +11,7 @@ covers:
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
-    sha: f7ad36d78481f66cd84913e0042dc7140c085c6a
+    sha: 90455e098974f28f31a507c7141a13f5309ee3b4
   - path: src/worktree.ts
     sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
   - path: src/db-url.ts
@@ -19,8 +19,8 @@ covers:
   - path: src/schema.ts
     sha: ee1920b789eb96be121c8bba20cc92e452ddf818
   - path: src/check.ts
-    sha: e225be2cfbd5b4fa089ad80f4cbc9264eba630ef
-generated_at_commit: 6075a95
+    sha: e3a41365b041c5eef99f64fed2c076bc0b6a7e80
+generated_at_commit: 26814cb
 last_refreshed: 2026-09-08
 related: [architecture/job-kind, architecture/runtime-layer, decisions/adr-007-workload-scheduler, decisions/adr-016-the-pod-spec-is-the-map, concepts/worker-identity, features/check]
 ---

@@ -7,20 +7,20 @@ audience: [dev]
 read_when: "a Job failed as `check_failed`, you are adding anything that runs before/beside/after the agent, or you are about to change what makes an attempt succeed"
 covers:
   - path: src/hkb.ts
-    sha: 842354d38af4478ef10bf7cbd8c5f5beede56223
+    sha: 9a0d90d2c6f06166e47f3576328577b1894da63f
   - path: src/check.ts
-    sha: e225be2cfbd5b4fa089ad80f4cbc9264eba630ef
+    sha: e3a41365b041c5eef99f64fed2c076bc0b6a7e80
   - path: src/controller.ts
-    sha: f7ad36d78481f66cd84913e0042dc7140c085c6a
+    sha: 90455e098974f28f31a507c7141a13f5309ee3b4
   - path: src/spec.ts
     sha: d3fba5cc6bb9a1cebeea496bf445f4165c3cecbc
   - path: src/brief.ts
-    sha: e34bc16f6bcd9864078e47ff114f0790e32a359e
+    sha: 9090eb71378c7dac7b89cf63c2140f1e97e98c69
   - path: src/templates.ts
-    sha: 729c86b66042a5ad7aa3f38791fedf2b78a77707
+    sha: fb6b019b10b138755c8f1b6e753dc19adb9d5735
   - path: prisma/schema.prisma
     sha: 34921e6803578d6831938ada63d477d55a95eb6a
-generated_at_commit: 6075a95
+generated_at_commit: 26814cb
 last_refreshed: 2026-09-08
 related:
   [
@@ -80,7 +80,10 @@ opinion about a shell line it does not parse. What *is* refused, by name and poi
   synchronously and every attempt of that Job would fail on the command rather than on the work.
   Something longer is a script, and a script belongs in the repository.
 - **`--check none` on `hkb new`** — and only there. See "the three spellings" below.
-- **`--check` together with `--propose`**, because a proposing Job has nothing to check.
+- **`--check` together with `--propose`**, because a proposing Job has nothing to check — on
+  `hkb new` (the refusal names `check:` in the workflow file when that is where it came from) and
+  on `hkb job set`, and `--json` says `{ value: null, source: "proposes" }` on both verbs, because
+  the controller runs none whatever the board sets.
 
 ## Where it runs, and when
 
@@ -139,10 +142,13 @@ with nothing left to bound it — `deps.signal` is the only way a stop reaches a
 Settling on `close` alone was one bug in each direction, and the shape of the fix is the whole of
 `runCheck` (`src/check.ts`):
 
-- **`exit` is the VERDICT.** The exit code is complete the moment it arrives, so that is when the
-  answer is settled. Waiting past it waits for something that cannot change the answer:
+- **`exit` is the VERDICT, and it is frozen there.** The exit code is complete the moment it
+  arrives, so that is when the answer is settled — and it is captured at that moment, with the
+  wall-clock timer cleared. Waiting past it waits for something that cannot change the answer:
   `--check 'node server.js & mocha'` exits 0 in seconds and holds stdout open behind it, and
-  waiting for `close` there recorded a passing suite as a ten-minute timeout.
+  waiting for `close` there recorded a passing suite as a ten-minute timeout. Freezing it matters
+  in the drain window: a timeout or an abort landing two seconds after a passing `exit 0` used
+  to recompute the error at `finish` and record a timeout over a real exit status.
 - **`close` is the PIPES**, and they are inherited by every descendant, so they get their own much
   shorter bound — `CHECK_DRAIN_MS`, two seconds after the exit, then the tails are final. Without
   it a descendant that left the process group (`setsid sleep 30 & exit 0`) could not be reached by
@@ -153,6 +159,9 @@ Settling on `close` alone was one bug in each direction, and the shape of the fi
   `SIGTERM` and has its stdio redirected let the shell close, cancelled the kill, and went on
   running in the worktree while the record said it was killed. And a second, *different* stop is
   let through: an abort after a timeout that could not settle is the operator's last resort.
+  **The kill timer is ref'd**: unref'd, a single-pass `hkb run` exited on `finish` before the grace
+  elapsed and the `SIGKILL` was never sent — the daemon never noticed because it always has a next
+  tick to stay up for. A process with a kill to deliver stays up the five seconds it takes.
 
 **It never rejects.** `spawn` throws *synchronously* for a `cwd` that is not a directory
 (`ENOTDIR`), a command past the kernel's argument limit (`E2BIG`) and a command containing a NUL
@@ -163,7 +172,13 @@ because an unhandled rejection out of the controller's post-run section is a Job
 
 It leaves the run's outcome exactly as it was and records only that the check was interrupted: no
 verdict, no retry burnt (`charged` does not count a `completed` attempt), phase back to `pending`,
-results kept on the attempt. Writing `stopped` over it was destructive — the results had already
+results kept on the attempt, the attempt's `reason` carrying the marker, the event's payload saying
+`checkInterrupted`, and the pass reporting it as a *stop*. Nothing goes on `lastError` — the word
+`completed` is not an error. Declared **exports are withheld**, exactly as they are for a check
+that refused: nothing verified this tree, and a copy made now is one the next attempt's check may
+refuse with no way to take it back. The next attempt is *told*: its previous run finished, the
+check never answered, run it — and write every declared result again, because results are per
+attempt and the ones read from the last attempt stay there. Writing `stopped` over it was destructive — the results had already
 been collected *and* their collection directory deleted, so the resumed attempt could not
 re-produce them, ended `no_output`, and went terminal. Pressing `Ctrl-C` during a test suite ended
 the Job.

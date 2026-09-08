@@ -9,7 +9,7 @@ covers:
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
-    sha: f7ad36d78481f66cd84913e0042dc7140c085c6a
+    sha: 90455e098974f28f31a507c7141a13f5309ee3b4
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/worktree.ts
@@ -18,7 +18,7 @@ covers:
     sha: 61b65c43e2fd7c28f952c403e02d073ca9907561
   - path: prisma/schema.prisma
     sha: 34921e6803578d6831938ada63d477d55a95eb6a
-generated_at_commit: 6075a95
+generated_at_commit: 26814cb
 last_refreshed: 2026-09-08
 related: [architecture/the-loop, architecture/the-board, architecture/job-kind, concepts/ceilings]
 ---
@@ -224,14 +224,27 @@ advancing minutes after the pass had thrown.
 
 A lease is a claim with a deadline, and a claim whose holder has stopped must
 lapse — which is a property of the **release**, not of the happy path arriving at
-it. So the whole post-run section is wrapped: the renewer is cleared and the
-fenced `deleteMany` runs in a `finally`, unconditionally, on every path including
-the `!heldToTheEnd` early return (where the token no longer matches, so it
-deletes nothing — which is exactly right). The `catch` beside it closes the
-attempt with `crashed` and the error text, and puts the Job back to `pending` or
-`failed`, because an attempt row left open is a Job that reads as `running` for
-ever and `running` with no live holder is the one state nothing can act on
-(`src/controller.ts`). The error is then re-thrown, so the pass still reports it.
+it. So **the `try` begins at the renewer** — everything from the line after
+`setInterval` to the release is under it, the pre-run reads included: a first
+version began the `try` after them, ~330 lines past the renewer, and a throw in
+the approval read or a file where the results directory should be still made the
+immortal lease. The renewer is cleared and the fenced `deleteMany` run in a
+`finally`, unconditionally, on every path including the `!heldToTheEnd` early
+return (where the token no longer matches, so it deletes nothing — which is
+exactly right).
+
+The `catch` beside it follows three rules. It closes the attempt with `crashed`
+and the error text, because an attempt row left open is a Job that reads as
+`running` for ever. It touches the **Job row only as the holder** — the body's
+rule that a lease taken mid-run means another holder is writing that row does not
+lapse because the path here is an exception. And **once the outcome is recorded
+it rewrites nothing**: a `recorded` flag is set the moment the Job row carries
+the outcome, and a failure past it — the event write losing a race, a closed log
+pipe on the final line — is raised without turning a `completed` attempt into
+`crashed` and a `succeeded` Job back into `pending`, which bought a second paid
+session for work already delivered. A resumed attempt that crashed before its
+runtime ran keeps its session (`src/controller.ts`). The error is then re-thrown,
+so the pass still reports it.
 
 ## The daemon's belt and braces: skip one reclaim after a wake
 
