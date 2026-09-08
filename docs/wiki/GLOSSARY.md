@@ -180,6 +180,10 @@ meet one in the git history, that is what it was.
 - **Volunteered output** — a result or artifact a run left without declaring: kept and reported,
   never required, and never able to fail an attempt (`collectResults`/`collectArtifacts`,
   `src/results.ts`, `src/artifacts.ts`) (*features/declared-outputs*).
+- **Stray word** — a positional left over after a flag, which almost always means a value lost its
+  quotes (`strayWords`, `src/hkb.ts`). Refused for the verbs that join positionals into prose — the
+  name, a brief, a reason, a note — because those absorb it silently; allowed for verbs taking a
+  fixed number, where `hkb watch --board other 999` is a real invocation (*gotchas/argv-traps*).
 - **Spec edit** — changing what a filed Job will run *as*, rather than where it is in its life
   (`setJobSpec`, `src/job-spec.ts`; `hkb job set`). A closed list of settable fields, `phase`,
   `proposes` and `isolate` refused by name, a lease refused outright, and every change on the Event

@@ -49,6 +49,7 @@
 
 ## Gotchas
 
+- [What `parseArgs` does quietly, and the two bugs it shipped](./gotchas/argv-traps.md): `strict: false` makes an undeclared long option a BOOLEAN, and a value that lost its quotes falls through as positionals the greedy verbs join into prose. Both shipped, both silent, both corrupted the field a person was trying to fix. What the guards are and which invocations they must not break.
 - [Per-PR CI does not compose](./gotchas/merge-composition.md): Four collisions where every PR was individually correct and CI-green: what parallel workers on one base actually collide on (shared invariants, not shared files), and why briefing fixed it where machinery could not.
 
 ## Howto

@@ -143,6 +143,9 @@ pages:
   - slug: howto/running-the-daemon
     summary: "Keep `hkb up` alive across reboots — a systemd user unit or a launchd agent around `hkb up --foreground`, where the log goes, and the restart-after-upgrade rule."
     status: seeded
+  - slug: gotchas/argv-traps
+    summary: "`strict: false` makes an undeclared long option a BOOLEAN, and a value that lost its quotes falls through as positionals the greedy verbs join into prose. Both shipped, both silent, both corrupted the field a person was trying to fix. What the guards are and which invocations they must not break."
+    status: seeded
   - slug: gotchas/merge-composition
     summary: "Four collisions where every PR was individually correct and CI-green: what parallel workers on one base actually collide on (shared invariants, not shared files), and why briefing fixed it where machinery could not."
     status: seeded
