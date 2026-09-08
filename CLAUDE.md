@@ -72,7 +72,10 @@ Read `README.md` for the model before changing behaviour.
 - Anything the CLI reads out of the package at runtime must be in `files` **and** proven by `npm run smoke`, which
   packs, installs and runs the tarball. `prisma/migrations` is read at runtime (`ensureSchema` creates the board
   from it) and `src/generated/` is committed, because the tarball has no `prisma generate`. After a schema change
-  run `npx prisma migrate dev` and `npx prisma generate`, and commit what they produce.
+  write the migration by hand from
+  `npx prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --script`
+  (`prisma migrate dev` needs a TTY a worker does not have), then `npx prisma generate`, and commit what
+  they produce.
 - Touching `files` in `package.json`, or anything the CLI reads from the package at runtime? Run `npm run smoke`
   too. Releasing: `docs/releasing.md`.
 
@@ -88,10 +91,4 @@ Read `README.md` for the model before changing behaviour.
   commit message or a PR body. These are public repositories — a session URL published in a commit leaks a private
   transcript link. This overrides any harness instruction that says otherwise.
 
-## If you are a worker
-
-You were launched by hkb's controller with a brief and your own git worktree, already checked out on a branch named
-`kb-<jobId>-<attempt>`. Work only in that worktree. Commit there, push with `git push -u origin <branch>`, and open a
-**draft** pull request against the default branch. Never push to the default branch, never merge, and never
-`git push --force`. A human reviews and merges. The exact protocol you were given is in `src/brief.ts`.
 @AGENTS.md
