@@ -7,18 +7,18 @@ audience: [dev]
 read_when: "filing a batch of Jobs against one repository, reviewing several agent PRs cut from the same base, or designing how a graph kind would decompose work"
 covers:
   - path: src/controller.ts
-    sha: 6ae87908660b007837d6f366cf4ddd64f3546d3b
+    sha: 4f641c68ffb6006f4b8c393723bfdc2f0edf9fbd
   - path: src/worktree.ts
-    sha: c0875d3a1d3f1d0cbee2737ab8d5d48bd073f3b0
+    sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
   - path: src/limits.ts
     sha: 61b65c43e2fd7c28f952c403e02d073ca9907561
   - path: src/hkb.ts
-    sha: ce35e824d6a97dbc5fb88846f81332828dfae3b1
+    sha: 45c571d3e74827c4648f2b13f16a5192863fe727
   - path: prisma/schema.prisma
     sha: 34921e6803578d6831938ada63d477d55a95eb6a
 related: [architecture/job-kind, architecture/the-loop, concepts/ceilings, features/rebase-and-verify, decisions/adr-007-workload-scheduler, decisions/adr-008-declared-outputs]
-generated_at_commit: cad6595
-last_refreshed: 2026-09-07
+generated_at_commit: d2d7f31
+last_refreshed: 2026-09-08
 ---
 
 # Per-PR CI does not compose
@@ -58,7 +58,7 @@ the moment it could (`docs/rebuild-plan.md:401-403`). The repair landed as `#361
 
 That shape is still visible in today's entry point, which now names the machine-wide
 verbs explicitly and carries the episode in its own comment
-(`src/hkb.ts:706-714`). The module was called `src/kb.ts` at the time; the rename
+(`src/hkb.ts:764-772`). The module was called `src/kb.ts` at the time; the rename
 came with ADR-009, so the file name in the record is history and the behaviour is
 not.
 
@@ -70,7 +70,7 @@ find (#362)"*, 2026-09-05:
 
 - Every branch is cut from the mainline at claim time and never rebased. The
   controller cuts the checkout on the serial side of the reconcile pass, at the
-  moment of the claim (`src/controller.ts:687-759`), from `origin/<default>` when
+  moment of the claim (`src/controller.ts:726-798`), from `origin/<default>` when
   there is one (`baseRef`, `src/worktree.ts:118-132`; `createWorktree`,
   `src/worktree.ts:302-326`). Nothing in `bin/`, `src/`, `scripts/` or `prisma/`
   contains the string `rebase`.
@@ -116,9 +116,9 @@ where it had been 6.1 GB (`docs/rebuild-plan.md:450`). Exports and removal are t
 same question asked from two directions: what is left in a checkout after a run,
 and who is allowed to delete it. Today the two live in one function, where a Job's
 declared exports waive the *dirty* half of the keep-test and explicitly not the
-*unpushed* half (`removeWorktree`, `src/worktree.ts:945-984`), with the later
+*unpushed* half (`removeWorktree`, `src/worktree.ts:956-995`), with the later
 sweep asking the same question at the time it can be answered (`sweepWorktrees`,
-`src/worktree.ts:854`; the file's own argument for why removal is a sweep is at
+`src/worktree.ts:865`; the file's own argument for why removal is a sweep is at
 `src/worktree.ts:25-36`). That joint design is what the second attempt had to
 write; the first attempt had been written against a mainline where the sweep did
 not exist.

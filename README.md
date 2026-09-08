@@ -372,10 +372,13 @@ hkb boards set my-board --check "npm test"      # or once, for every Job on the 
 ```
 
 It is a shell line, run in the attempt's own checkout **after the run and after the rebase onto the base**
-— so it tests what would actually merge, not what the branch was cut from. A non-zero exit fails the
-attempt, and the failure is *transient*: the retry resumes the same session and is told the command, the
-exit code and the last 4 KB of what it printed, because a retry that does not know why it is retrying
-produces the same tree. A check that hangs is killed after ten minutes and fails the same way.
+— so it tests what would actually merge, not what the branch was cut from. Where the rebase legitimately
+declined (a pull request somebody has taken out of draft, a base that could not be fetched) the record and
+`hkb show` say which base the tree was really on, rather than leaving the claim overstated. A non-zero exit
+fails the attempt, and the failure is *transient*: the retry resumes the same session and is told the
+command, the exit code and the last 4 KB of what it printed, because a retry that does not know why it is
+retrying produces the same tree. A check that hangs is killed after ten minutes — the whole process group,
+not just the shell — and fails the same way; `hkb down` interrupts one rather than waiting it out.
 
 The controller reads 0 / not-0 and **knows nothing else about the command** — the way the kubelet knows
 nothing about a container. There is no test-runner integration and no parsing of output into findings.
@@ -384,7 +387,17 @@ The command comes from the Job, the board, or a workflow file under the board's 
 the worktree**, which is the same fence `--guide` and `--plugin-dir` stand behind and matters most here:
 a worker able to author what judges its own next attempt would be marking its own work. Nothing runs
 until somebody sets one; there is no built-in check, because a command hkb guessed for your repository
-would be a shell line nobody wrote.
+would be a shell line nobody wrote. The worker is told the command up front, which is not a hole in that
+fence — the fence is about who *authors* it.
+
+On a board that sets `--check` for everything, one Job opts out with the empty string:
+
+```bash
+hkb new "read the parser and report what it does" --check ""   # an investigation has no suite to pass
+```
+
+`--check none` is refused by name, because it would file the literal command `none`. On the *board*,
+`--check none` still clears the default, which is what `none` means everywhere else.
 
 ### What a Job is given
 

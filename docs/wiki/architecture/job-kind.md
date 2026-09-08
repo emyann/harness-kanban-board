@@ -9,11 +9,11 @@ covers:
   - path: prisma/schema.prisma
     sha: 34921e6803578d6831938ada63d477d55a95eb6a
   - path: src/controller.ts
-    sha: 6ae87908660b007837d6f366cf4ddd64f3546d3b
+    sha: 4f641c68ffb6006f4b8c393723bfdc2f0edf9fbd
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
-generated_at_commit: cad6595
-last_refreshed: 2026-09-07
+generated_at_commit: d2d7f31
+last_refreshed: 2026-09-08
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control, features/rebase-and-verify, features/check, architecture/transitions]
 ---
 

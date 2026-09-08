@@ -515,8 +515,19 @@ export type ExportResult = {
  * attempt that has already written half of itself into the repository is the worse of the two
  * outcomes: the operator gets an artifact from a run nobody accepted, mixed into the tree with no
  * mark on it. Two passes — resolve, then copy — cost one extra `stat` per path.
+ *
+ * `copy: false` asks only the first question. That is the same rule one step further out: a missing
+ * declaration has to be found EARLY, because it outranks everything that follows it, while the write
+ * into the operator's repository has to happen LATE, once nothing left can still refuse the attempt.
+ * The controller asks twice for exactly that reason (`src/controller.ts`) — a completion check runs
+ * between the two, and a check that refuses must leave no file behind.
  */
-export function exportOutputs(from: string, to: string, declared: string[]): ExportResult {
+export function exportOutputs(
+  from: string,
+  to: string,
+  declared: string[],
+  opts: { copy?: boolean } = {},
+): ExportResult {
   const inPlace = path.resolve(from) === path.resolve(to);
   const missing: string[] = [];
   /** Each declaration, resolved to the repo-relative files it stands for. */
@@ -543,7 +554,7 @@ export function exportOutputs(from: string, to: string, declared: string[]): Exp
   }
   if (missing.length) return { exported: [], missing };
 
-  if (!inPlace) {
+  if (!inPlace && opts.copy !== false) {
     for (const rel of plan) {
       if (rel.endsWith('/')) fs.mkdirSync(path.join(to, rel), { recursive: true });
       else copyOut(path.join(from, rel), path.join(to, rel));

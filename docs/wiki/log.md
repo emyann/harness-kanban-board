@@ -371,3 +371,5 @@ history.
 
 ## 2026-09-07 — added features/check (`check` — the exit code hkb does not have, ADR-016 §3)
 ## 2026-09-07 — refreshed architecture/the-loop, architecture/job-kind, architecture/the-board (what follows a run, `check_failed` in the decision table, the nullable spec columns)
+
+## 2026-09-08 — refreshed features/check (the lease is held across the check; async spawn, process-group kill, `deps.signal`; one sentence per failure kind; the `''` opt-out; which base the tree was on), concepts/leases-and-liveness (verify, write, delete — release is last), architecture/the-loop (the ordered "what follows the run", exports copied after the check), features/declared-outputs (the probe/copy split), features/workflow-templates (a shell `[ … ]` test is not a list) + gotchas/argv-traps §3 (a DECLARED flag with no value is a boolean too) + GLOSSARY (Check, Check failed)

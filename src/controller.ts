@@ -4,10 +4,10 @@ import {
   newestWorktree, lockWorktree, onRemote, pushedRef, removeWorktree, resolves, unlockWorktree,
   type Worktree,
 } from './worktree.ts';
-import { rebaseNote, rebaseOntoBase, rebaseShortfall } from './rebase.ts';
+import { rebaseNote, rebaseOntoBase, rebaseShortfall, type RebaseResult } from './rebase.ts';
 import { prForBranch } from './pulls.ts';
 import {
-  approvedPrompt, withArtifacts, withCheckFailure, withGuide, withInputs, withProposal,
+  approvedPrompt, withArtifacts, withCheck, withCheckFailure, withGuide, withInputs, withProposal,
   withProtocol, withResults, withStandingRules, withWorktree,
 } from './brief.ts';
 import {
@@ -335,6 +335,45 @@ async function reclaimExpired(db: ReturnType<typeof openBoard>, at: Date, report
     report.reclaimed.push(l.jobId);
     log?.(`#${l.jobId} reclaimed (the lease from ${l.holder} expired)`);
   }
+}
+
+/**
+ * The outcomes an attempt can end on **before any check could have run**.
+ *
+ * All three end the attempt at or before the runtime call: `stopped` is `hkb down` landing mid-run,
+ * `lost` is the reclaim closing a row whose holder died, `crashed` is a run that never came back.
+ * None of them writes `Attempt.check`, and none of them clears `Job.lastSessionId` — so the session
+ * the next attempt resumes into is still the one an earlier check refused, and the refusal is still
+ * unanswered. They are walked past rather than treated as answers. See `lastRefusedCheck`.
+ */
+const CHECKLESS_OUTCOMES: ReadonlySet<string> = new Set(['stopped', 'lost', 'crashed']);
+
+/**
+ * The most recent check refusal that nothing has answered yet, or null.
+ *
+ * Walks back from `k - 1` past attempts that could not have run a check at all, and stops at the
+ * first attempt that could have: if that one ended `check_failed` its record is what the next
+ * attempt is briefed with, and if it ended any other way the check was either satisfied or beside
+ * the point. The same shape as `newestWorktree`, which walks back for the checkout because the
+ * numbering has exactly this hole in it.
+ */
+async function lastRefusedCheck(
+  db: ReturnType<typeof openBoard>,
+  jobId: number,
+  k: number,
+): Promise<CheckRecord | null> {
+  // One query, ordered, rather than one per step back: the walk is bounded by the retry count, but
+  // a per-`k` read would be a board read per attempt for a fact three rows can settle.
+  const before = await db.attempt.findMany({
+    where: { jobId, k: { lt: k } },
+    orderBy: { k: 'desc' },
+    select: { outcome: true, check: true },
+  });
+  for (const a of before) {
+    if (a.outcome && CHECKLESS_OUTCOMES.has(a.outcome)) continue;
+    return a.outcome === 'check_failed' ? storedCheck(a.check) : null;
+  }
+  return null;
 }
 
 /**
@@ -882,20 +921,27 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     const approvalPrompt = approval ? approvedPrompt(approval.actor, (approval.payload as { note?: string } | null)?.note) : null;
 
     // ---- what the attempt before this one failed its check on, if that is why there is another
-    // one. Read off the PREVIOUS attempt's row rather than remembered across the transition, like
+    // one. Read off the previous attempts' rows rather than remembered across the transition, like
     // everything else here: a controller that is level-triggered cannot depend on having seen the
     // failure happen, and a flag consumed on a transition is wrong after a restart.
     //
-    // Only `k - 1`, and only when that attempt ended on the check. An older check failure two
-    // attempts back was already answered by the attempt in between, and quoting it now would brief
-    // this run against a tree that no longer exists.
-    const priorAttempt = k > 1
-      ? await db.attempt.findUnique({
-        where: { jobId_k: { jobId: job.id, k: k - 1 } },
-        select: { outcome: true, check: true },
-      })
-      : null;
-    const priorCheck = priorAttempt?.outcome === 'check_failed' ? storedCheck(priorAttempt.check) : null;
+    // **Walked back**, the way `newestWorktree` walks back for the checkout — and for the same
+    // reason, because it is the same gap. `k` counts every ended attempt, so reading only `k - 1`
+    // meant one `stopped` (`hkb down`), `lost` (a reclaim) or pre-run `crashed` attempt in between
+    // silently dropped the briefing: none of those runs a check, none of them writes the column,
+    // and none of them clears `lastSessionId` — so the next attempt resumed the very session the
+    // check refused, with no word of the refusal. It wakes up believing it finished and produces
+    // the same tree, which is the failure mode this briefing exists to prevent.
+    //
+    // The walk stops at the first attempt that had something to say: anything OTHER than those
+    // three either answered the check (a `completed` attempt in between did) or failed for a
+    // reason of its own, and quoting an older failure past it would brief this run against a tree
+    // that no longer exists.
+    //
+    // Null once the Job no longer HAS a check: an operator who cleared it is not asking anybody to
+    // satisfy it, and briefing a worker about a command that will not run again is noise it would
+    // have to act on.
+    const priorCheck = k > 1 && spec.check.value ? await lastRefusedCheck(db, job.id, k) : null;
 
     // ---- the results this attempt is asked for, and the directory it writes them to. Created
     // before the run because the paths go into the prompt; outside every checkout, so writing one
@@ -1068,7 +1114,16 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // told about it is one that wakes up believing it finished — the retry-that-does-not-know-why
     // this project has already measured (`docs/rebuild-plan.md`). Composed rather than substituted,
     // unlike `approvedPrompt`: the work has not changed, only what is now known about it.
-    const briefed = priorCheck ? withCheckFailure(opening, priorCheck) : opening;
+    //
+    // The command it names is `spec.check.value` — what will judge THIS attempt — and not the one
+    // on the record, which is what judged the last one. `hkb job set --check 'npm run lint'` then
+    // `hkb retry` briefed the worker to make `npm test` exit 0 while `npm run lint` decided; when
+    // the two differ `withCheckFailure` says so rather than silently substituting, because the tail
+    // below it is still the old command's output and a worker reading them as one thing would be
+    // debugging the wrong failure.
+    const briefed = priorCheck
+      ? withCheckFailure(opening, priorCheck, spec.check.value as string)
+      : opening;
     // The guide goes in FRONT of all of it, including an approval prompt: an approver's instruction
     // is the most recent word on what to do, and the repository's rules are the standing word on how
     // anything here is done. Neither replaces the other.
@@ -1077,10 +1132,20 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // that includes a resumed attempt carrying an approver's instruction.
     const ruled = withStandingRules(briefed);
     const guided = guide ? withGuide(ruled, guide.text, spec.guide.value as string) : ruled;
-    const asked = withInputs(
-      withArtifacts(withResults(guided, wantedResults), wantedArtifacts),
-      readInputs,
-    );
+    // The completion condition the worker is going to be judged against, told to it BEFORE it is
+    // judged. `spec.check.value` used to reach a prompt only through `withCheckFailure` — that is,
+    // only after an attempt had already failed on it — so the ordinary shape of a checked Job was:
+    // the worker runs `npm test`, pushes, ends green, the check fails on the lint half, and a whole
+    // paid session goes on a one-line fix it would have made for free. It sits with the declared
+    // outputs because it IS one, in ADR-016 §3's sense.
+    //
+    // Not a hole in the fence. The fence is about who AUTHORS the command — the row, never the
+    // worktree (`src/check.ts`) — and telling a worker the string changes nothing about that: the
+    // retry prompt has always disclosed it verbatim, and a worker cannot edit the row it comes from.
+    // Skipped when `withCheckFailure` already carries it, which says the same thing at more length.
+    const contracted = withArtifacts(withResults(guided, wantedResults), wantedArtifacts);
+    const told = spec.check.value && !priorCheck ? withCheck(contracted, spec.check.value) : contracted;
+    const asked = withInputs(told, readInputs);
     const prompt = proposalPath && !approvalPrompt
       ? withProposal(asked, proposalPath, spec.maxBudgetUsd.value ?? null)
       : asked;
@@ -1128,19 +1193,22 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       }, deps.onRuntimeEvent)
       .catch((): null => null);
 
-    clearInterval(renewer);
-
-    // ---- release, fenced. `delete({ where: { jobId } })` deleted whoever's lease was there, so a
-    // stale holder finishing late removed the NEW holder's claim and then overwrote its outcome.
-    // The token was written at claim and never read; now it is the fence. Released BEFORE the
-    // Job row is touched, because the count is what says whether we may touch it at all.
-    const released = await db.lease.deleteMany({ where: { jobId: job.id, token } });
-    if (released.count === 0) heldToTheEnd = false;
+    // ---- still ours? A cheap fenced READ, before anything CONTENDED is touched.
+    //
+    // The lease used to be deleted at this point; it is now held to the end and released after the
+    // outcome is recorded — see the release for why. This read is the early half of that: the
+    // renewer only notices a lost lease on its own timer (a third of the lease), and the blocks
+    // below write to the repository, the remote and the checkout. One `findUnique` buys them the
+    // answer now rather than up to twelve minutes from now.
+    const held = await db.lease.findUnique({ where: { jobId: job.id }, select: { token: true } });
+    if (held?.token !== token) heldToTheEnd = false;
 
     // The operator's intent outranks whatever the runtime made of being cut off. A stopped run
     // reports `timeout` or `error` depending on where the abort landed, and recording either would
     // be a lie about why it ended AND would spend a retry on it.
-    const ran: Decision = inputShortfall
+    // `let`, because one thing may still change it after the fact: a stop that lands while the
+    // completion check is in flight. See the check block below.
+    let ran: Decision = inputShortfall
       // Terminal, and not retried, for the reason a missing declared OUTPUT is not: the same read
       // fails identically next time. `hkb retry` is the deliberate second go, once a human has read
       // which input is missing and decided whose mistake it was.
@@ -1167,12 +1235,26 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // `heldToTheEnd` gates it for the same reason it gates the Job row: the repository is contended
     // state too, and a holder that lost its lease mid-run must not write into a checkout the new
     // holder is working in. Its worktree is kept below, so the artifact is not destroyed either.
+    //
+    // **Two halves, and the split is the point.** Asking whether the declared paths are there is a
+    // question about the run and it is asked HERE, where its answer still outranks everything after
+    // it — a missing declared output is the cheaper cause and it must keep winning over a check
+    // that would take ten minutes to report a second one. COPYING them into `Board.repoPath` is a
+    // write into the operator's repository, and that waits until the attempt is known to have
+    // passed: it ran ~150 lines above the check, so an attempt the check went on to REFUSE had
+    // already put its files in the operator's tree, which is exactly what this block's own rule
+    // forbids. The copy is below the check.
+    let exportPlan: string[] | null = null;
     if (declared.length && ran.phase === 'succeeded' && heldToTheEnd) {
+      // `[]` from here, and the copy below replaces it with what actually landed. A Job that
+      // declared outputs and handed none over records the empty list rather than null — "produces
+      // no file" and "produced none of the files it promised" are different facts, and that stays
+      // true of an attempt the check refused as much as of one that never wrote them.
+      exported = [];
       try {
-        const got = exportOutputs(wt ? wt.path : cwd, cwd, declared);
-        exported = got.exported;
+        const got = exportOutputs(wt ? wt.path : cwd, cwd, declared, { copy: false });
+        exportPlan = got.exported;
         if (got.missing.length) shortfall = missingOutputs(job.id, got.missing);
-        else if (exported.length) deps.onEvent?.(`  exported ${exported.length} path${exported.length === 1 ? '' : 's'} into ${cwd}`);
       } catch (e) {
         // An illegal declaration — escaping, absolute, or a symlink out of the checkout. It is a
         // fault in the Job's spec rather than in the run, and it stops the copy dead: nothing is
@@ -1283,6 +1365,8 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // the remote are contended state too, and a holder that lost its lease mid-run must not rewrite
     // history the new holder's worker is committing onto.
     let conflicted: string | null = null;
+    /** Kept for the check below: what it is allowed to claim depends on whether this replayed. */
+    let rebased: RebaseResult | null = null;
     if (wt && ran.phase === 'succeeded' && heldToTheEnd && !shortfall) {
       // A pull request somebody has taken out of draft is a diff a person is reading, and the
       // whole safety argument for rewriting an attempt branch was that nobody was. It is checked
@@ -1290,6 +1374,10 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       // reviews, and the approved attempt would otherwise have force-pushed out from under their
       // comments. No pull request read (`--json` tests, no forge) means nothing says otherwise.
       const r = rebaseOntoBase(cwd, wt, { mayRewrite: !pr || pr.isDraft });
+      // A base that could not be REFRESHED is not a base to make claims about: the tree may contain
+      // `origin/main` as this clone last saw it and still not contain what would merge. So the
+      // honest answer for the check below is the conjunction, not `r.onBase` alone.
+      rebased = { ...r, onBase: r.onBase && !r.staleBase };
       const owed = rebaseShortfall(job.id, wt, r);
       const note = rebaseNote(job.id, wt, r);
       if (note) say(`  ${note}`);
@@ -1321,15 +1409,77 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // working in is not ours to touch), and only when nothing has already failed the attempt —
     // running a suite over a tree that is missing a declared output would spend ten minutes to
     // report a second cause for a failure that already has one.
+    //
+    // **The lease is HELD while this runs**, and it is `heldToTheEnd` that says so honestly now: the
+    // renewer is still ticking, the Lease row is still ours, and the release is at the far end of
+    // this function after the outcome is on the row. A ten-minute command with the claim already
+    // dropped is a ten-minute hole in which the Job is `running` with no lease — see the release.
+    //
+    // And it is awaited rather than blocking: `runCheck` is an async `spawn` that kills its process
+    // GROUP on the timeout and honours `deps.signal`, so `hkb down` interrupts it, sibling workers
+    // keep running, and a suite that outlives its shell does not outlive the check.
     let failedCheck: CheckRecord | null = null;
     if (spec.check.value && ran.phase === 'succeeded' && heldToTheEnd && !shortfall) {
-      say(`  check ${spec.check.value}`);
-      const r = runCheck(wt ? wt.path : cwd, spec.check.value);
-      if (!r.ok) {
-        failedCheck = r.record;
-        say(`  ${describeCheck(r.record)}`);
+      // Which base the tree was on, recorded rather than assumed. The rebase legitimately declines
+      // (a pull request out of draft) or runs against a base it could not refresh, and the check
+      // then judges a tree that is NOT what would merge — true, harmless, and not something to be
+      // quiet about. `undefined` for a Job with no worktree: nothing was replayed, so there is no
+      // claim to qualify.
+      const on = wt && rebased ? { onBase: rebased.onBase, base: wt.baseLabel } : undefined;
+      say(`  check ${spec.check.value}${on && !on.onBase ? ` — on the tree as it stands, NOT replayed onto ${on.base}` : ''}`);
+      const r = await runCheck(wt ? wt.path : cwd, spec.check.value, { signal: deps.signal });
+      // A stop that landed mid-check is the operator's intent, and it outranks a verdict the
+      // command never got to give: `runCheck` killed it, so what came back describes our own
+      // interruption. Recording `check_failed` for it would burn a retry on `hkb down`.
+      if (deps.signal?.aborted) {
+        say('  check interrupted by the stop — nothing about it is recorded');
+        ran = { phase: 'pending', outcome: 'stopped', resumable: true, lastError: null };
+      } else if (!r.ok) {
+        failedCheck = { ...r.record, ...on };
+        say(`  ${describeCheck(failedCheck)}`);
       }
     }
+
+    // ---- the declared outputs, COPIED — the second half of the block above, and the last thing
+    // that happens before the outcome is decided. Everything that could still refuse this attempt
+    // has now spoken, so a path leaving the sandbox here belongs to an attempt that passed.
+    //
+    // Re-planned rather than trusting the probe: the check ran in this tree between the two, and a
+    // command that deletes what the run produced has changed the answer. That is a shortfall like
+    // any other and it is found here rather than reported as a successful export of nothing.
+    if (exportPlan && ran.phase === 'succeeded' && heldToTheEnd && !shortfall && !failedCheck) {
+      try {
+        const got = exportOutputs(wt ? wt.path : cwd, cwd, declared);
+        exported = got.exported;
+        if (got.missing.length) shortfall = missingOutputs(job.id, got.missing);
+        else if (exported.length) deps.onEvent?.(`  exported ${exported.length} path${exported.length === 1 ? '' : 's'} into ${cwd}`);
+      } catch (e) {
+        shortfall = (e as Error).message;
+      }
+      if (shortfall) deps.onEvent?.(`  ${shortfall}`);
+    }
+
+    // ---- the run is over and nothing else will touch the checkout, so the renewer stops — one
+    // line before the claim is verified, so the value it was maintaining is not moving under the
+    // read that follows.
+    //
+    // **Verify, write, delete.** The lease used to be deleted as soon as the runtime returned,
+    // which left the Job `running` with no Lease row and an attempt still open for as long as the
+    // rebase, the check and these writes took — up to ten minutes with a check in the middle. Every
+    // verb that looks into that window got a wrong answer: `hkb cancel` was accepted (`whileUnleased`
+    // refuses only when a Lease row EXISTS) and then silently undone by the outcome written below;
+    // `hkb rm` cascaded the rows away and turned the `attempt.update` into a P2025 that aborted the
+    // whole pass; and a daemon killed in there stranded the Job for ever, because `reclaimExpired`
+    // scans Lease rows and there was none to find.
+    //
+    // The argument that put a fence here is unchanged and still right — a stale holder finishing
+    // late must not remove the NEW holder's claim, and the token is what tells the two apart. Only
+    // its shape moves: the token is READ here and the row is deleted at the far end, once the
+    // outcome is recorded. The count of that delete used to be what said whether we might write;
+    // this read says it instead, and says it while the claim is still live.
+    clearInterval(renewer);
+    const stillHeld = await db.lease.findUnique({ where: { jobId: job.id }, select: { token: true } });
+    if (stillHeld?.token !== token) heldToTheEnd = false;
 
     // A declared output that is not there fails the attempt, and that rule is what makes the
     // declaration worth writing down: without it `succeeded` still means only that a session ended.
@@ -1456,6 +1606,19 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     await db.event.create({
       data: { kind: decision.outcome, jobId: job.id, boardId: job.boardId, actor: host, payload: { k, phase: decision.phase } },
     });
+
+    // ---- release, LAST, and fenced on the token.
+    //
+    // Last because the Lease row is what tells every other verb that this Job is being worked on:
+    // `whileUnleased` refuses `hkb cancel` and `hkb rm` while it is there, and `reclaimExpired`
+    // finds a dead holder by it. Dropping it before the outcome was written opened a window in
+    // which the Job was `running`, unleased, with an attempt still open — and every one of the
+    // three verbs that looked into that window got a wrong answer.
+    //
+    // `deleteMany ... where token` and not `delete ... where jobId`: a holder whose lease was taken
+    // from it mid-run must remove ITS claim or nothing, never the new holder's. The `!heldToTheEnd`
+    // return above has already left without deleting, for exactly that reason.
+    await db.lease.deleteMany({ where: { jobId: job.id, token } });
 
     // ---- tidy. Never forced: a worktree that still holds work is the only copy of it if the
     // push failed, so it stays and the operator is told where.

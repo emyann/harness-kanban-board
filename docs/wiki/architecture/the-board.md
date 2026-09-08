@@ -15,9 +15,9 @@ covers:
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/spec.ts
-    sha: d918b65379babd9235d294239eaa26322bc3eb2f
-generated_at_commit: cad6595
-last_refreshed: 2026-09-07
+    sha: d3fba5cc6bb9a1cebeea496bf445f4165c3cecbc
+generated_at_commit: d2d7f31
+last_refreshed: 2026-09-08
 related:
   [
     architecture/job-kind,

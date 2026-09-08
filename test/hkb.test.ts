@@ -1924,22 +1924,135 @@ test('--check files the command, and `hkb show` names it with where it came from
   assert.match((await hkb('show', String(j.id), '--board', 'checked')).out, /check\s+npm run lint && npm test\s+\[job\]/);
 });
 
-test('--check with nothing after it is refused rather than filed as an empty command', async () => {
+test('hkb new echoes the check it will actually run, board default included', async () => {
+  // `check: check ?? null` echoed the Job's own COLUMN, so a Job inheriting the board's printed
+  // nothing at all — which is the "an attempt can fail on a command nobody printed" surprise this
+  // echo exists to prevent, and the board default is the configuration the README recommends.
+  const repo = scratchRepo('echoed');
+  await hkb('boards', 'add', 'echoed', '--repo', repo);
+  await hkb('boards', 'set', 'echoed', '--check', 'make verify');
+
+  const inherits = await hkb('new', 'inherits-a-check', '--brief', 'x', '--board', 'echoed');
+  assert.match(inherits.out, /must pass\s+make verify\s+\[board\]/, 'the command, and whose it is');
+  const j = json((await hkb('new', 'inherits-2', '--brief', 'x', '--board', 'echoed', '--json')).out);
+  assert.equal(j.check, 'make verify', '--json carries the resolved value too');
+  assert.equal(j.checkFrom, 'board');
+
+  const own = await hkb('new', 'own-check', '--brief', 'x', '--check', 'npm test', '--board', 'echoed');
+  assert.match(own.out, /must pass\s+npm test\s+\[job\]/);
+  const out = await hkb('new', 'no-check-here', '--brief', 'x', '--check', '', '--board', 'echoed');
+  assert.match(out.out, /must pass\s+nothing — this Job opts out/);
+});
+
+// ---------------------------------------------------------------- a bare `--check` is not a check
+//
+// The refusing case, on all three verbs. `parseArgs` runs with `strict: false`, so a trailing bare
+// `--check` comes back as the BOOLEAN `true`, and `String(true)` is the word `true` — a shell
+// command that exists, exits 0, and verifies nothing. It was filed: `hkb show` printed
+// `check true [job]`, and every attempt of that Job "passed". `--gate`, one line over, has always
+// been written `typeof values.gate === 'string'` and has always refused correctly.
+
+test('hkb new: a bare --check is refused, not filed as the shell command `true`', async () => {
   await assert.rejects(
-    () => main(['new', 'blank-check', '--brief', 'x', '--check', '  ', '--board', 'blank-check-board']),
-    (e: Error & { exitCode?: number }) => e.exitCode === 2 && /says whether the work behaves/.test(e.message),
+    () => main(['new', 'bare-check', '--brief', 'x', '--board', 'bare-check-board', '--check']),
+    (e: Error & { exitCode?: number }) => e.exitCode === 2 && /a bare --check is not a value/.test(e.message),
   );
 });
 
-test('hkb job set --check changes what a filed Job must pass, and "none" clears it', async () => {
+test('hkb boards set: a bare --check is refused too', async () => {
+  const repo = scratchRepo('bare-board-check');
+  await hkb('boards', 'add', 'bare-board-check', '--repo', repo);
+  await assert.rejects(
+    () => main(['boards', 'set', 'bare-board-check', '--check']),
+    (e: Error & { exitCode?: number }) => e.exitCode === 2 && /a bare --check is not a value/.test(e.message),
+  );
+  const rows = json((await hkb('boards', '--json')).out) as { board: string; defaults: { check: string | null } }[];
+  assert.equal(rows.find((r) => r.board === 'bare-board-check')?.defaults.check, null,
+    'and nothing was written — a refusal that still wrote would be the same bug one step later');
+});
+
+test('hkb job set: a bare --check is refused as well, so no route files `true`', async () => {
+  const b = 'bare-set-check-board';
+  const j = json((await hkb('new', 'bare-set-check', '--brief', 'x', '--board', b, '--json')).out);
+  // The bare flag LAST, because a flag after it is what `--check` would swallow — which is a
+  // different refusal (`src/hkb.ts`'s lost-quotes guard) and not the one under test here.
+  await assert.rejects(
+    () => main(['job', 'set', String(j.id), '--board', b, '--check']),
+    (e: Error & { exitCode?: number }) => e.exitCode === 2 && /a bare --check is not a value/.test(e.message),
+  );
+  assert.match((await hkb('show', String(j.id), '--board', b)).out, /check\s+\(none — nothing verifies/,
+    'and the Job is unchanged — nothing was filed on the strength of a flag with no value');
+});
+
+// ---------------------------------------------------------------- opting one Job out
+//
+// A board-wide check owned every Job on it: a blank normalised to null, null inherits, and
+// `--check none` filed the literal command `none` — exit 127, `check_failed`, resumed and re-failed
+// until the retries were gone. The schema's own "a Job whose brief is an investigation has no suite
+// to pass" was unhonourable. `''` is the narrowing value, the shape `allowedTools: []` already uses.
+
+test('--check "" is a Job that runs NO check and does not inherit the board\'s', async () => {
+  const repo = scratchRepo('opt-out');
+  await hkb('boards', 'add', 'opt-out', '--repo', repo);
+  await hkb('boards', 'set', 'opt-out', '--check', 'npm test');
+
+  const investigation = json((await hkb('new', 'investigate', '--brief', 'read it', '--check', '', '--board', 'opt-out', '--json')).out);
+  assert.equal(investigation.check, '', 'the empty string is a VALUE, not an absence');
+  assert.equal(investigation.checkFrom, 'job', 'and it is the Job that said so, not the board');
+  assert.match((await hkb('show', String(investigation.id), '--board', 'opt-out')).out, /check\s+\(none\)\s+\[job\]/);
+
+  // Whitespace normalises INTO the opt-out: a command of one space is not a command.
+  const spaces = json((await hkb('new', 'investigate-2', '--brief', 'x', '--check', '  ', '--board', 'opt-out', '--json')).out);
+  assert.equal(spaces.check, '');
+
+  // And the Job beside it still inherits, so this narrowed one Job rather than the board.
+  const ordinary = json((await hkb('new', 'ordinary', '--brief', 'x', '--board', 'opt-out', '--json')).out);
+  assert.equal(ordinary.check, 'npm test');
+  assert.equal(ordinary.checkFrom, 'board');
+});
+
+test('--check none is REFUSED by name on a Job, pointing at the spelling that works', async () => {
+  // Filing it as written is three paid sessions for a command that can never pass.
+  for (const argv of [
+    ['new', 'none-check', '--brief', 'x', '--board', 'none-check-board', '--check', 'none'],
+  ]) {
+    await assert.rejects(
+      () => main(argv),
+      (e: Error & { exitCode?: number }) => e.exitCode === 2
+        && /would file the literal shell command/.test(e.message)
+        && /--check ""/.test(e.message),
+    );
+  }
+  const b = 'none-set-board';
+  const j = json((await hkb('new', 'none-set', '--brief', 'x', '--board', b, '--check', 'npm test', '--json')).out);
+  await assert.rejects(
+    () => main(['job', 'set', String(j.id), '--check', 'none', '--board', b]),
+    (e: Error & { exitCode?: number }) => e.exitCode === 2 && /--check ""/.test(e.message),
+  );
+  // `hkb boards set --check none` keeps ITS meaning — a board default has something to clear.
+  const repo = scratchRepo('board-clears');
+  await hkb('boards', 'add', 'board-clears', '--repo', repo);
+  await hkb('boards', 'set', 'board-clears', '--check', 'npm test');
+  const cleared = json((await hkb('boards', 'set', 'board-clears', '--check', 'none', '--json')).out);
+  assert.equal(cleared.defaults.check, null);
+});
+
+test('hkb job set --check "" opts a filed Job out, and a command sets it back', async () => {
+  const b = 'set-out-board';
+  const j = json((await hkb('new', 'set-out', '--brief', 'x', '--board', b, '--json')).out);
+  const off = json((await hkb('job', 'set', String(j.id), '--check', '', '--board', b, '--json')).out);
+  assert.equal(off.changed[0].to, '', 'stored as the empty string, not as null');
+  assert.match((await hkb('show', String(j.id), '--board', b)).out, /check\s+\(none\)\s+\[job\]/);
+  const on = json((await hkb('job', 'set', String(j.id), '--check', 'make verify', '--board', b, '--json')).out);
+  assert.equal(on.changed[0].to, 'make verify');
+});
+
+test('hkb job set --check changes what a filed Job must pass', async () => {
   const b = 'set-a-check-board';
   const j = json((await hkb('new', 'set-a-check', '--brief', 'x', '--board', b, '--json')).out);
   const set = json((await hkb('job', 'set', String(j.id), '--check', 'npm test', '--board', b, '--json')).out);
   assert.deepEqual(set.changed.map((c: { field: string }) => c.field), ['check']);
   assert.match((await hkb('show', String(j.id), '--board', b)).out, /check\s+npm test\s+\[job\]/);
-
-  const cleared = json((await hkb('job', 'set', String(j.id), '--check', 'none', '--board', b, '--json')).out);
-  assert.equal(cleared.changed[0].to, null, '"none" clears it rather than filing a command called none');
 });
 
 test('a workflow file may name the check, because a workflow is what knows when a step is done', async () => {

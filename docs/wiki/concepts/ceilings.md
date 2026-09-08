@@ -9,17 +9,17 @@ covers:
   - path: src/limits.ts
     sha: 61b65c43e2fd7c28f952c403e02d073ca9907561
   - path: src/controller.ts
-    sha: 6ae87908660b007837d6f366cf4ddd64f3546d3b
+    sha: 4f641c68ffb6006f4b8c393723bfdc2f0edf9fbd
   - path: prisma/schema.prisma
     sha: 34921e6803578d6831938ada63d477d55a95eb6a
   - path: src/spec.ts
-    sha: d918b65379babd9235d294239eaa26322bc3eb2f
+    sha: d3fba5cc6bb9a1cebeea496bf445f4165c3cecbc
   - path: src/hkb.ts
-    sha: ce35e824d6a97dbc5fb88846f81332828dfae3b1
+    sha: 45c571d3e74827c4648f2b13f16a5192863fe727
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
-generated_at_commit: cad6595
-last_refreshed: 2026-09-07
+generated_at_commit: d2d7f31
+last_refreshed: 2026-09-08
 related: [architecture/the-board, architecture/the-loop, architecture/job-kind, concepts/leases-and-liveness]
 ---
 
@@ -47,18 +47,18 @@ union rather than a message is that the caller has to *act* on them differently
 The last two are walls a reconciler can be standing at **because of its own runs in flight**. The
 controller's claim loop is exactly that distinction, and it is one line: on a refusal it keeps
 waiting for one of its own runs to settle, and it breaks out only when the limit is `stopped` or
-when it has nothing in flight to wait for (`src/controller.ts:588-593`). A refusal a pass caused
+when it has nothing in flight to wait for (`src/controller.ts:627-632`). A refusal a pass caused
 itself is not news to report; it is a reason to wait for a slot (`src/controller.ts:76-78`). A pass
 that reported *"2 of 2 slots in use"* while both slots were its own would end early and blame the
-operator (`src/controller.ts:548-551`).
+operator (`src/controller.ts:587-590`).
 
 That branch cannot be written against a message. It needs the name.
 
 The refusal that survives the loop is the pass's **outcome**, not something it did: it lands on
 `ReconcileReport.refused` and on an `Event` of kind `refused`, and is deliberately *not* narrated
 through `onEvent` — because the daemon asks this same question every 45s and only logs the answer
-when it changes, and one narrated line silently undid that dedup (`src/controller.ts:596-608`). The
-CLI renders it as one `refused: …` line (`src/hkb.ts:850`).
+when it changes, and one narrated line silently undid that dedup (`src/controller.ts:635-647`). The
+CLI renders it as one `refused: …` line (`src/hkb.ts:905`).
 
 ## Why the gate has no I/O in it
 
@@ -71,7 +71,7 @@ and both looked fine from every test that exercised the *allowing* case.
 A decision with no I/O in it can be tested exhaustively against the refusing case, which is the case
 that matters. So `gateClaim` takes a plain record of six facts and returns a verdict; the three
 queries that produce those facts live in the controller, where they can be wrong in ways a database
-makes visible (`src/controller.ts:553-586`). The same reasoning shapes `resolveSpec`, whose failing
+makes visible (`src/controller.ts:592-625`). The same reasoning shapes `resolveSpec`, whose failing
 case is also silent (`src/spec.ts:16-20`), and `nextPhase` (`src/controller.ts:164-168`).
 
 ## Checked before a claim, never during a run
@@ -82,7 +82,7 @@ worker would strand its worktree, while one that declines to start another is on
 
 State the price plainly: **a board taken past its ceiling by work already admitted is not clawed
 back.** Stopping a board leaves the run in flight alone, and `hkb stop` says so in as many words
-(`src/hkb.ts:1128-1129`; `prisma/schema.prisma:113-114`). Lowering `dailyBudgetUsd` mid-flight does not
+(`src/hkb.ts:1201-1202`; `prisma/schema.prisma:113-114`). Lowering `dailyBudgetUsd` mid-flight does not
 reach into a running attempt either — the cap was handed to the runtime at spawn and nothing re-reads
 it (`prisma/schema.prisma:466-469`). The ceiling binds admissions, not executions.
 
@@ -97,7 +97,7 @@ The check is:
 
 (`src/limits.ts:85-86`). The third term is the Job's **resolved** cap, not its raw column — the
 column is null for every Job that inherits, and a gate judging a null against the ceiling would wave
-through the commonest Job there is (`src/controller.ts:583-585`, `src/limits.ts:56-60`). The comment
+through the commonest Job there is (`src/controller.ts:622-624`, `src/limits.ts:56-60`). The comment
 that names the principle: *a cap that only notices after the money is gone is a report, not a
 ceiling* (`src/limits.ts:83-84`).
 
@@ -108,7 +108,7 @@ intended behaviour, and it is why the refusal text names all three terms
 ## `committedUsd` — why work in flight has to be charged
 
 `spent24h` is summed from `Attempt.costUsd`, which only moves when an attempt **ends**
-(`src/controller.ts:556-559`). While one Job ran at a time that was harmless. The moment two could
+(`src/controller.ts:595-598`). While one Job ran at a time that was harmless. The moment two could
 run at once it stopped being: N concurrent claims would each be judged against a spend none of them
 had yet contributed to, and the board could commit N × its ceiling in the time the first one takes to
 finish (`src/limits.ts:39-43`, `src/controller.ts:79-81`).
@@ -119,9 +119,9 @@ a run *could* cost — to the runs already going (`src/limits.ts:37-43`).
 ### It is summed over the frozen cap, not over the spec
 
 The sum is `_sum(Attempt.maxBudgetUsd)` over attempts with no `endedAt`
-(`src/controller.ts:570-573`) — the cap each live attempt was **claimed under**, written onto the
+(`src/controller.ts:609-612`) — the cap each live attempt was **claimed under**, written onto the
 Attempt row in the same breath as the claim and from the same resolved spec the gate was just judged
-against (`src/controller.ts:657-663`). It is `Float`, never null (`prisma/schema.prisma:491`), which
+against (`src/controller.ts:696-702`). It is `Float`, never null (`prisma/schema.prisma:491`), which
 is precisely the difference from `Job.maxBudgetUsd`, which is `Float?` (`prisma/schema.prisma:221`) —
 **do not swap them**: the Job's column is nullable so board defaults can mean something; the
 Attempt's cannot be, because another process reads it about someone else's run.
@@ -148,11 +148,11 @@ nothing outside it asks (`prisma/schema.prisma:485-489`).
 The frozen number also pays off away from the gate: `hkb retry` refuses to re-queue a budget-capped
 Job under a cap that is not larger, and it compares against what the failed attempt *actually ran
 under* rather than today's resolution — the two differ when the board was raised after the failure,
-and there the retry genuinely buys something (`src/hkb.ts:922-944`).
+and there the retry genuinely buys something (`src/hkb.ts:989-1011`).
 
 **A known over-charge, in the safe direction:** an orphaned attempt whose holder died still has no
 `endedAt`, so it is counted as committed until the reclaim at the top of the next pass closes it
-(`src/controller.ts:560-564`). Whether a holder is really gone is the lease question, not this one —
+(`src/controller.ts:599-603`). Whether a holder is really gone is the lease question, not this one —
 see *concepts/leases-and-liveness*.
 
 ## The window is rolling, not a day
@@ -165,7 +165,7 @@ as a real option (`src/limits.ts:89-91`). `hkb up --status` reads the same windo
 function, so the status cannot disagree with the refusal it is meant to explain
 (`src/daemon.ts:203-210`).
 
-Attempts enter the window by `startedAt` (`src/controller.ts:558`).
+Attempts enter the window by `startedAt` (`src/controller.ts:597`).
 
 ## Where each ceiling is set, and by whom
 
@@ -174,19 +174,19 @@ All three live on the `Board` — the namespace — because they are already per
 
 | Ceiling | Column | Operator command | In the refusal |
 |---|---|---|---|
-| stopped | `pausedAt`/`pausedBy` | `hkb stop` / `hkb start` (`src/hkb.ts:1336-1363`) | `` `hkb start` to resume `` (`src/limits.ts:69`) |
-| concurrency | `maxConcurrent`, default 1 | `hkb boards set <slug> --max-concurrent <n>` (`src/hkb.ts:1360-1366`) | raise it, or wait for a run to finish (`src/limits.ts:77-78`) |
-| budget | `dailyBudgetUsd`, null = no ceiling | `hkb boards set <slug> --daily-budget <usd>\|none` (`src/hkb.ts:1367-1375`) | raise it, or wait for a run or the window (`src/limits.ts:87-97`) |
+| stopped | `pausedAt`/`pausedBy` | `hkb stop` / `hkb start` (`src/hkb.ts:1411-1438`) | `` `hkb start` to resume `` (`src/limits.ts:69`) |
+| concurrency | `maxConcurrent`, default 1 | `hkb boards set <slug> --max-concurrent <n>` (`src/hkb.ts:1435-1441`) | raise it, or wait for a run to finish (`src/limits.ts:77-78`) |
+| budget | `dailyBudgetUsd`, null = no ceiling | `hkb boards set <slug> --daily-budget <usd>\|none` (`src/hkb.ts:1442-1450`) | raise it, or wait for a run or the window (`src/limits.ts:87-97`) |
 
 Two edges worth knowing. `--max-concurrent 0` **drains** a board without stopping it — a distinct
-state from the kill switch, and a deliberate one (`prisma/schema.prisma:127`, `src/hkb.ts:1362-1365`).
+state from the kill switch, and a deliberate one (`prisma/schema.prisma:127`, `src/hkb.ts:1437-1440`).
 And `--daily-budget` accepts the literal `none` to clear the ceiling, because "no ceiling" and "a
-ceiling of zero" are different configurations (`src/hkb.ts:1369-1373`).
+ceiling of zero" are different configurations (`src/hkb.ts:1444-1448`).
 
 `--max-budget` on `hkb boards set` is **not** a ceiling despite the neighbouring flags: it writes
-`defaultMaxBudgetUsd`, a default a Job may override (`src/hkb.ts:1287`,
+`defaultMaxBudgetUsd`, a default a Job may override (`src/hkb.ts:1362`,
 `prisma/schema.prisma:130-135`). The per-Job cap resolves three deep — the Job's own value, the
-board's default, then the built-in $1 (`src/spec.ts:63-67`, `src/spec.ts:161`).
+board's default, then the built-in $1 (`src/spec.ts:83-87`, `src/spec.ts:181`).
 
 ## A Job that spends its own cap is not retried
 
@@ -209,14 +209,14 @@ starting cold (`src/controller.ts:278-281`).
 ## For ops
 
 - `hkb up --status` prints, per board, `STOPPED …` if the kill switch is set, then
-  `limits  <n> of <m> slots running, $X of $Y spent in 24h` (`src/hkb.ts:1208-1217`). Those are the
+  `limits  <n> of <m> slots running, $X of $Y spent in 24h` (`src/hkb.ts:1283-1292`). Those are the
   same four facts a refusal cites (`src/daemon.ts:166-184`).
 - "The daemon is up but nothing is claimed" is answered by that line before it is answered anywhere
-  else — a stopped board with a healthy daemon otherwise reads as fine (`src/hkb.ts:1206-1210`).
+  else — a stopped board with a healthy daemon otherwise reads as fine (`src/hkb.ts:1281-1285`).
 - The status line reports **spent**, not the projection the gate actually charges, so a board can be
   refused on budget while its status shows headroom. Filed in `FINDINGS.md`.
 - `hkb log` carries a `refused` event per refusal, with the same prose
-  (`src/controller.ts:605-607`).
+  (`src/controller.ts:644-646`).
 
 ## Related
 

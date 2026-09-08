@@ -15,7 +15,7 @@ covers:
   - path: src/admission.ts
     sha: aab84ccd1178b085cea79d2c4566149145027b9e
   - path: src/spec.ts
-    sha: d918b65379babd9235d294239eaa26322bc3eb2f
+    sha: d3fba5cc6bb9a1cebeea496bf445f4165c3cecbc
   - path: prisma/schema.prisma
     sha: 34921e6803578d6831938ada63d477d55a95eb6a
 related:
@@ -25,8 +25,8 @@ related:
     architecture/runtime-layer,
     architecture/overview,
   ]
-generated_at_commit: cad6595
-last_refreshed: 2026-09-07
+generated_at_commit: d2d7f31
+last_refreshed: 2026-09-08
 ---
 
 # ADR-012: A worker gets a repository's skills by grant, and never its settings

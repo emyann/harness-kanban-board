@@ -13,11 +13,11 @@ covers:
   - path: prisma/schema.prisma
     sha: 34921e6803578d6831938ada63d477d55a95eb6a
   - path: src/controller.ts
-    sha: 6ae87908660b007837d6f366cf4ddd64f3546d3b
+    sha: 4f641c68ffb6006f4b8c393723bfdc2f0edf9fbd
   - path: src/runtime/index.ts
     sha: 55007f26fe6b9e4ec107997eef5aba74ec4643e6
   - path: src/hkb.ts
-    sha: ce35e824d6a97dbc5fb88846f81332828dfae3b1
+    sha: 45c571d3e74827c4648f2b13f16a5192863fe727
   - path: src/inputs.ts
     sha: ffd76fce7689fe1c9a1dc0db3756cdf343d2b623
 related:
@@ -28,8 +28,8 @@ related:
     architecture/job-kind,
     architecture/overview,
   ]
-generated_at_commit: cad6595
-last_refreshed: 2026-09-07
+generated_at_commit: d2d7f31
+last_refreshed: 2026-09-08
 ---
 
 # ADR-010: The human gate is a field, not a kind — and groom is a brief

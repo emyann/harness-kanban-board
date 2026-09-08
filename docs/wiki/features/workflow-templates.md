@@ -7,9 +7,9 @@ audience: [dev]
 read_when: "authoring a workflow, adding a flag to `hkb new`, or deciding whether something belongs in the format (machinery) or in a workflow file (content)"
 covers:
   - path: src/templates.ts
-    sha: 999612c9acfed633488c33c65a204673837ddd2a
+    sha: a01b0239ebb80af9b1e7e601e3c2b6bd7165ae23
   - path: src/hkb.ts
-    sha: ce35e824d6a97dbc5fb88846f81332828dfae3b1
+    sha: 45c571d3e74827c4648f2b13f16a5192863fe727
   - path: src/inputs.ts
     sha: ffd76fce7689fe1c9a1dc0db3756cdf343d2b623
 related:
@@ -21,8 +21,8 @@ related:
     concepts/ceilings,
     features/proposals,
   ]
-generated_at_commit: cad6595
-last_refreshed: 2026-09-07
+generated_at_commit: d2d7f31
+last_refreshed: 2026-09-08
 ---
 
 # Workflow templates (`.hkb/workflows/`, `hkb new --from`)
@@ -89,14 +89,21 @@ Two keys are not flags and are allowed anyway — `name` and `description` (`src
 `name` is *checked, not used*: `--from` finds a workflow by its filename, so a `name:` that
 disagrees is a file somebody copied and never renamed, and it is refused
 (`src/templates.ts:267-272`). `description` is the line a person reads when choosing between
-workflows, and `hkb new` prints it back (`src/hkb.ts:676`).
+workflows, and `hkb new` prints it back (`src/hkb.ts:966`).
 
 ### The grammar is two lines long
 
-`key: value` and `key: [a, b]`. That is all of it (`src/templates.ts:245-313`). There are no block
+`key: value` and `key: [a, b]`. That is all of it (`src/templates.ts:249-334`). There are no block
 lists, no nesting, no anchors and no continuation lines. Blank lines and `#` comments are skipped
-(`src/templates.ts:243`); a value's first `:` is the separator, so `gate: is this right: yes or no?`
+(`src/templates.ts:251-252`); a value's first `:` is the separator, so `gate: is this right: yes or no?`
 holds together; a matched pair of surrounding quotes is stripped (`src/templates.ts:197-201`).
+
+One exemption, and it is this grammar meeting a shell: a **scalar** key whose value starts with
+`[ ` and ends with ` ]` is a value, not a list (`src/templates.ts:297-306`). `check: [ -f
+dist/index.js ]` is the POSIX spelling of `test -f dist/index.js`, and the generic bracket rule
+refused it with a suggested fix — `check: -f dist/index.js` — that would have filed a command
+exiting 127 on every attempt of that Job. The two forms are told apart by the spaces `[` needs in
+order to be a command at all; no list this grammar accepts is written with them.
 
 **No YAML dependency**, and the habit that rule protects is the point (`CLAUDE.md`). The nearest
 prior art is in this repository already: `.repolore/scripts/lib.mjs` parses exactly the controlled
@@ -116,12 +123,12 @@ does.
 | a key that is not a flag | named, with the list of ones that are and a pointer to `hkb --help` (`src/templates.ts:284-290`) |
 | `brief:`, `brief-file:` | the *body* is the brief; each gets its own message rather than "unknown key" (`src/templates.ts:115-121`) |
 | `board:` | which board work is filed on is the operator's answer, not the file's — a workflow that could redirect a Job would be choosing its budget and its repository too |
-| a key set twice | both values were meant; picking one silently is how a Job runs on a model nobody chose (`src/templates.ts:258`) |
-| a key with no value | absence is how a workflow says nothing about a key; an empty one is a different, unsayable thing (`src/templates.ts:291`) |
+| a key set twice | both values were meant; picking one silently is how a Job runs on a model nobody chose (`src/templates.ts:267`) |
+| a key with no value | absence is how a workflow says nothing about a key; an empty one is a different, unsayable thing (`src/templates.ts:295`) |
 | `allow-tool: []` | same reason. On the *command line* an empty list is meaningful ("no tools at all"); in a file it is indistinguishable from a line the author was halfway through |
-| a list where a scalar belongs, or a non-`true`/`false` switch | (`src/templates.ts:303-310`) |
+| a list where a scalar belongs, or a non-`true`/`false` switch | (`src/templates.ts:311-328`) — and the refusal names quoting as the other fix, because for a value whose brackets are real, stripping them is the wrong repair |
 | no frontmatter, or frontmatter never closed | (`src/templates.ts:184-193`) |
-| frontmatter with no body | a workflow with no brief is a spec nobody can run (`src/templates.ts:316-319`) |
+| frontmatter with no body | a workflow with no brief is a spec nobody can run (`src/templates.ts:335-338`) |
 | over `TEMPLATE_MAX_BYTES` (64 KB) | the body becomes a brief, and a brief is paid for on every request of every attempt — the same argument as an input's cap, and the same number. The message points at `--guide`, which is the flag for a document a whole repository shares (`src/templates.ts:64`, `src/templates.ts:232-242`) |
 
 Every refusal names its file and, where a line is at fault, its line number, and carries the fix.
@@ -156,9 +163,9 @@ works if the directory itself was never excluded.
 ## Expanded at file time, then gone
 
 `hkb new --from` reads and validates the workflow **before the board is upserted and before a name
-is settled** (`src/hkb.ts:519`), so a workflow that is not there fails naming the path it looked for
+is settled** (`src/hkb.ts:577`), so a workflow that is not there fails naming the path it looked for
 with nothing created. It then fills in every flag the command line did not set
-(`src/hkb.ts:539-548`), and the Job is created by the ordinary `hkb new` path — same validation, same
+(`src/hkb.ts:597-606`), and the Job is created by the ordinary `hkb new` path — same validation, same
 columns, same events.
 
 **Nothing downstream knows a file was involved.** The controller, the runtime and `hkb show` see a
@@ -169,8 +176,8 @@ Job with values on it. Two consequences worth stating:
    cannot disagree with the prompt.
 2. `hkb show`'s spec trace reports every templated value as coming from `job`, because it did: the
    expansion happened at file time, and `resolveSpec` (`src/spec.ts`) resolves what is on the row.
-   The workflow's name is printed by `hkb new` (`src/hkb.ts:676`) and carried in its `--json` as
-   `from` (`src/hkb.ts:671`), which is the only place the two are ever seen together.
+   The workflow's name is printed by `hkb new` (`src/hkb.ts:966`) and carried in its `--json` as
+   `from` (`src/hkb.ts:729`), which is the only place the two are ever seen together.
 
 ### Precedence: the flag you typed wins
 
@@ -183,9 +190,9 @@ appending to it**. Appending would make a workflow's grant impossible to *narrow
 only ever widen the surface its template chose, which is the wrong direction for a guard.
 
 The workflow's own `name:` becomes the Job's name when none is given
-(`src/hkb.ts:532`), so `hkb new --from draft-wiki-page` is a whole command; a name typed on the line
+(`src/hkb.ts:797`), so `hkb new --from draft-wiki-page` is a whole command; a name typed on the line
 still wins, being the more specific value. `--brief` likewise overrides the body
-(`src/hkb.ts:556-561`).
+(`src/hkb.ts:614-619`).
 
 ### Placeholders, and the hole that had to be closed explicitly
 
@@ -198,8 +205,8 @@ and the argument in its docblock).
 existed still means what it says. That opt-in is exactly wrong for a workflow, whose author opted in
 by writing `{{page}}` — without a check, `hkb new --from` with no `--input` would file a Job with the
 literal text `{{page}}` in its instructions and nothing would ever say so. So `hkb new` asks first
-and refuses, naming the placeholders and the flags that supply them (`src/hkb.ts:600-609`,
-`placeholders` at `src/templates.ts:332`).
+and refuses, naming the placeholders and the flags that supply them (`src/hkb.ts:658-667`,
+`placeholders` at `src/templates.ts:347`).
 
 ## The dogfood
 
@@ -237,4 +244,4 @@ having spent $1.56 and produced nothing. A workflow is where that lesson can be 
   listing the directory.
 - **One workflow per Job.** `--from` is not repeatable, deliberately: two workflows would need a rule
   for which one wins per key, and "the flag you typed wins over the file" is the only precedence
-  worth asking anyone to hold (`src/hkb.ts:460-464`).
+  worth asking anyone to hold (`src/hkb.ts:518-522`).

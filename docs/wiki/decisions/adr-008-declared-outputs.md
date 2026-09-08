@@ -11,11 +11,11 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/brief.ts
-    sha: 21211336a1311d7caa925c08c93c48eca3a5a5fa
+    sha: 7e993bae2f97e12c77c6cc5e426aeab2a2573b20
   - path: src/controller.ts
-    sha: 6ae87908660b007837d6f366cf4ddd64f3546d3b
+    sha: 4f641c68ffb6006f4b8c393723bfdc2f0edf9fbd
   - path: src/worktree.ts
-    sha: c0875d3a1d3f1d0cbee2737ab8d5d48bd073f3b0
+    sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
   - path: prisma/schema.prisma
     sha: 34921e6803578d6831938ada63d477d55a95eb6a
   - path: src/results.ts
@@ -25,8 +25,8 @@ covers:
   - path: src/inputs.ts
     sha: ffd76fce7689fe1c9a1dc0db3756cdf343d2b623
 related: [decisions/adr-007-workload-scheduler, architecture/job-kind, architecture/the-loop]
-generated_at_commit: cad6595
-last_refreshed: 2026-09-07
+generated_at_commit: d2d7f31
+last_refreshed: 2026-09-08
 ---
 
 # ADR-008: A Job declares its outputs, and the board gets them out of the sandbox

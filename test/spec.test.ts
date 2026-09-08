@@ -135,3 +135,31 @@ test('a plugin grant resolves job > board > nothing, and an empty list is a valu
   assert.deepEqual(resolveSpec({}, {}).pluginPaths, { value: null, from: 'built-in' },
     'and nothing is granted by default, including on hkb\'s own board');
 });
+
+// ---------------------------------------------------------------- the check has three states
+//
+// The one string field where the EMPTY STRING is a value. Without it a board that sets
+// `defaultCheck` owns every Job on it: `pick` reads a null column as *unset*, so a cleared value
+// falls straight back through to the board — and the schema's own "a Job whose brief is an
+// investigation has no suite to pass" could not be honoured at all.
+
+test("check: a Job's `''` means NO check, and does not fall through to the board", () => {
+  const board = { defaultCheck: 'npm test' };
+  assert.deepEqual(resolveSpec({ check: '' }, board).check, { value: '', from: 'job' });
+  assert.deepEqual(resolveSpec({ check: '   ' }, board).check, { value: '', from: 'job' },
+    'whitespace normalises INTO the opt-out — a command of one space is not a command');
+  // And the two states either side of it are unchanged.
+  assert.deepEqual(resolveSpec({ check: null }, board).check, { value: 'npm test', from: 'board' });
+  assert.deepEqual(resolveSpec({ check: 'make verify' }, board).check, { value: 'make verify', from: 'job' });
+  assert.deepEqual(resolveSpec({}, {}).check, { value: null, from: 'built-in' },
+    'and at the shipped defaults there is nothing to run');
+});
+
+test('check: it is the same shape `allowedTools: []` already uses, for the same reason', () => {
+  // An empty value is a decision; only a null is silence. `guide` and `base` are deliberately NOT
+  // like this — "no guide" IS the absence, and "branch from no base" is not a thing.
+  assert.deepEqual(resolveSpec({ allowedTools: [] }, { defaultAllowedTools: ['Read'] }).allowedTools,
+    { value: [], from: 'job' });
+  assert.deepEqual(resolveSpec({ guide: '' }, { defaultGuide: 'CLAUDE.md' }).guide,
+    { value: 'CLAUDE.md', from: 'board' }, 'a blank guide is still an absence, and still inherits');
+});

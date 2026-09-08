@@ -7,13 +7,13 @@ audience: [dev]
 read_when: "chaining Jobs, filing work against an integration branch, or about to give `base` the ability to name another Job"
 covers:
   - path: src/worktree.ts
-    sha: c0875d3a1d3f1d0cbee2737ab8d5d48bd073f3b0
+    sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
   - path: src/spec.ts
-    sha: d918b65379babd9235d294239eaa26322bc3eb2f
+    sha: d3fba5cc6bb9a1cebeea496bf445f4165c3cecbc
   - path: src/controller.ts
-    sha: 6ae87908660b007837d6f366cf4ddd64f3546d3b
+    sha: 4f641c68ffb6006f4b8c393723bfdc2f0edf9fbd
   - path: src/rebase.ts
-    sha: 761eed75ccacaf8efa68e9194cd7201056d01ccf
+    sha: 5b0df395ad3a5c5a8b2bad44a782d40e92d40d28
   - path: prisma/schema.prisma
     sha: 34921e6803578d6831938ada63d477d55a95eb6a
 related:
@@ -24,8 +24,8 @@ related:
     architecture/job-kind,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: cad6595
-last_refreshed: 2026-09-07
+generated_at_commit: d2d7f31
+last_refreshed: 2026-09-08
 ---
 
 # The checkout base (`--base`)

@@ -7,15 +7,15 @@ audience: [dev]
 read_when: "adding a flag, adding a verb that joins positionals, or wondering why a value arrived as one word"
 covers:
   - path: src/hkb.ts
-    sha: ce35e824d6a97dbc5fb88846f81332828dfae3b1
+    sha: 45c571d3e74827c4648f2b13f16a5192863fe727
 related:
   [
     architecture/transitions,
     features/workflow-templates,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: cad6595
-last_refreshed: 2026-09-07
+generated_at_commit: d2d7f31
+last_refreshed: 2026-09-08
 ---
 
 # What `parseArgs` does quietly, and the two bugs it shipped
@@ -132,12 +132,39 @@ still refused, but only a flag that consumed something can have spilled it, and 
 write `--json "…"` is advice that produces a different error. So the flag is named only when it took
 a value, and never across an intervening boolean.
 
-## Why both of these are the same bug
+## 3. A DECLARED flag with no value is also a boolean
 
-Neither is a parser fault. Both are hkb accepting something malformed and *writing it down* rather
-than saying so — which is the failure the fifth value names outright: *never a silent failure*. The
-board is a record, and a record that quietly contains what somebody did not type is worse than a
-board that refused them.
+Trap 1 is about a flag nobody declared. This is the same shape one turn of the screw further in: a
+flag that **is** in the options table as `type: 'string'`, given with nothing after it, still comes
+back as the boolean `true` under `strict: false`. `unknownFlags` cannot see it — the flag is
+perfectly well known — and neither can the leftover check, because a boolean swallows nothing.
+
+What makes it dangerous is the idiom that reads the value. `String(values.check).trim()` turns
+`true` into the **word** `true`, and a non-empty guard then waves it through:
+
+```
+$ hkb new "investigate the parser" --brief "…" --check
+#12 investigate the parser  [pending]  on hkb
+  must pass     true
+```
+
+`true` is a real shell command that exists and exits 0. Every attempt of that Job then "passed" a
+check that verified nothing — a guard shipped inert while looking present, which is the class of
+defect this codebase keeps rediscovering (`CLAUDE.md`: *a guard is not proven by a test that asks
+whether it allows*). It reached three verbs at once, because all three shared the idiom:
+`hkb new`, `hkb boards set` (via `setString`) and `hkb job set` (via `str`).
+
+**The rule this leaves:** never `String(values.x)`. Test the type — `typeof values.x === 'string'`
+— which is what `--gate` had always done one line away from the bug, and refuse by name. `given`
+(`src/hkb.ts`) is that test in one place, and the flags that were reading their value with
+`String(...)` now go through it.
+
+## Why all three of these are the same bug
+
+None is a parser fault. All three are hkb accepting something malformed and *writing it down*
+rather than saying so — which is the failure the fifth value names outright: *never a silent
+failure*. The board is a record, and a record that quietly contains what somebody did not type is
+worse than a board that refused them.
 
 The pattern to watch for when adding an argument: ask what happens when the value is **absent**,
 when it is **unquoted**, and when the flag is **misspelled**. Under `strict: false` all three

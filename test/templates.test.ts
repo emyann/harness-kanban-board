@@ -145,6 +145,25 @@ test('a scalar where a list belongs is one item; a list where a scalar belongs i
   assert.match(why(() => readTemplate(many, 'd')), /`model` takes one value, not a list/);
 });
 
+test('a shell `[ … ]` test is a command, not a list — the brackets are part of the value', () => {
+  // `check: [ -f dist/index.js ]` is the POSIX spelling of `test -f dist/index.js`. The generic
+  // bracket rule read it as a list and refused it with a suggested fix — `check: -f dist/index.js`
+  // — that would have filed a command exiting 127 on every attempt of that Job.
+  const t = repo({ [wf('d.md')]: '---\nname: d\ncheck: [ -f dist/index.js ]\n---\nbody\n' });
+  assert.equal(readTemplate(t, 'd').spec.check, '[ -f dist/index.js ]');
+
+  // And an actual list mistake is still refused — with quoting named as the other fix, because for
+  // a value whose brackets are real, stripping them is the wrong repair.
+  const many = repo({ [wf('d.md')]: '---\nname: d\ncheck: [a, b]\n---\nbody\n' });
+  const said = why(() => readTemplate(many, 'd'));
+  assert.match(said, /`check` takes one value, not a list/);
+  assert.match(said, /quote it: `check: "\[a, b\]"`/);
+
+  // A key that really does take a list is untouched by the exemption.
+  const list = repo({ [wf('d.md')]: '---\nname: d\nallow-tool: [Read, Grep]\n---\nbody\n' });
+  assert.deepEqual(readTemplate(list, 'd').spec['allow-tool'], ['Read', 'Grep']);
+});
+
 test('a switch is true or false and nothing else', () => {
   const yes = repo({ [wf('d.md')]: '---\nname: d\ntriage: true\npropose: false\n---\nbody\n' });
   assert.deepEqual(readTemplate(yes, 'd').spec, { triage: true, propose: false });

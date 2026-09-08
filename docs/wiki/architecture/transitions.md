@@ -11,7 +11,7 @@ covers:
   - path: src/job-spec.ts
     sha: ae8c0550120f393b15fcd48c7061240aac55031a
   - path: src/hkb.ts
-    sha: ce35e824d6a97dbc5fb88846f81332828dfae3b1
+    sha: 45c571d3e74827c4648f2b13f16a5192863fe727
   - path: prisma/schema.prisma
     sha: 34921e6803578d6831938ada63d477d55a95eb6a
 related:
@@ -21,8 +21,8 @@ related:
     decisions/adr-010-the-human-gate,
     architecture/the-board,
   ]
-generated_at_commit: cad6595
-last_refreshed: 2026-09-07
+generated_at_commit: d2d7f31
+last_refreshed: 2026-09-08
 ---
 
 # Transitions — the human half of a Job's lifecycle

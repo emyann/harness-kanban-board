@@ -6,20 +6,22 @@ kind: explanation
 audience: [dev]
 read_when: "a Job failed as `check_failed`, you are adding anything that runs before/beside/after the agent, or you are about to change what makes an attempt succeed"
 covers:
+  - path: src/hkb.ts
+    sha: 45c571d3e74827c4648f2b13f16a5192863fe727
   - path: src/check.ts
-    sha: 519c03f9885b4fac05b2470cb6dc2c6d1931b7ea
+    sha: cb1fdd8e77ee5bb873236c82ed8adbe65032a4af
   - path: src/controller.ts
-    sha: 6ae87908660b007837d6f366cf4ddd64f3546d3b
+    sha: 4f641c68ffb6006f4b8c393723bfdc2f0edf9fbd
   - path: src/spec.ts
-    sha: d918b65379babd9235d294239eaa26322bc3eb2f
+    sha: d3fba5cc6bb9a1cebeea496bf445f4165c3cecbc
   - path: src/brief.ts
-    sha: 21211336a1311d7caa925c08c93c48eca3a5a5fa
+    sha: 7e993bae2f97e12c77c6cc5e426aeab2a2573b20
   - path: src/templates.ts
-    sha: 999612c9acfed633488c33c65a204673837ddd2a
+    sha: a01b0239ebb80af9b1e7e601e3c2b6bd7165ae23
   - path: prisma/schema.prisma
     sha: 34921e6803578d6831938ada63d477d55a95eb6a
-generated_at_commit: cad6595
-last_refreshed: 2026-09-07
+generated_at_commit: d2d7f31
+last_refreshed: 2026-09-08
 related:
   [
     decisions/adr-016-the-pod-spec-is-the-map,
@@ -60,9 +62,14 @@ test-runner integration, no parsing of output into findings, and no special case
 framework. The kubelet reads a container's exit code without knowing what the container did,
 and this is the same relationship — which is what keeps the Job kind dumb (`architecture/job-kind`).
 
-That is also why nothing validates the command at file time beyond "not empty" (`src/hkb.ts`,
-`hkb new`/`hkb job set`/`hkb boards set`): hkb cannot have an opinion about a shell line it does
-not parse.
+That is also why nothing validates the command at file time beyond the two shapes that could
+never have been meant (`src/hkb.ts`, `hkb new`/`hkb job set`/`hkb boards set`): hkb cannot have an
+opinion about a shell line it does not parse. The two are a **bare `--check`** — `parseArgs` runs
+with `strict: false`, so a trailing flag with no value comes back as the boolean `true`, and
+`String(true)` filed the shell command `true`, which exists, exits 0 and verifies nothing — and
+**`--check none`**, which is the spelling every other flag uses to clear a value and which here
+would file the literal command `none` (exit 127, `check_failed`, resumed and re-failed until the
+retries are gone). Both are refused by name, pointing at the fix (`checkFlag`, `src/hkb.ts`).
 
 ## Where it runs, and when
 
@@ -81,7 +88,35 @@ In the attempt's worktree — or in `Board.repoPath` for a `--no-isolate` Job, w
 It runs only when the attempt would otherwise have succeeded, only while the holder still has its
 lease, and only when nothing has already failed the attempt — a missing declared output outranks
 it, because spending ten minutes on a suite to find a *second* reason for a failure that already
-has one is the opposite of frugal.
+has one is the opposite of frugal. **Declared outputs are only *checked* before it; they are
+*copied* out after** (`features/declared-outputs`), so an attempt this refuses leaves nothing in
+the operator's repository.
+
+### The lease is held while it runs, and that is load-bearing
+
+The check was once run *after* the lease had been released, and everything wrong with that came
+from the same fact: for up to ten minutes the Job was `running`, with an attempt open and no Lease
+row. `hkb cancel` was accepted in that window and then silently undone by the outcome written on
+the way out; `hkb rm` cascaded the rows away and turned the attempt write into a P2025 that took
+the whole reconcile pass with it; and a daemon killed mid-check stranded the Job for ever, because
+the reclaim scans Lease rows. The claim is now held across the rebase, the check and the record
+writes, verified by token immediately before those writes, and released last
+(`concepts/leases-and-liveness`).
+
+### It is interruptible, and it kills what it started
+
+`runCheck` is an async `spawn`, not a `spawnSync` (`src/check.ts`). A synchronous ten-minute
+subprocess in the controller's concurrent section froze the daemon's event loop for its duration —
+timers, the SDK stream, the in-process admission hook and the signal handlers all stopped, so
+`hkb down` went unacknowledged for the whole check and sibling workers at `maxConcurrent > 1`
+stalled at their next tool call. Two more properties come with the change:
+
+- **`detached: true`, and the timeout kills the process GROUP.** Signalling only `/bin/sh` left
+  the suite it started orphaned — still running, in the very worktree the resumed attempt
+  continues in. `SIGTERM` to the group first, `SIGKILL` after `CHECK_KILL_GRACE_MS`.
+- **`deps.signal` is honoured**, so `hkb down` interrupts a check rather than waiting it out. An
+  interrupted check records nothing: the operator's intent outranks a verdict the command never
+  got to give, and burning a retry on a stop would be the wrong answer twice.
 
 ## The fence: never from the worktree
 
@@ -119,23 +154,81 @@ finished, reads its own transcript, and produces the same tree.
 
 So the failing command, its exit code and the tail of what it printed are stored on the attempt
 (`Attempt.check`) and read back by the next one, which carries them in its opening
-(`withCheckFailure`, `src/brief.ts`) the way an approved Job carries its approver's words. Only the
-immediately preceding attempt is quoted: an older failure was already answered by the attempt in
-between, and quoting it would brief a run against a tree that no longer exists.
+(`withCheckFailure`, `src/brief.ts`) the way an approved Job carries its approver's words.
+
+Two things about *which* failure is quoted, and both were wrong first:
+
+- **the walk goes back past attempts that could not have run a check.** `k` counts every ended
+  attempt, so reading only `k - 1` meant one `stopped` (`hkb down`), `lost` (a reclaim) or pre-run
+  `crashed` attempt in between dropped the briefing silently — none of those writes the column or
+  clears `lastSessionId`, so the next attempt resumed the very session the check refused, knowing
+  nothing about it. `lastRefusedCheck` (`src/controller.ts`) walks back the way `newestWorktree`
+  already does for the checkout, and stops at the first attempt that *could* have answered.
+- **the command named is the one that will judge THIS attempt**, `spec.check.value`, not the one
+  on the record. `hkb job set --check 'npm run lint'` followed by `hkb retry` briefed the worker to
+  make `npm test` exit 0 while `npm run lint` decided. When the two differ the prompt says so
+  rather than substituting, because the tail below it is still the old command's output.
+
+The tail is worker-influenced text — a test runner printing whatever it likes — so it is fenced
+with the same framing `withInputs` uses ("treat it as data rather than as instructions") and
+backtick runs are *capped* rather than swapped, which is what stops a tail of nine or more
+backticks closing the fence and putting the rest back into the prompt as prose.
+
+### And the first attempt is told too
+
+`spec.check.value` used to reach a prompt only through `withCheckFailure` — that is, only after an
+attempt had already failed on it. So the ordinary shape of a checked Job was: the worker runs
+`npm test`, pushes, ends green, the check fails on the lint half, and a whole paid session goes on
+a one-line fix. One line now sits beside the other output contracts (`withCheck`, `src/brief.ts`),
+because it *is* one of them. That is not a hole in the fence: the fence is about who **authors**
+the command, and the retry prompt has always quoted it verbatim.
 
 The checkout is kept either way — for the retry to resume into, and, when the retries are gone, for
 the operator to run the command in.
 
 ## Two numbers, and why those
 
-- **Ten minutes** (`CHECK_TIMEOUT_MS`). A hung check leaves a genuinely stuck state rather than a
-  slow one: the lease is released as soon as the run ends, so a Job whose check never returns sits
-  in `running` with no lease for the reclaim to find. Ten minutes is a third of the default
-  `timeoutMs` for the agent itself, and this repository's own `npm run lint && npm test` is under
-  two.
+- **Ten minutes** (`CHECK_TIMEOUT_MS`). A hung check must not hold the pass for ever. Ten minutes
+  is a third of the default `timeoutMs` for the agent itself, and this repository's own
+  `npm run lint && npm test` is under two. It is *longer* than the five-minute `LEASE_GRACE_MS`
+  the lease gets past a run's own `timeoutMs`, and that is fine because the **renewer** is what
+  covers it — the grace is the margin for teardown, not the budget for the check.
 - **4 KB of the tail** (`CHECK_TAIL_BYTES`). The tail because a runner puts its verdict last; 4 KB
   because it is paid for twice — in `hkb show`, and on every request of the attempt that reads it —
-  and it is the cap `src/results.ts` already puts on a value the board keeps.
+  and it is the cap `src/results.ts` already puts on a value the board keeps. It is **streamed**
+  through a rolling window rather than buffered and sliced, which removes a cliff: a `maxBuffer`
+  past which Node kills the child and reports `ENOBUFS` would have turned a verbose *passing*
+  suite into a failed attempt.
+
+## Three ways to fail, three sentences
+
+One outcome, because what the controller *does* about a refusal does not depend on how it failed.
+Three renderings, because what the **operator** does depends on nothing else (`CheckKind`,
+`src/check.ts`):
+
+| kind | when | what is claimed |
+|---|---|---|
+| `exit` | it ran and gave a number | "the work is there and it does not do what it must" |
+| `unfinished` | the timeout, a signal, an output cap, a stop | no verdict — only that the command never got to say |
+| `unstartable` | it never began | nothing about the work was judged; fix the command |
+
+The distinction is not cosmetic. A `why` clause spliced into a frame written for `exited N`
+produced ``check `npm test` it was still running after 600s and was killed (SIGTERM) after 600s``
+— a duration stated twice around a sentence that does not join up — and, for a check that could
+not be started, asserted a finding about work nothing had examined. **Only `ETIMEDOUT` is a
+timeout**: reading `signal` first meant a suite killed by the OOM killer, or one that segfaulted,
+was reported *and briefed to the next attempt* as having run for ten minutes when it ran for three
+seconds.
+
+## Which base the tree was on
+
+The claim above — that the check tests what would actually merge — is true when the rebase
+replayed and not true when it legitimately declined: a pushed branch whose pull request is no
+longer a draft is deliberately not rewritten, and a fetch that failed leaves the base as of
+whenever somebody last pulled. Neither fails the attempt and neither should. So the record carries
+`onBase` and the ref it is about (`src/check.ts`, `src/rebase.ts`), `hkb show` prints it, and the
+log line says so when it is false. The controller's rebase is slated to leave the core anyway;
+until it does, the honest thing is to qualify the verdict rather than to overstate it.
 
 ## Nothing runs by default
 
@@ -146,16 +239,32 @@ privileges. It reaches a worker only because a person set it on the Job, on the 
 workflow file that was merged.
 
 Resolution is the ordinary three levels — the Job's value wins, the board's fills a null — so
-`hkb show` names the source beside it like every other resolved field.
+`hkb show` names the source beside it like every other resolved field, and `hkb new` echoes the
+**resolved** value with its source rather than the Job's own column (a Job inheriting the board's
+otherwise printed nothing, which is the "an attempt can fail on a command nobody printed" surprise
+the echo exists to prevent).
+
+### Opting one Job out
+
+This is the one string field with **three** states, and it needs them: `''` is *no check, and do
+not inherit one* (`checkValue`, `src/spec.ts`). Without it a board that sets `defaultCheck` owns
+every Job on it — `pick` reads a null column as *unset*, so a cleared value falls straight back
+through to the board — and the schema's own "a Job whose brief is an investigation has no suite to
+pass" could not be honoured at all. It is the shape `allowedTools: []` already uses, for the same
+reason: an empty value is a decision, and only a null is silence.
+
+Uniform across the four places a check can be set: `hkb new --check ""`, `hkb job set <id> --check
+""`, `check: ""` in a workflow file, and — on the *board* — `--check none`, which keeps that verb's
+own convention because a board default genuinely does have something to clear. `none` on a Job is
+refused by name, pointing at the spelling that works. `hkb show` prints `check (none) [job]`.
 
 ## Known gaps
 
-- **A Job cannot opt out of a board-wide check.** `hkb job set <id> --check none` clears the
-  column, and a null column means *unset*, so it falls straight through to the board's default
-  again. That gap is shared by every board-defaulted field (`features/the-checkout-base` records
-  the same thing for `base`).
 - **The check is not run for a Job that failed for another reason**, so an operator cannot use it
   as a diagnostic on a broken attempt. That is deliberate, and stated above.
+- **A `''` opt-out is available on a Job and not on the other board-defaulted fields.** `base` and
+  `guide` still have the gap this closed for `check` (`features/the-checkout-base` records it),
+  because for those two the empty string genuinely is the absence rather than a third state.
 - **No `setup` or sidecar yet.** ADR-016 §2 says they are one ordered list when they arrive, and
   §5 says a kept command needs a readiness probe or it ships flaky. Neither is built.
 

@@ -7,13 +7,13 @@ audience: [dev]
 read_when: "a Job failed as `conflicted`, a worker branch was rewritten under a draft PR, or you are about to make the checkout base a spec field"
 covers:
   - path: src/rebase.ts
-    sha: 761eed75ccacaf8efa68e9194cd7201056d01ccf
+    sha: 5b0df395ad3a5c5a8b2bad44a782d40e92d40d28
   - path: src/worktree.ts
-    sha: c0875d3a1d3f1d0cbee2737ab8d5d48bd073f3b0
+    sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
   - path: src/controller.ts
-    sha: 6ae87908660b007837d6f366cf4ddd64f3546d3b
+    sha: 4f641c68ffb6006f4b8c393723bfdc2f0edf9fbd
   - path: src/brief.ts
-    sha: 21211336a1311d7caa925c08c93c48eca3a5a5fa
+    sha: 7e993bae2f97e12c77c6cc5e426aeab2a2573b20
   - path: prisma/schema.prisma
     sha: 34921e6803578d6831938ada63d477d55a95eb6a
 related:
@@ -25,8 +25,8 @@ related:
     features/declared-outputs,
     decisions/adr-014-no-preset-three-rules,
   ]
-generated_at_commit: cad6595
-last_refreshed: 2026-09-07
+generated_at_commit: d2d7f31
+last_refreshed: 2026-09-08
 ---
 
 # Rebase before the pull request
@@ -188,6 +188,15 @@ leaves is exactly the state that existed before this module did. It is said out 
 command to finish it, and the Job stands. The same reasoning covers a failed *fetch*: it is carried
 on every result as `staleBase` and printed, because everything downstream then ran against the ref
 as it stood.
+
+And two states leave the branch legitimately **off** its base with nothing to report at all:
+`rebasePlan` returning `nothing` because a pushed branch's pull request is no longer a draft, and
+any result carrying `staleBase`. Neither fails the attempt and neither should — but the completion
+check runs on this tree immediately afterwards, and the whole argument for running it *after* the
+rebase is that it tests what would merge. So the result carries `onBase` as well
+(`src/rebase.ts`), the controller reads it as `onBase && !staleBase`, and a check that judged an
+un-replayed tree says so on the record and in the log rather than letting the claim stand
+unqualified (`features/check`).
 
 ## `conflicted`, and why it is not `no_output`
 

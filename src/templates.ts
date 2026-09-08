@@ -294,7 +294,16 @@ export function readTemplate(repoPath: string | null, name: string): Template {
     }
     if (!rest) refuse(`${file}, line ${i + 2}: \`${key}\` has no value. Delete the line rather than leaving it blank — an empty key is not the same as an absent one.`);
 
-    const isList = rest.startsWith('[') && rest.endsWith(']');
+    // A list is `[a, b]` — EXCEPT where a scalar key's value is a shell `[ … ]` test.
+    //
+    // `check: [ -f dist/index.js ]` is the POSIX spelling of `test -f dist/index.js`, and the
+    // generic bracket rule read it as a list and refused it with a suggested fix —
+    // `check: -f dist/index.js` — that would have filed a command exiting 127. The two forms are
+    // told apart by the spaces `[` requires to be a command at all: `[a, b]` is a list, `[ x ]` is
+    // an argument list ending in `]`, and no list this grammar accepts is written with both.
+    // Narrowed to keys that take one value, so nothing about an actual list changes.
+    const shellTest = kind !== 'list' && rest.startsWith('[ ') && rest.endsWith(' ]');
+    const isList = rest.startsWith('[') && rest.endsWith(']') && !shellTest;
     const items = isList
       ? rest.slice(1, -1).split(',').map((s) => unquote(s)).filter(Boolean)
       : [unquote(rest)];
@@ -305,7 +314,13 @@ export function readTemplate(repoPath: string | null, name: string): Template {
       if (!items.length) refuse(`${file}, line ${i + 2}: \`${key}: []\` is an empty list. Delete the line — the absence of a key is how a workflow says nothing about it.`);
       spec[key] = items;
     } else if (isList) {
-      refuse(`${file}, line ${i + 2}: \`${key}\` takes one value, not a list — \`${key}: ${items[0] ?? 'value'}\`.`);
+      // The quoted form is named as well as the bare one, because for a shell line the bare
+      // suggestion is wrong: `check: [a,b]` really is a list mistake, but a value that only LOOKS
+      // like one is fixed by quoting it, not by stripping the brackets that are part of it.
+      refuse(
+        `${file}, line ${i + 2}: \`${key}\` takes one value, not a list — \`${key}: ${items[0] ?? 'value'}\`.`
+        + ` If the brackets are part of the value, quote it: \`${key}: "${rest}"\`.`,
+      );
     } else if (kind === 'boolean') {
       const v = items[0].toLowerCase();
       if (v !== 'true' && v !== 'false') {

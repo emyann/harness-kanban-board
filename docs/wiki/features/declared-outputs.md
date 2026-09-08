@@ -11,19 +11,19 @@ covers:
   - path: src/artifacts.ts
     sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
   - path: src/worktree.ts
-    sha: c0875d3a1d3f1d0cbee2737ab8d5d48bd073f3b0
+    sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
   - path: src/controller.ts
-    sha: 6ae87908660b007837d6f366cf4ddd64f3546d3b
+    sha: 4f641c68ffb6006f4b8c393723bfdc2f0edf9fbd
   - path: src/brief.ts
-    sha: 21211336a1311d7caa925c08c93c48eca3a5a5fa
+    sha: 7e993bae2f97e12c77c6cc5e426aeab2a2573b20
   - path: src/hkb.ts
-    sha: ce35e824d6a97dbc5fb88846f81332828dfae3b1
+    sha: 45c571d3e74827c4648f2b13f16a5192863fe727
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: prisma/schema.prisma
     sha: 34921e6803578d6831938ada63d477d55a95eb6a
-generated_at_commit: cad6595
-last_refreshed: 2026-09-07
+generated_at_commit: d2d7f31
+last_refreshed: 2026-09-08
 related: [decisions/adr-008-declared-outputs, decisions/adr-011-proposals-not-board-access, features/proposals, features/worktree-includes, architecture/job-kind, architecture/the-board]
 ---
 
@@ -39,15 +39,15 @@ related: [decisions/adr-008-declared-outputs, decisions/adr-011-proposals-not-bo
 ## The rule, and what it costs
 
 The declaration is the contract: a declared output that is not produced **fails the
-attempt** (`prisma/schema.prisma:278-283`, `src/controller.ts:1151-1226`). That single rule
+attempt** (`prisma/schema.prisma:278-283`, `src/controller.ts:1223-1314`). That single rule
 is what the three mechanisms exist to serve, and it is what makes `succeeded` mean more
 than "a session ended" — the collection block runs after `nextPhase` has already decided
-the run went fine, and can still overturn it (`src/controller.ts:1346-1347`).
+the run went fine, and can still overturn it (`src/controller.ts:1496-1497`).
 
 What it buys is twofold. The sandbox becomes disposable: once the declared outputs are
 out, whatever is left in the checkout is by definition undeclared, which is the one case
 where a dirty worktree is not evidence of work worth keeping and `removeWorktree` may take
-it (`src/controller.ts:1480-1502`). And absence becomes legible — a Job that produced
+it (`src/controller.ts:1643-1665`). And absence becomes legible — a Job that produced
 nothing is a fact the board can state rather than a silence an operator has to notice.
 
 What it costs is stated where the cost lands: filing a Job now carries a decision it did
@@ -61,7 +61,7 @@ They are not a list of options. They are three points on a range whose axis is *
 the thing and how big it is*:
 
 - **Export** — a repository-relative path the run wrote inside its checkout, copied out
-  into `Board.repoPath` before the worktree is torn down (`src/worktree.ts:519-553`). The
+  into `Board.repoPath` before the worktree is torn down (`src/worktree.ts:525-570`). The
   repository keeps it, which means git keeps it, which means it will be committed.
 - **Result** — a small named value the board keeps on the attempt row as a JSON object
   (`prisma/schema.prisma:525`). Capped per value (below).
@@ -76,7 +76,7 @@ with no business in a commit at all — and an artifact fills it from the *resul
 
 The rejected alternative is worth knowing because it reads so much cheaper than it is:
 give `exports` a second destination. The copy already takes one (`exportOutputs(from, to,
-declared)`, `src/worktree.ts:519`), so it looks like a call-site change. It is the wrong
+declared)`, `src/worktree.ts:525`), so it looks like a call-site change. It is the wrong
 shape. An output that must not be committed should never be *inside* the checkout in the
 first place, where it is either committed by accident or shows up as untracked noise in
 every `git status` a reviewer runs — the argument `resultsDir` already makes for results
@@ -100,15 +100,15 @@ the operator is told in the same sentence where it belonged (`src/results.ts:138
 oversize rather than silently as missing (`src/results.ts:144-147`).
 
 An artifact has no cap and the prompt says so out loud — leaving it implicit would invite
-a worker to summarise something it was asked to hand over whole (`src/brief.ts:146-167`).
+a worker to summarise something it was asked to hand over whole (`src/brief.ts:148-169`).
 
 ## The refusals, and when they fire
 
 All three names are checked at **declaration time**, in `hkb new`, before any worktree
-exists (`src/hkb.ts:512-522`). An illegal request should never become state, and finding
+exists (`src/hkb.ts:570-580`). An illegal request should never become state, and finding
 the fault at file time costs nothing while finding it at collection time costs a whole
 run. The export check runs a second time at copy time, because a row can arrive by routes
-other than the CLI (`src/worktree.ts:526`).
+other than the CLI (`src/worktree.ts:537`).
 
 The three fences differ because the three names name different kinds of place:
 
@@ -137,18 +137,28 @@ The three fences differ because the three names name different kinds of place:
 
 Before the run, the controller builds a path per declared name and creates both collection
 directories — always, even when nothing was declared, because a run may volunteer
-something (`src/controller.ts:900-923`). Those paths go into the prompt as **absolute**
+something (`src/controller.ts:946-969`). Those paths go into the prompt as **absolute**
 paths, and the worker is told plainly that they are outside its checkout and will not
-appear in its diff (`src/brief.ts:150-199`, `src/results.ts:82-86`,
+appear in its diff (`src/brief.ts:152-201`, `src/results.ts:82-86`,
 `src/artifacts.ts:91-95`). Nothing is parsed out of a transcript and nothing arrives by
 tool call: the worker writes files, the controller reads the directory.
 
 At the end of a run, all three are collected under the same two gates — the attempt
-otherwise succeeded, and the holder kept its lease to the end (`src/controller.ts:1160-1166`,
+otherwise succeeded, and the holder kept its lease to the end (`src/controller.ts:1228-1234`,
 `:986`, `:1012`). A crashed or capped attempt has not finished the work, so half its
 outputs being absent describes the stop it already reported rather than a second finding.
 Exports resolve in two passes — plan everything, then copy — so a shortfall never leaves
-half a failed run's output mixed into the repository (`src/worktree.ts:514-551`).
+half a failed run's output mixed into the repository (`src/worktree.ts:520-570`).
+
+**And the two passes are split across the completion check**, which is where that same rule
+had a hole in it. Asking whether the declared paths are *there* happens early
+(`exportOutputs(..., { copy: false })`, `src/controller.ts:1239-1259`), because a missing
+declared output is the cheaper cause and has to keep outranking a check that would spend ten
+minutes finding a second one. **Copying** them into `Board.repoPath` happens after the check
+has passed (`src/controller.ts:1443-1461`) — it used to run about 150 lines earlier, so an
+attempt the check went on to *refuse* had already written its files into the operator's
+repository, which is exactly what this rule forbids one step out (`features/check`). Nothing
+is lost by waiting: a refused check keeps its checkout, and the files are still in it.
 
 Then the honest asymmetry. A result's **value is read back** — `readFileSync`, trimmed,
 onto the row (`src/results.ts:139`). An artifact's is not: `collectArtifacts` stats,
@@ -159,15 +169,15 @@ file stays where the worker put it.
 
 That asymmetry propagates to lifetime. The results directory is removed unconditionally
 when the attempt ends, success or failure, because the values are durable by being on the
-row rather than by the file surviving (`src/controller.ts:1201-1203`,
+row rather than by the file surviving (`src/controller.ts:1283-1285`,
 `src/results.ts:152-155`). The artifacts directory is removed **only if it is empty** —
 `rmdir` refusing a non-empty directory is exactly the test that needs making — because an
 artifact's value *is* the file, so nothing else holds it (`src/artifacts.ts:177-189`,
-`src/controller.ts:1223-1226`). Nothing removes a non-empty one at all, which is why the
+`src/controller.ts:1305-1308`). Nothing removes a non-empty one at all, which is why the
 size is walked and recorded: it is the only warning an operator gets that a board is
 filling up (`src/artifacts.ts:152-175`), and `hkb show` prints both the sizes and the
 directory, since an artifact is the one output whose location a human has to be told
-(`src/hkb.ts:801-809`).
+(`src/hkb.ts:859-867`).
 
 Both collection directories live under the board's own directory —
 `boardDir()/results/<jobId>-<k>` and `boardDir()/artifacts/<jobId>-<k>`
@@ -193,25 +203,25 @@ Two different things get called "produced nothing", and they are worth keeping a
 
 **A declared output that did not arrive** ends the attempt as `no_output`, not resumable,
 with the shortfall message as `lastError` and as the attempt's `reason`
-(`src/controller.ts:1346-1347`, `:1099`). It outranks the gate: a run that did not produce
-what it promised has nothing worth approving (`src/controller.ts:1335-1345`). Only the
+(`src/controller.ts:1496-1497`, `:1099`). It outranks the gate: a run that did not produce
+what it promised has nothing worth approving (`src/controller.ts:1485-1495`). Only the
 first cause found is reported — export shortfall, then result, then artifact — because two
 concatenated shortfalls read worse than one and mean the same thing
-(`src/controller.ts:1190-1192`, `:1016-1018`). The messages are written for the person who
+(`src/controller.ts:1272-1274`, `:1016-1018`). The messages are written for the person who
 has to decide whose mistake it was, which is why they name the value and the remedy rather
 than a code (`src/results.ts:158-169`, `src/artifacts.ts:209-215`).
 
 **A Job that succeeded having declared nothing and opened no pull request** is the other
 case, and it is not a failure. `producedNothing` is a pure predicate over a Job's already
 known fields — phase, a PR on any attempt, the three declaration columns, and whether it
-proposes (`src/hkb.ts:196-212`). It re-checks nothing, because a Job that reached
+proposes (`src/hkb.ts:254-270`). It re-checks nothing, because a Job that reached
 `succeeded` having declared any of the three produced it by construction — the collection
 block would have failed it otherwise. Being pure is what lets it be tested exhaustively as
 a *refusal*: the test enumerates every kind of thing that counts as having left something
 behind and asserts each one turns the answer off (`test/hkb.test.ts`, `producedNothing`).
 `hkb ls` renders it as a suffix on the row and one summary line, stated and not judged —
 "I looked and there is nothing to change" is a real outcome; what is not acceptable is
-that it reads exactly like a Job that shipped a pull request (`src/hkb.ts:647-658`).
+that it reads exactly like a Job that shipped a pull request (`src/hkb.ts:705-716`).
 
 ## Known gap: the pull-request protocol is still implied by the worktree
 
@@ -221,14 +231,14 @@ by the spec rather than implied by having a worktree
 (`docs/wiki/decisions/adr-008-declared-outputs.md`). That half has not shipped. The prompt
 is still assembled as: if there is a worktree, append `withProtocol` — commit, push, open a
 draft PR, "work that is not pushed is work that is lost" — unless the Job proposes, in
-which case it gets the sandbox note instead (`src/controller.ts:1064-1065`,
-`src/brief.ts:50-100`, `src/brief.ts:335-345`).
+which case it gets the sandbox note instead (`src/controller.ts:1110-1111`,
+`src/brief.ts:50-100`, `src/brief.ts:403-413`).
 
 So an isolated Job whose entire deliverable is a `--result` or an `--artifact` is told to
 push work it does not have, on top of a results or artifacts contract telling it to write
 somewhere outside the checkout. `withWorktree` covers only the proposing case, where the
 contradiction was explicit enough to be found by printing the prompt; its own docblock
-records that the general case remains open (`src/brief.ts:286-303`). Nothing about
+records that the general case remains open (`src/brief.ts:354-371`). Nothing about
 collection depends on this — the outputs are gathered either way — but the prompt a
 result-only Job reads is not the one its declaration describes.
 

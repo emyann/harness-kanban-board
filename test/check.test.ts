@@ -47,10 +47,53 @@ test('a command the shell cannot find is an ordinary failure — the shell says 
 });
 
 test('a check that ran out of time fails, and says so rather than reporting a code', () => {
-  const r = readCheck('sleep 999', { status: null, signal: 'SIGTERM', stdout: '', stderr: '' }, 600_000);
+  // ONLY `ETIMEDOUT`. `runCheck` is the only thing that kills for time and it sets this itself.
+  const e = Object.assign(new Error('ETIMEDOUT'), { code: 'ETIMEDOUT' });
+  const r = readCheck('sleep 999', { status: null, signal: 'SIGTERM', error: e, stdout: '', stderr: '' }, 600_000);
   assert.equal(r.ok, false);
   assert.equal(r.record?.exitCode, null, 'there is no exit code to report — it was killed');
+  assert.equal(r.record?.kind, 'unfinished');
   assert.match(r.record?.why ?? '', /still running after 600s/);
+});
+
+// ---------------------------------------------------------------- three ways to be killed
+//
+// The bug these are here for: `signal ||` was read FIRST, so every one of these rendered — and was
+// briefed to the next attempt — as "it was still running after 600s and was killed", with a
+// millisecond count beside it that said three seconds. A signal is not a clock.
+
+test('a SIGKILL is not a timeout: it says which signal, and does not invent ten minutes', () => {
+  const r = readCheck('npm test', { status: null, signal: 'SIGKILL', stdout: '', stderr: '' }, 3_000);
+  assert.equal(r.record?.kind, 'unfinished');
+  assert.equal(r.record?.why, 'was killed by SIGKILL after 3s');
+  assert.doesNotMatch(r.record?.why ?? '', /still running/, 'the OOM killer is not the timeout');
+  assert.equal(describeCheck(r.record!), 'check `npm test` was killed by SIGKILL after 3s');
+});
+
+test('a SIGSEGV says SIGSEGV — the name IS the diagnosis', () => {
+  const r = readCheck('./suite', { status: null, signal: 'SIGSEGV', stdout: '', stderr: '' }, 1_000);
+  assert.equal(describeCheck(r.record!), 'check `./suite` was killed by SIGSEGV after 1s');
+});
+
+test('an output cap (ENOBUFS) gets its own sentence, and never reads as a timeout', () => {
+  // `runCheck` streams a rolling tail and sets no `maxBuffer`, so it cannot produce this itself —
+  // but a record built from a buffered spawn must still say what happened rather than the wrong
+  // thing. It was reported as "still running after 600s and was killed".
+  const e = Object.assign(new Error('spawnSync /bin/sh ENOBUFS'), { code: 'ENOBUFS' });
+  const r = readCheck('npm test', { status: null, signal: 'SIGTERM', error: e, stdout: 'x', stderr: '' }, 41_000);
+  assert.equal(r.record?.kind, 'unfinished');
+  assert.match(r.record?.why ?? '', /printed more than could be buffered/);
+  assert.match(r.record?.why ?? '', /the tail is what was kept/);
+  assert.doesNotMatch(r.record?.why ?? '', /still running/);
+});
+
+test('the three renderings are distinct — a reader can tell which one happened', () => {
+  const at = (r: { status: number | null; signal: string | null; error?: Error & { code?: string } }) =>
+    describeCheck(readCheck('npm test', { ...r, stdout: '', stderr: '' }, 7_000).record!);
+  const timeout = at({ status: null, signal: 'SIGTERM', error: Object.assign(new Error('t'), { code: 'ETIMEDOUT' }) });
+  const nobufs = at({ status: null, signal: 'SIGTERM', error: Object.assign(new Error('b'), { code: 'ENOBUFS' }) });
+  const killed = at({ status: null, signal: 'SIGKILL' });
+  assert.equal(new Set([timeout, nobufs, killed]).size, 3, 'three causes, three sentences');
 });
 
 test('a check that could not be STARTED fails, and says which', () => {
@@ -58,6 +101,7 @@ test('a check that could not be STARTED fails, and says which', () => {
   const r = readCheck('./gate', { status: null, signal: null, error: e, stdout: '', stderr: '' }, 1);
   assert.equal(r.ok, false);
   assert.equal(r.record?.exitCode, null);
+  assert.equal(r.record?.kind, 'unstartable', 'it never began — that is not the same as failing');
   assert.match(r.record?.why ?? '', /could not be started: spawn EACCES/);
 });
 
@@ -94,7 +138,7 @@ test('stderr survives the cut, because that is where the reason is', () => {
 // ---------------------------------------------------------------- what the operator is told
 
 test('the failure names the command, and what happens next depends on whether a retry is left', () => {
-  const rec = { command: 'npm test', exitCode: 1, tail: '1 failing', ms: 1000 };
+  const rec = { command: 'npm test', exitCode: 1, kind: 'exit' as const, tail: '1 failing', ms: 1000 };
   const retrying = checkShortfall(rec, true);
   assert.match(retrying, /`npm test`/, 'the command, so it can be run by hand');
   assert.match(retrying, /exited 1/);
@@ -106,9 +150,58 @@ test('the failure names the command, and what happens next depends on whether a 
 });
 
 test('a check that never ran says WHY instead of quoting an exit code it does not have', () => {
-  const line = describeCheck({ command: 'npm test', exitCode: null, tail: '', ms: 600_000, why: 'it was still running after 600s and was killed' });
+  const line = describeCheck({
+    command: 'npm test', exitCode: null, kind: 'unfinished', tail: '', ms: 600_000,
+    why: 'was still running after 600s and was killed',
+  });
   assert.match(line, /still running/);
   assert.doesNotMatch(line, /exited null/);
+});
+
+// ---------------------------------------------------------------- one frame per case
+//
+// The whole sentence is asserted, not a fragment of it. Both of these read as nonsense before,
+// because a `why` clause was spliced into a frame written for `exited N` — and the second one
+// asserted a FINDING ("the work is there and it does not do what it must") about a check that
+// never ran, on the strength of `spawn EACCES`.
+
+test('the timeout reads as one sentence, with the duration stated once', () => {
+  const rec = {
+    command: 'npm test', exitCode: null, kind: 'unfinished' as const, tail: '', ms: 600_000,
+    why: 'was still running after 600s and was killed',
+  };
+  assert.equal(describeCheck(rec), 'check `npm test` was still running after 600s and was killed');
+  assert.equal(
+    checkShortfall(rec, false),
+    'its check `npm test` was still running after 600s and was killed, so the attempt failed with '
+    + 'no verdict — nothing here says the work is wrong, only that the command never got to say. '
+    + 'No retries are left. `hkb retry <id>` resumes that session with what the check said, once '
+    + 'you have decided whose mistake it is.',
+  );
+});
+
+test('a check that could not START claims nothing about the work, and says where the fix is', () => {
+  const rec = {
+    command: './gate', exitCode: null, kind: 'unstartable' as const, tail: '', ms: 2,
+    why: 'could not be started: spawn EACCES',
+  };
+  assert.equal(describeCheck(rec), 'check `./gate` could not be started: spawn EACCES');
+  const said = checkShortfall(rec, true);
+  assert.equal(
+    said,
+    'its check `./gate` could not be started: spawn EACCES, so the attempt failed on the check '
+    + 'itself — nothing about the work was judged. Fix the command where it is set: `hkb job set '
+    + '<id> --check "…"`, or the board\'s own `--check`. A retry is left, and it resumes the same '
+    + 'session — the next attempt is told the command, the exit code and the tail of what it '
+    + 'printed, so it starts from the failure rather than from the brief.',
+  );
+  assert.doesNotMatch(said, /the work is there/, 'nothing examined the work — that is the point');
+});
+
+test('an ordinary non-zero exit keeps the finding it has earned', () => {
+  const rec = { command: 'npm test', exitCode: 1, kind: 'exit' as const, tail: '1 failing', ms: 12_000 };
+  assert.equal(describeCheck(rec), 'check `npm test` exited 1 after 12s');
+  assert.match(checkShortfall(rec, true), /^its check `npm test` exited 1, so the attempt failed: the work is there and it does not do what it must\. /);
 });
 
 // ---------------------------------------------------------------- reading the column back
@@ -122,29 +215,89 @@ test('a malformed check column reads as "no check was recorded" rather than cras
 });
 
 test('a real record survives the round trip, and missing fields become safe ones', () => {
-  const r = storedCheck({ command: 'npm test', exitCode: 1, tail: '1 failing', ms: 30 });
-  assert.deepEqual(r, { command: 'npm test', exitCode: 1, tail: '1 failing', ms: 30 });
+  const r = storedCheck({ command: 'npm test', exitCode: 1, kind: 'exit', tail: '1 failing', ms: 30 });
+  assert.deepEqual(r, { command: 'npm test', exitCode: 1, kind: 'exit', tail: '1 failing', ms: 30 });
+  // A row written before `kind` existed, and one whose `kind` is nonsense: a number is a verdict
+  // and the absence of one is not, so the derivation is the same either way.
+  assert.equal(storedCheck({ command: 'npm test', exitCode: 2 })?.kind, 'exit');
+  assert.equal(storedCheck({ command: 'npm test', kind: 'nonsense' })?.kind, 'unfinished');
   const thin = storedCheck({ command: 'npm test' });
-  assert.deepEqual(thin, { command: 'npm test', exitCode: null, tail: '', ms: 0 });
+  assert.deepEqual(thin, { command: 'npm test', exitCode: null, kind: 'unfinished', tail: '', ms: 0 });
+});
+
+test('the base the tree was on rides along, or is absent together', () => {
+  // Both or neither: `onBase` with no ref names nothing anybody can act on.
+  const on = storedCheck({ command: 'npm test', exitCode: 1, kind: 'exit', onBase: false, base: 'origin/main' });
+  assert.equal(on?.onBase, false);
+  assert.equal(on?.base, 'origin/main');
+  assert.equal(storedCheck({ command: 'npm test', onBase: false })?.onBase, undefined);
+  assert.match(describeCheck(on!), /NOT on origin\/main/, 'and `hkb show` says so');
+  const merged = storedCheck({ command: 'npm test', exitCode: 1, kind: 'exit', onBase: true, base: 'origin/main' });
+  assert.match(describeCheck(merged!), /— on origin\/main$/);
 });
 
 // ---------------------------------------------------------------- the one piece of I/O
 
-test('it runs through the shell, in the directory it was given', () => {
+test('it runs through the shell, in the directory it was given', async () => {
   const where = fs.mkdtempSync(path.join(dir, 'run-'));
   fs.writeFileSync(path.join(where, 'here'), 'yes\n');
-  assert.equal(runCheck(where, 'test -f here').ok, true, 'cwd is the checkout, not the daemon\'s');
+  assert.equal((await runCheck(where, 'test -f here')).ok, true, 'cwd is the checkout, not the daemon\'s');
   // `&&` is the reason it goes through a shell at all: one check, two commands, and the first
   // failure short-circuits exactly as the operator who wrote the line expects.
-  const r = runCheck(where, 'echo one && exit 3');
+  const r = await runCheck(where, 'echo one && exit 3');
   assert.equal(r.ok, false);
   assert.equal(r.record?.exitCode, 3);
+  assert.equal(r.record?.kind, 'exit');
   assert.match(r.record?.tail ?? '', /one/);
 });
 
-test('a check that outlives its timeout is killed rather than waited for', () => {
-  const r = runCheck(dir, 'sleep 30', { timeoutMs: 250 });
+test('a check that outlives its timeout is killed rather than waited for', async () => {
+  const r = await runCheck(dir, 'sleep 30', { timeoutMs: 250 });
   assert.equal(r.ok, false);
   assert.equal(r.record?.exitCode, null);
+  assert.equal(r.record?.kind, 'unfinished');
   assert.match(r.record?.why ?? '', /still running after 0s|still running after 1s/);
+});
+
+test('the timeout kills the whole PROCESS GROUP, not just the shell it started', async () => {
+  // The failure this replaces: `spawnSync`'s timeout signalled `/bin/sh` and the suite it had
+  // started was orphaned — still running, in the very worktree the resumed attempt continues in.
+  // This is the shipped shape of that: a shell whose child outlives it unless the group is killed.
+  const where = fs.mkdtempSync(path.join(dir, 'group-'));
+  const pidFile = path.join(where, 'pid');
+  const r = await runCheck(where, `sh -c 'echo $$ > ${pidFile}; sleep 30' & wait`, { timeoutMs: 400, killGraceMs: 100 });
+  assert.equal(r.ok, false);
+  assert.match(r.record?.why ?? '', /still running after/);
+
+  const pid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+  assert.ok(Number.isInteger(pid) && pid > 0, 'the grandchild really did start');
+  // `kill -0` asks whether it is still there. Given a moment for the group signal to land.
+  await new Promise((r2) => setTimeout(r2, 300));
+  let alive = true;
+  try { process.kill(pid, 0); } catch { alive = false; }
+  assert.equal(alive, false, 'the suite the shell started went with it — no orphan in the checkout');
+});
+
+test('a stop interrupts a check instead of waiting ten minutes for it', async () => {
+  // `deps.signal` is how `hkb down` reaches a run. A check that did not honour it was up to ten
+  // minutes of an unacknowledged stop, with the daemon unable to answer for any of it.
+  const ac = new AbortController();
+  const started = Date.now();
+  setTimeout(() => ac.abort(), 150);
+  const r = await runCheck(dir, 'sleep 30', { signal: ac.signal, killGraceMs: 100 });
+  assert.ok(Date.now() - started < 10_000, 'it came back when it was told to, not when it was done');
+  assert.equal(r.ok, false);
+  assert.match(r.record?.why ?? '', /interrupted/, 'and it does not claim to be a verdict');
+  assert.doesNotMatch(r.record?.why ?? '', /still running after/, 'a stop is not a timeout');
+});
+
+test('a check that prints far more than the tail is kept, not killed for it', async () => {
+  // The 16 MB cliff is gone with `maxBuffer`: output is streamed through a rolling window, so a
+  // verbose PASSING suite passes and a failing one still has its verdict at the end.
+  const r = await runCheck(dir, `head -c ${CHECK_TAIL_BYTES * 8} /dev/zero | tr '\\0' 'x'; echo; echo FAIL-AT-THE-END >&2; exit 1`);
+  assert.equal(r.ok, false);
+  assert.equal(r.record?.kind, 'exit', 'it exited on its own — nothing killed it for being loud');
+  assert.match(r.record?.tail ?? '', /FAIL-AT-THE-END/, 'the verdict is at the end and it survived');
+  assert.match(r.record?.tail ?? '', /earlier bytes dropped/, 'and the cut is stated');
+  assert.ok(Buffer.byteLength(r.record?.tail ?? '') < CHECK_TAIL_BYTES * 2 + 200, 'bounded by the window');
 });
