@@ -1,4 +1,6 @@
-node_modules/
+# No trailing slash: with one, gitignore matches only a DIRECTORY, and a symlink named node_modules
+# (a scratch worktree borrowing the checkout's) was committed by `git add -A` in #426.
+node_modules
 *.log
 
 # The repository's own hkb directory — per-attempt worktrees, and a board file if
