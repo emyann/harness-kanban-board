@@ -1,6 +1,7 @@
 import { query, type SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { Runtime, RunStatus, RuntimeEvent, WorkerOutcome, WorkerSpec } from './index.ts';
 import { admissionHooks } from '../admission.ts';
+import { admissionPolicy, toolSurface } from './surface.ts';
 
 /**
  * The Claude Agent SDK driver.
@@ -16,19 +17,6 @@ import { admissionHooks } from '../admission.ts';
  * runtime dies mid-run the iterator dies with it, and `resume: <sessionId>` is the only way back
  * to the work. The session id must be in hand before the run ends, not after it.
  */
-
-/**
- * A worker's whole tool surface. Paired with `permissionMode: 'dontAsk'` this is a real allowlist:
- * anything not here is denied outright rather than prompted, which is the documented pairing for a
- * headless agent ("a fixed, explicit tool surface … a hard deny over silent reliance").
- *
- * `Agent` is deliberately absent. Phase 1 runs one agent against one brief; a worker that could
- * fan out would spawn work nothing has claimed. The admission gate's isolation rule stays wired
- * and tested for the kind that allows it, and it reads `spec.isolated` rather than a constant —
- * so adding `Agent` to a kind's tool surface is the whole change, not the change plus the
- * discovery that the rule was only ever right for isolated Jobs.
- */
-const DEFAULT_TOOLS = ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash', 'WebFetch', 'WebSearch', 'TodoWrite'];
 
 /** How long an interrupted turn is given to wind down and report before the transport is killed. */
 const INTERRUPT_GRACE_MS = 20_000;
@@ -65,7 +53,11 @@ export const claudeRuntime: Runtime = {
     let result: SDKResultMessage | null = null;
     let error: string | null = null;
 
-    const tools = spec.allowedTools ?? DEFAULT_TOOLS;
+    // The surface and the policy built from it both come from `./surface.ts`, so the fake runtime
+    // enforces the same shipped default this one does and a test can exercise it without buying a
+    // session. `DEFAULT_TOOLS` lives there too, `Skill` included — a skill is a prompt expansion,
+    // so every tool it then reaches for comes back through the gate below.
+    const tools = toolSurface(spec);
     // The wall-clock stop, in two stages: ask, then insist.
     //
     // Aborting alone kills the transport before any result arrives, so `total_cost_usd` is never
@@ -126,12 +118,9 @@ export const claudeRuntime: Runtime = {
         // every Agent spawn, so a parent that forgets to ask for it still cannot skip it. A
         // workload running in the operator's checkout has no worktree to bring a subagent's work
         // back to, so there the gate refuses a spawn that asks for one instead of forcing every
-        // spawn into a checkout that would be thrown away with its work still in it.
-        hooks: admissionHooks({
-          subagentIsolation: spec.isolated === false ? 'forbid' : 'force',
-          allow: tools,
-          ...spec.admission,
-        }),
+        // spawn into a checkout that would be thrown away with its work still in it. The policy
+        // itself is `./surface.ts`, and `src/runtime/fake.ts` builds it from the same function.
+        hooks: admissionHooks(admissionPolicy(spec)),
         // **`dontAsk`, not `bypassPermissions`.** A worker has nobody to answer a prompt, so both
         // modes avoid prompting — but they are not equivalent:
         //

@@ -11,12 +11,14 @@ covers:
   - path: src/plugins.ts
     sha: 8057664cf308d860315bd9abe7b941a00fcf4519
   - path: src/runtime/claude.ts
-    sha: 479b992254c82445bc839ebb302d748c712eec38
+    sha: 99f48dce1ec77266c5f486a386d55d438a02397c
   - path: src/runtime/fake.ts
-    sha: 94f9f21ab7c9702506ae625dff37ac15ecfdbcce
-generated_at_commit: f8ea774
+    sha: 1a034150eee10661a6f1e5abac96e0e58499492d
+  - path: src/runtime/surface.ts
+    sha: 91dc14a46f39d60c04e59d95dbc5d6c4c360d67c
+generated_at_commit: 01c316b
 last_refreshed: 2026-09-09
-related: [decisions/adr-007-workload-scheduler, architecture/job-kind, concepts/admission-control, concepts/worker-identity]
+related: [decisions/adr-007-workload-scheduler, architecture/job-kind, concepts/admission-control, concepts/worker-identity, features/skill-invocation]
 ---
 
 # The runtime layer
@@ -129,6 +131,13 @@ one by hand still can; what is gone is the default that wrote it unasked.
 
 `maxBudgetUsd` is the runaway-cost stop and it covers subagent spend.
 
+**The tool surface is not a driver detail.** `DEFAULT_TOOLS`, `toolSurface(spec)`
+and `admissionPolicy(spec)` live in `src/runtime/surface.ts` — a pure module, in
+the pattern of `src/limits.ts` and `src/liveness.ts` — because inside the driver
+the shipped default could only be exercised by buying a session. `Skill` is on
+that default and `Agent` is not; both are arguments rather than lists, and they
+are made in `concepts/admission-control` and `features/skill-invocation`.
+
 Two things in that hook *are* per-run, and both answer the same question — did
 this attempt get a worktree? The subagent isolation policy reads
 `WorkerSpec.isolated`: a parent with no worktree has nowhere to bring a subagent's
@@ -144,6 +153,13 @@ session id included, so the store never learns which runtime ran the work. The
 control plane — readiness, leases, retries, terminal writes — is the part that has
 to be right, and none of it is about Claude. Testing it against a real model would
 make the suite cost money and stop being deterministic.
+
+It is not a hole in the gate, and it used to look like one. The fake builds the
+admission policy with `admissionPolicy(spec)` — the same call the SDK driver
+makes — and puts the tool calls it claims to make through it, so a Job run on the
+fake is refused exactly what a Job run for real would be refused, at the shipped
+defaults and for nothing. Its `denials` count is that gate's answer rather than a
+hardcoded `0`.
 
 ## Known gaps
 

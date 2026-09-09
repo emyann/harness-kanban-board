@@ -184,8 +184,11 @@ const HELP = `hkb — run one agent against one brief
                         the Job before a session is bought.
        --allow-tool <t> the tool surface this Job may use, repeatable. Anything absent is
                         DENIED at admission, not merely discouraged. Without it the runtime's
-                        own default applies; --allow-tools Read,Grep says the same in one
-                        argument.
+                        own default applies, and \`Skill\` is on it — a Job granted a
+                        --plugin-dir needs it to INVOKE what it was granted, so a narrowed
+                        list drops that ability unless it names it too. \`Agent\` is not on
+                        the default: one Job is one agent.
+                        --allow-tools Read,Grep says the same in one argument.
        --export <path>  a file or directory the Job must produce, repo-relative. It is
                         copied into the repository before the worktree is torn down, and
                         a declared path the run did not write fails the attempt. Repeatable.

@@ -24,6 +24,7 @@ related:
     concepts/admission-control,
     architecture/runtime-layer,
     architecture/overview,
+    features/skill-invocation,
   ]
 generated_at_commit: 8aa5ade
 last_refreshed: 2026-09-09
