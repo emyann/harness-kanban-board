@@ -152,9 +152,12 @@ export type Template = {
  * never reaches the filesystem, and the containment check in `resolveInRepo` is the second fence
  * rather than the only one.
  */
-export function workflowPath(name: string): string {
+export function workflowPath(name: string, flag = '--from'): string {
   const stem = String(name ?? '').trim().replace(/\.md$/, '');
-  if (!stem) refuse('--from names no workflow — write `--from <name>`, for a file at `' + WORKFLOW_DIR + '/<name>.md`');
+  // The flag is a parameter because there are two of them. `hkb boards set --workflow " "` reached
+  // here and was told to "write `--from <name>`" — a refusal naming a flag the operator had not
+  // typed, about a verb that does not have it.
+  if (!stem) refuse(`${flag} names no workflow — write \`${flag} <name>\`, for a file at \`${WORKFLOW_DIR}/<name>.md\``);
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(stem)) {
     refuse(
       `\`${stem}\` is not a workflow name — a name is letters, digits, \`-\` and \`_\`, and it names one file`
@@ -366,6 +369,50 @@ export function readTemplate(repoPath: string | null, name: string): Template {
     refuse(`${file} has frontmatter and no body — the body is the brief, and a workflow with no brief is a spec nobody can run.`);
   }
   return { name: stem, description, spec, brief, file };
+}
+
+/**
+ * The line that names where a Job's standing steps came from, written into the composed prompt.
+ *
+ * Written and never matched back, which is the change ADR-017's review forced. It used to be both:
+ * the steps were expanded into `Job.brief` at file time and `hkb show` recovered the workflow's
+ * name by parsing this sentence out again. That made the brief the record — and `hkb queue <id>
+ * "…"` replaces a brief wholesale, so the board's own triage → queue inbox silently dropped the
+ * steps and the record of them together.
+ *
+ * The steps are composed at claim time now, from the board's default as it is then
+ * (`src/controller.ts`), so the record is the `Board.defaultWorkflow` column and there is nothing
+ * to parse. What is left is the sentence itself, which is for the WORKER: a block of instructions
+ * that arrived from somewhere other than the brief should say where.
+ */
+const STANDING = (name: string) => `Standing steps for work on this board, from the workflow \`${name}\`:`;
+
+/**
+ * The board's default workflow, appended to a brief as **standing steps**.
+ *
+ * The one place a file's body and the Job's own brief both survive, and the asymmetry is the point.
+ * `--from <x>` says *x is the work*, so x's body IS the brief and a `--brief` on the line replaces
+ * it. A board default says *this is how work on this board finishes* — a brief still says WHAT to
+ * do, and the default says what doing it ends in. Overwriting one with the other would make the
+ * board's default either useless or destructive, so they compose instead.
+ *
+ * Appended rather than prepended, on `withResults`' rule: what follows the work is a contract to
+ * satisfy at the end, and last is where a requirement reads best. The caller appends it after the
+ * sandbox contract for the sharper version of the same reason — the core says how work is done
+ * here, and these say what doing it ends in, and a worker given them the other way round reads two
+ * reply contracts in the wrong order.
+ */
+export function withStandingSteps(brief: string, workflow: string, steps: string): string {
+  if (!steps.trim()) return brief;
+  return [
+    brief.trimEnd(),
+    '',
+    '---',
+    '',
+    STANDING(workflow),
+    '',
+    steps.trim(),
+  ].join('\n');
 }
 
 /**

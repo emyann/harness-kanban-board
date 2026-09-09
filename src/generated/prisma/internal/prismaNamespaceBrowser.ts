@@ -90,6 +90,7 @@ export const BoardScalarFieldEnum = {
   defaultGuide: 'defaultGuide',
   defaultBase: 'defaultBase',
   defaultCheck: 'defaultCheck',
+  defaultWorkflow: 'defaultWorkflow',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
 } as const

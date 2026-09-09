@@ -18,7 +18,10 @@ request for a human to review. The board is a SQLite file on your machine. The r
 ## `hkb` — the workload scheduler
 
 The first and only workload kind is a **Job**: one agent, one brief, run to completion. A Job runs in a git
-worktree of its own, then commits, pushes and opens a **draft** pull request — a human reviews and merges.
+worktree of its own, commits there and pushes the branch. What happens next — open a **draft** pull request,
+let a human review and merge — is the board's **default workflow**, a file in the repository rather than
+something hkb says: the machinery tells a worker only what it will refuse on afterwards, and the push is
+still one of those ([ADR-017](docs/wiki/decisions/adr-017-the-workflow-is-content.md)).
 The kanban DAG, cards that depend on cards, is a *second kind that does not exist yet*.
 
 The board is **`~/.hkb/board.db`** — SQLite behind Prisma, one board per machine with a **Board row per
@@ -180,6 +183,27 @@ repository, read by the same code that reads yours, and shipped in no tarball. T
 machinery; a workflow written in it is content. Full page:
 [docs/wiki/features/workflow-templates.md](docs/wiki/features/workflow-templates.md).
 
+#### How work on a board *finishes*: `hkb boards set <slug> --workflow <name>`
+
+A Job filed by hand — `hkb new "…" --brief "…"`, no `--from` — gets the board's **default workflow**
+on top of what you typed. Its frontmatter fills what the Job did not say, exactly as `--from` would.
+Its **body is appended as standing steps** — *open a draft pull request against your base, a human
+reviews and merges* — which is where those steps live now, because hkb tells a worker only the
+things it will refuse on afterwards and it refuses on none of these
+([ADR-017](docs/wiki/decisions/adr-017-the-workflow-is-content.md) decisions 1 and 5).
+
+The frontmatter is expanded when the Job is filed; the **body is composed when the Job runs**, from
+the board's default as it is then. That is the difference between a spec field, which is a column
+`hkb show` prints, and a standing instruction, which is a fact about the board: a brief baked at
+file time would be lost the moment `hkb queue <id> "…"` rewrote it, which is exactly how a triage
+note becomes work here.
+
+It is the one place a file's body and a typed brief both survive: a brief says WHAT to do, and the
+board's default says what doing it *ends in*. `--from` suppresses it entirely — that workflow
+governs — and so do `--propose` and `--no-isolate`, which have no branch for the steps to be about.
+`hkb show` names the workflow a Job's standing steps will come from. This repository's own is
+[`.hkb/workflows/implement.md`](.hkb/workflows/implement.md).
+
 ### Finding work again: `--label`
 
 A Job can be **labelled**, the way a Kubernetes object is: a `key=value` pair, repeatable, held as a
@@ -313,8 +337,9 @@ which means the session completed, and neither is `hkb rm`, which deletes the re
 repository.
 
 `hkb boards set <slug>` carries the board's **ceilings** — `--max-concurrent` (0 drains it), `--daily-budget`
-— *and* its **spec defaults**: `--model`, `--effort`, `--max-turns`, `--max-budget`, `--max-retries`. A board
-that runs cheap, high-volume work says so once instead of on every `hkb new`.
+— *and* its **spec defaults**: `--model`, `--effort`, `--max-turns`, `--max-budget`, `--max-retries`,
+`--guide`, `--base`, `--check`, and `--workflow` for the steps every hand-filed Job here finishes with. A
+board that runs cheap, high-volume work says so once instead of on every `hkb new`.
 
 Resolution is three-deep: the Job's own value wins, the board's default fills what the Job left unset, the
 built-in is the last resort. `none` clears a default rather than setting it to the word, and `hkb show` names
@@ -417,7 +442,7 @@ in the prompt, ahead of the brief that is about it. Three sources, and none of t
 - **`board`** — this board's other Jobs, their phases, attempt counts and outcomes. LLM-free, one read.
 - **`value:<literal>`** — a payload the caller supplies. The others are things hkb goes and *fetches*;
   this is the one a webhook, a button or a controller filing work can *push*.
-- **`self:<field>`** — this Job about itself: `id`, `name`, `board`, `attempt`, `slot`, `branch`,
+- **`self:<field>`** — this Job about itself: `id`, `name`, `board`, `attempt`, `slot`, `branch`, `base`,
   `worktree`, `repo`. Kubernetes' downward API, where a Pod reads its own `metadata.name` and
   `status.podIP`.
 
@@ -461,6 +486,14 @@ the rest. Neither half is the feature; the pair is.
 
 `--no-isolate` runs the Job in the current checkout rather than a worktree of its own, for work that has no
 business on a branch.
+
+Inside a worktree, **one branch is the only thing a worker can push**, and that is enforced by git rather
+than asked for in the prompt: hkb installs a `pre-push` hook on the attempt's worktree, at a
+`core.hooksPath` outside every checkout the worker can write, pinned at claim time to the branch it was
+given. Every push reaches that hook with the refs already resolved — after aliases, `-c` config, redirects
+and nested shells — so the trunk, another Job's branch, `--all`, `--mirror` and every spelling of a delete
+are refused identically. Your own checkout is untouched: the setting is per-worktree, and a directory with
+no policy pinned to it is governed by nothing.
 
 `--allow-tool <name>` (repeatable, or `--allow-tools Read,Grep`) narrows the tool surface a Job may use.
 This is a **ceiling the board enforces, not a request**: anything absent is denied in a `PreToolUse` hook
@@ -529,7 +562,7 @@ after a successful run hkb replays the branch onto the base as it is then and pu
 `--force-with-lease` if the worker had already pushed. A branch that cannot be put on the base ends the attempt
 as `conflicted` and keeps its checkout, with the commands that finish it by hand; a remote that could not be
 *reached* is said out loud and fails nothing, and a pull request somebody has taken out of draft is left alone
-entirely. The worker is asked to rebase before it pushes, which makes all of it a no-op in the common case —
+entirely. The worker is asked to rebase before it finishes, which makes all of it a no-op in the common case —
 [docs/wiki/features/rebase-and-verify.md](docs/wiki/features/rebase-and-verify.md).
 
 ### How it maps

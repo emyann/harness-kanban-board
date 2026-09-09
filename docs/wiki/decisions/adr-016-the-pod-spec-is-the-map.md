@@ -11,14 +11,14 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: prisma/schema.prisma
-    sha: 34921e6803578d6831938ada63d477d55a95eb6a
+    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
   - path: src/controller.ts
-    sha: 67e1a217f67ec6731ebcc0cd491d5f55d712be81
+    sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
   - path: src/inputs.ts
-    sha: ffd76fce7689fe1c9a1dc0db3756cdf343d2b623
+    sha: 140cf48b8b323742a57e3e604b6853f829c72b6c
   - path: src/worktree.ts
     sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
-generated_at_commit: 6d4142a
+generated_at_commit: 8aa5ade
 last_refreshed: 2026-09-09
 related:
   [

@@ -11,18 +11,18 @@ covers:
   - path: src/artifacts.ts
     sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
   - path: src/worktree.ts
-    sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
+    sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
   - path: src/controller.ts
-    sha: 67e1a217f67ec6731ebcc0cd491d5f55d712be81
+    sha: 3673f449a7ebf15f9b21900915183b3bec63b6e5
   - path: src/brief.ts
-    sha: 9090eb71378c7dac7b89cf63c2140f1e97e98c69
+    sha: a56db1e2f49d60c695034ecd14f73c5c258cce85
   - path: src/hkb.ts
-    sha: f7cca4f068b7ccb229e6f7b87727de198f9efb6e
+    sha: 306d4fa2d8af038fbfd904dbb17161850a65e942
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: prisma/schema.prisma
-    sha: 34921e6803578d6831938ada63d477d55a95eb6a
-generated_at_commit: 6d4142a
+    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
+generated_at_commit: 32ea87c
 last_refreshed: 2026-09-09
 related: [decisions/adr-008-declared-outputs, decisions/adr-011-proposals-not-board-access, features/proposals, features/worktree-includes, architecture/job-kind, architecture/the-board]
 ---
@@ -235,24 +235,34 @@ behind and asserts each one turns the answer off (`test/hkb.test.ts`, `producedN
 "I looked and there is nothing to change" is a real outcome; what is not acceptable is
 that it reads exactly like a Job that shipped a pull request (`src/hkb.ts:705-716`).
 
-## Known gap: the pull-request protocol is still implied by the worktree
+## The gap that closed: the worktree no longer implies a pull request
 
 ADR-008 decided that `isolate` returns to meaning one thing — *where* the work runs — and
 that the pull-request protocol becomes one declarable output shape among several, selected
 by the spec rather than implied by having a worktree
-(`docs/wiki/decisions/adr-008-declared-outputs.md`). That half has not shipped. The prompt
-is still assembled as: if there is a worktree, append `withProtocol` — commit, push, open a
-draft PR, "work that is not pushed is work that is lost" — unless the Job proposes, in
-which case it gets the sandbox note instead (`src/controller.ts:1110-1111`,
-`src/brief.ts:50-100`, `src/brief.ts:403-413`).
+(`docs/wiki/decisions/adr-008-declared-outputs.md`). It stayed open through several
+releases: the prompt was assembled as *if there is a worktree, append the protocol* —
+commit, push, open a draft PR, "work that is not pushed is work that is lost" — so an
+isolated Job whose entire deliverable was a `--result` or an `--artifact` was told to push
+work it did not have, on top of a contract telling it to write somewhere outside the
+checkout.
 
-So an isolated Job whose entire deliverable is a `--result` or an `--artifact` is told to
-push work it does not have, on top of a results or artifacts contract telling it to write
-somewhere outside the checkout. `withWorktree` covers only the proposing case, where the
-contradiction was explicit enough to be found by printing the prompt; its own docblock
-records that the general case remains open (`src/brief.ts:354-371`). Nothing about
-collection depends on this — the outputs are gathered either way — but the prompt a
-result-only Job reads is not the one its declaration describes.
+ADR-017 decision 5 closed most of it from the other end, and by removal rather than by a
+switch: the core now appends only the **sandbox contract** (`withSandbox`, `src/brief.ts`),
+which asks for a commit and a push of the worker's own branch and says nothing about a
+forge, a pull request or a review. Those steps come from a board's default workflow —
+content a person wrote for the Jobs it fits (*features/workflow-templates*).
+
+The push stayed in the core deliberately, and the first attempt at this change took it out
+one card too early: the core *reads pushed state*. `pushedRef` decides whether a rebase is
+legal, and `sweepWorktrees` keeps a checkout for ever when its work "has never been pushed
+anywhere" — so a worker never told to push leaves a Job recorded `succeeded — produced
+nothing` and a worktree nothing will ever reclaim. The line leaves when those reads do.
+
+What remains is smaller and is a *content* question rather than a machinery one: a board
+whose default workflow says "open a pull request" appends that to a result-only Job filed on
+it too. The board-level answers are `--from` (which suppresses the default) and, for a Job
+that proposes, the exclusion the CLI already makes.
 
 ## Related
 

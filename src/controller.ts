@@ -1,14 +1,16 @@
 import { openBoard } from './db.ts';
 import {
-  baseFor, createWorktree, exportOutputs, existingWorktree, fetchBase, isAttemptBranch,
+  baseFor, baseRef, createWorktree, exportOutputs, existingWorktree, fetchBase, isAttemptBranch,
   newestWorktree, lockWorktree, onRemote, pushedRef, removeWorktree, resolves, unlockWorktree,
   type Worktree,
 } from './worktree.ts';
 import { rebaseNote, rebaseOntoBase, rebaseShortfall, type RebaseResult } from './rebase.ts';
 import { prForBranch } from './pulls.ts';
+import { installPushHook } from './push.ts';
+import { readTemplate, withStandingSteps } from './templates.ts';
 import {
   approvedPrompt, withArtifacts, withCheck, withCheckFailure, withGuide, withInputs, withProposal,
-  withProtocol, withResults, withStandingRules, withWorktree,
+  withResults, withSandbox, withStandingRules, withWorktree,
 } from './brief.ts';
 import {
   checkShortfall, describeCheck, runCheck, storedCheck, type CheckRecord,
@@ -33,6 +35,15 @@ import { gateClaim, windowStart, type ClaimGate } from './limits.ts';
 import { resolveSpec } from './spec.ts';
 import { holderId, holderLiveness } from './liveness.ts';
 import type { Runtime, RuntimeEvent, WorkerOutcome } from './runtime/index.ts';
+
+/**
+ * The `self:` fields that only a Job with a checkout of its own has an answer for.
+ *
+ * Named here rather than tested inline, because the failure is a message and not a crash: a Job that
+ * declares `self:base` and runs `--no-isolate` is refused either way, and the difference is whether
+ * the operator is told *why* the field is empty or left to work it out.
+ */
+const NEEDS_WORKTREE = new Set(['branch', 'worktree', 'base']);
 
 /**
  * The controller for the Job kind.
@@ -937,7 +948,11 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
     // ---- and now let it go. Everything past this point is the run and the record of it, and it
     // is the only part that overlaps with another Job's.
-    const done$: Promise<void> = runAndRecord({ job, spec, k, charged, token, leaseMs, cwd, wt, say, boardSlug: board?.slug ?? null, slot })
+    const done$: Promise<void> = runAndRecord({
+      job, spec, k, charged, token, leaseMs, cwd, wt, say, slot,
+      boardSlug: board?.slug ?? null,
+      defaultWorkflow: board?.defaultWorkflow ?? null,
+    })
       .catch((e: unknown) => { failure ??= e; })
       .finally(() => { inFlight.delete(done$); });
     inFlight.add(done$);
@@ -968,11 +983,13 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     cwd: string;
     wt: Worktree | null;
     say: (line: string) => void;
-    /** Both only for the downward API (`self:` inputs) — a Job reading facts about itself. */
+    /** For the downward API (`self:` inputs), and for naming the board in a refusal. */
     boardSlug: string | null;
+    /** The board's standing steps, resolved at claim time rather than frozen onto the Job. */
+    defaultWorkflow: string | null;
     slot: number;
   }): Promise<void> {
-    const { job, spec, k, charged, token, leaseMs, cwd, wt, say, boardSlug, slot } = c;
+    const { job, spec, k, charged, token, leaseMs, cwd, wt, say, boardSlug, defaultWorkflow, slot } = c;
 
     // ---- renew while the run is in flight. Deriving the lifetime already makes expiry-while-alive
     // impossible; renewal is what makes a DEAD holder cheap to reclaim — without it a host that dies
@@ -1131,14 +1148,27 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
             slot: String(slot),
             branch: wt?.branch ?? null,
             worktree: wt?.path ?? null,
+            // The ref this attempt's branch was cut from, RESOLVED and as a BRANCH NAME — `main`, or
+            // `kb-33-1` for a chain step. The same value the checkout was made with, so content that
+            // says "open a pull request against your base" and the branch that was actually cut
+            // cannot disagree. It exists because the pull request left the core (ADR-017 decision 5):
+            // what used to be `BaseAdvice.prBase`, hardcoded into the protocol, is now data a
+            // workflow can ask for.
+            //
+            // Without the `origin/` prefix, because the one caller anybody writes is
+            // `gh pr create --base {{base}}` and `gh` rejects `origin/main` — it wants a branch on
+            // the repository, not a remote-tracking ref. `withSandbox` names the tracking ref for
+            // the rebase, which is the opposite spelling for the opposite reason, and the two are
+            // deliberately different strings.
+            base: wt ? wt.baseLabel.replace(/^origin\//, '') : null,
             repo: cwd,
           };
           const got = self[vf.jobRef.field];
-          // Null is a real answer for `branch` and `worktree` on an un-isolated Job, and a Job that
-          // declared one has asked for something that does not exist here. Refused rather than
-          // rendered empty, which is the same rule every other declaration follows.
+          // Null is a real answer for `branch`, `worktree` and `base` on an un-isolated Job, and a
+          // Job that declared one has asked for something that does not exist here. Refused rather
+          // than rendered empty, which is the same rule every other declaration follows.
           if (got == null) {
-            unread.push({ name: want.name, source, why: `this Job has no \`${vf.jobRef.field}\`${vf.jobRef.field === 'branch' || vf.jobRef.field === 'worktree' ? ' — it is running without a worktree (`--no-isolate`)' : ''}` });
+            unread.push({ name: want.name, source, why: `this Job has no \`${vf.jobRef.field}\`${NEEDS_WORKTREE.has(vf.jobRef.field) ? ' — it is running without a worktree (`--no-isolate`)' : ''}` });
           } else {
             readInputs.push({ name: want.name, source, text: got });
           }
@@ -1194,10 +1224,63 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         }
       }
 
+      // ---- the sandbox, made real. The `pre-push` hook is installed on this worktree and pinned to
+      // THIS attempt's branch, which is the half that has to happen at claim time: reading the
+      // branch out of the checkout instead would let attempt 1's `git switch develop` license
+      // attempt 2 to push `develop` (`src/push.ts`).
+      //
+      // A failure here fails the attempt rather than being logged past. An unenforced sandbox that
+      // reports itself as enforced is worse than no sandbox — the admission gate, the worktree base
+      // and the lease were each silently inert and each passed every test it had.
+      let sandboxShortfall: string | null = null;
+      if (wt) {
+        const why = installPushHook(cwd, wt.path, {
+          branch: wt.branch,
+          // From `baseRef`, which is where every other answer to "what is the trunk here" comes
+          // from: a second way of asking is a second answer waiting to differ.
+          defaultBranch: baseRef(cwd).replace(/^origin\//, ''),
+        });
+        if (why) sandboxShortfall = `#${job.id} did not run: ${why}`;
+      }
+
+      // ---- the board's default workflow, as STANDING STEPS, resolved here rather than at file time.
+      //
+      // It used to be expanded into `Job.brief` by `hkb new`, and that was wrong in three ways at
+      // once, all of which this placement answers. `hkb queue <id> "…"` and `hkb job set --brief`
+      // replace the brief wholesale, so the triage → queue flow — the board's own inbox — silently
+      // dropped the steps every time. They reached `--no-isolate` Jobs, which get no sandbox and no
+      // branch, and told them to push one. And they landed BEFORE the contract, so a worker read
+      // "push, open the PR, reply with the URL" and then "1. commit, 2. rebase, 3. reply with the
+      // branch" — two reply contracts, in the wrong order.
+      //
+      // Composed the way the guide and the check line are composed: read from the board as it is
+      // NOW, appended after everything the core has to say, and never stored. That is also what
+      // makes it a *board* default rather than a fact frozen onto old rows — editing the workflow
+      // changes the next attempt, including the next attempt of a Job filed last week.
+      //
+      // Not to a PROPOSING Job, and for the reason `withWorktree` exists: its whole output is one
+      // JSON file, so steps ending in "open a pull request" are not an instruction it can follow.
+      let steps: { name: string; brief: string } | null = null;
+      let stepsShortfall: string | null = null;
+      const wantSteps = defaultWorkflow?.trim();
+      if (wantSteps && wt && !job.proposes) {
+        try {
+          const t = readTemplate(cwd, wantSteps);
+          steps = { name: t.name, brief: t.brief };
+        } catch (e) {
+          // Named rather than skipped. The operator pointed the board at a workflow, and running
+          // without it would be every Job on the board quietly finishing half-way — which is the
+          // failure this whole card exists because of.
+          stepsShortfall = `#${job.id} did not run: this board files every Job with the workflow `
+            + `\`${wantSteps}\`, and ${(e as Error).message} Add the file, or point the board somewhere `
+            + `else: \`hkb boards set ${boardSlug ?? '<slug>'} --workflow <name>|none\`.`;
+        }
+      }
+
       // One shortfall, and the first cause found is the one reported — the same precedence rule the
       // declared outputs use, for the same reason: two concatenated reasons read worse than one and
       // send the operator to the same place.
-      const inputShortfall = missingInputs(job.id, unread) ?? guideShortfall;
+      const inputShortfall = missingInputs(job.id, unread) ?? guideShortfall ?? sandboxShortfall ?? stepsShortfall;
       if (inputShortfall) deps.onEvent?.(`  ${inputShortfall}`);
 
       // ---- run. A resumable stop leaves a session id; the next attempt continues it rather than
@@ -1216,25 +1299,28 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       // that fetch; a prompt that asks the worker to make it hands the protection straight back, and
       // that is the third time this exact hole has been opened from a different direction.
       //
-      // `prBase` — whenever the Job named a base at all. A pull request opened with no `--base`
-      // targets the repository's default branch, so a chain step's diff would carry its parent's
-      // commits and merging it would merge the parent's unreviewed work into the trunk. The rebase
-      // keeps the branch on the right base; only this keeps the review on it.
+      // What is NOT here any more is `prBase`. Where a pull request opens — where one is opened at
+      // all — is a step's content and belongs to the workflow that asks for it (ADR-017 decision 5).
+      // `self:base` is how that content gets the same value as data (`src/inputs.ts`).
       const baseBranch = wt ? wt.baseLabel.replace(/^origin\//, '') : null;
       const baseAdvice = wt
         ? {
+          base: wt.baseLabel,
           rebaseOnto: pushedRef(cwd, wt.branch) ? undefined : wt.baseLabel,
           fetch: !(baseBranch && isAttemptBranch(baseBranch)),
-          prBase: spec.base.value && baseBranch ? baseBranch : undefined,
         }
         : undefined;
-      // The pull-request protocol, or the sandbox note, or neither. A PROPOSING Job produces no
-      // commit, so telling it to open a draft pull request contradicts the contract appended below —
-      // one prompt saying both "push what you have" and "write the file and stop" is not an
-      // instruction. It still needs to know it is standing in a worktree, which is what `withWorktree`
-      // says and all it says.
-      const opening = approvalPrompt
-        ?? (wt ? (job.proposes ? withWorktree(job.brief, wt.branch) : withProtocol(job.brief, wt.branch, baseAdvice)) : job.brief);
+      // The sandbox contract, or the sandbox note, or neither. A PROPOSING Job produces no commit, so
+      // asking it to commit contradicts the contract appended below — one prompt saying both "commit
+      // what you have" and "write the file and stop" is not an instruction. It still needs to know it
+      // is standing in a worktree, which is what `withWorktree` says and all it says.
+      const contract = approvalPrompt
+        ?? (wt ? (job.proposes ? withWorktree(job.brief, wt.branch) : withSandbox(job.brief, wt.branch, baseAdvice)) : job.brief);
+      // AFTER the contract, which is the ordering the old placement got backwards: the core says how
+      // work is done here, and the board's steps say what doing it ends in. Skipped for an approval
+      // prompt, which is one human's instruction about one suspended attempt and not a fresh run of
+      // the standing shape.
+      const opening = steps && !approvalPrompt ? withStandingSteps(contract, steps.name, steps.brief) : contract;
       // What the last attempt's check refused, on top of whatever this attempt was going to be told.
       // ADR-016 §3 makes the check part of the completion condition, so a resumed attempt that is not
       // told about it is one that wakes up believing it finished — the retry-that-does-not-know-why
@@ -1313,6 +1399,12 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
           // is what an absent value means. The admission gate is built from this same list
           // (`src/runtime/claude.ts`), so narrowing it here is what actually refuses.
           allowedTools: spec.allowedTools.value ?? undefined,
+          // Under the sandbox, so the gate refuses the two moves that would take its `pre-push` hook
+          // off the path — `--no-verify` and `core.hooksPath` (`src/push.ts`). The branch rule
+          // itself is the hook's, not the gate's. Only for a Job with a branch of its own: a
+          // `--no-isolate` Job runs in the operator's checkout, where there is no hook to protect,
+          // and it is not given the sandbox contract either.
+          ...(wt ? { admission: { sandboxed: true } } : {}),
           // Resolved against the BOARD'S REPOSITORY (`cwd` above), never the worktree — ADR-012,
           // `src/plugins.ts`. A worker writes in its worktree, so a grant that resolved there would
           // let a Job write a hook its own next attempt executes. Against the repository, a merge is

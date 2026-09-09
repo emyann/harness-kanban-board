@@ -139,6 +139,15 @@ export type BoardDefaults = {
   defaultGuide?: unknown;
   defaultBase?: unknown;
   defaultCheck?: unknown;
+  /**
+   * The board's default workflow — and the one field here `resolveSpec` deliberately does not
+   * resolve. It fills no column on a Job: `hkb new` expands it at file time, into the spec fields
+   * below and into the brief (`src/templates.ts`), so by the time anything asks what a Job runs
+   * with, the answer is already on the Job. It rides in this type so that `hkb boards` prints it
+   * beside the defaults it does resolve — a board-wide instruction nobody can see is the surprise
+   * every other line of `describeDefaults` exists to prevent.
+   */
+  defaultWorkflow?: unknown;
 };
 
 export type Traced<T> = { value: T; from: SpecSource };
@@ -218,7 +227,7 @@ export function hasDefaults(b: BoardDefaults): boolean {
   return b.defaultModel != null || b.defaultEffort != null || b.defaultMaxTurns != null
     || b.defaultMaxBudgetUsd != null || b.defaultMaxRetries != null || toolList(b.defaultAllowedTools) != null
     || pluginList(b.defaultPluginPaths) != null || str(b.defaultGuide) != null
-    || str(b.defaultBase) != null || str(b.defaultCheck) != null;
+    || str(b.defaultBase) != null || str(b.defaultCheck) != null || str(b.defaultWorkflow) != null;
 }
 
 /** A board's defaults, under the names the Job knows them by. What `--json` carries. */
@@ -234,5 +243,6 @@ export function boardDefaults(b: BoardDefaults) {
     guide: str(b.defaultGuide),
     base: str(b.defaultBase),
     check: str(b.defaultCheck),
+    workflow: str(b.defaultWorkflow),
   };
 }

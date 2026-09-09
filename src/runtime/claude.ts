@@ -178,6 +178,18 @@ export const claudeRuntime: Runtime = {
         // in every worker's context that nobody chose, on a Job that could widen `--allow-tool` and
         // reach them. With this flag the init message lists no servers at all.
         strictMcpConfig: true,
+        // **Attribution off, as a setting rather than as a sentence.** Every worker used to be
+        // asked in prose not to add a `Co-Authored-By` trailer, a `Claude-Session:` URL or a
+        // "Generated with" line, and prose is layer 6 of `docs/workflow-study.md` §4 — the one that
+        // guarantees nothing. It matters more than most prose does: these are public repositories,
+        // and a session URL published in a commit leaks a private transcript link that cannot be
+        // unpublished by amending the commit.
+        //
+        // The SDK owns the behaviour, so the SDK is where it is turned off. An empty string is the
+        // documented "hide it" value for both fields, and `sessionUrl: false` drops the trailer a
+        // web or Remote Control session would otherwise append. A worker that adds one by hand can
+        // still do so; what is gone is the default that added it without being asked.
+        settings: { attribution: { commit: '', pr: '', sessionUrl: false } },
       },
     });
 

@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "adding a workload kind, changing retry or lease behaviour, or wondering why the DAG is not in the core"
 covers:
   - path: prisma/schema.prisma
-    sha: 34921e6803578d6831938ada63d477d55a95eb6a
+    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
   - path: src/controller.ts
-    sha: 67e1a217f67ec6731ebcc0cd491d5f55d712be81
+    sha: 3673f449a7ebf15f9b21900915183b3bec63b6e5
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
-generated_at_commit: 6d4142a
+generated_at_commit: f8ea774
 last_refreshed: 2026-09-09
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control, features/rebase-and-verify, features/check, architecture/transitions]
 ---
@@ -64,9 +64,15 @@ to run repeatedly, safe to interrupt, and safe to run while another host runs it
 `Job.isolate` (default on) makes a git worktree per attempt on `kb-<jobId>-<k>`,
 and that is the controller's job because the SDK has no isolation option for a
 top-level `query()` — `isolation: "worktree"` is a parameter of the `Agent` tool
-and only reaches subagents (`src/worktree.ts`). The brief gains a fixed protocol on
-top: commit on the branch, push, open a **draft** pull request, never merge
-(`src/brief.ts`). The human merges, which is what keeps this kind dumb.
+and only reaches subagents (`src/worktree.ts`). The brief gains the **sandbox
+contract** on top, and only that: commit on the branch, rebase onto the base before
+you finish, never push the trunk, never merge, never force a branch that is not
+yours (`withSandbox`, `src/brief.ts`). Every line of it is something the machinery
+refuses on afterwards — that is the test for being there at all. *Push it and open a
+draft pull request* is a step's content and comes from the board's default workflow
+instead (`Board.defaultWorkflow`, *features/workflow-templates*,
+*decisions/adr-017-the-workflow-is-content* decision 5). A human still merges, which
+is what keeps this kind dumb; it is now a workflow that says so.
 
 `isolate: false` is a supported way to run, not a read-only escape hatch — a Job
 whose deliverable is an uncommitted change in the operator's working tree is what
@@ -276,8 +282,17 @@ first one takes to finish.
 
 A Board carries **spec defaults** beside its ceilings: `defaultModel`, `defaultEffort`,
 `defaultMaxTurns`, `defaultMaxBudgetUsd`, `defaultMaxRetries`, `defaultAllowedTools`,
-`defaultPluginPaths` and `defaultGuide`. A board that runs cheap, high-volume work can say so once
-instead of on every `hkb new`.
+`defaultPluginPaths`, `defaultGuide`, `defaultBase`, `defaultCheck` and `defaultWorkflow`. A board
+that runs cheap, high-volume work can say so once instead of on every `hkb new`.
+
+`defaultWorkflow` is the odd one and `resolveSpec` never touches it: it names a file in
+`.hkb/workflows/`, and it is read twice at two different times. `hkb new` expands its **frontmatter**
+into the spec fields above when the Job is filed; the controller reads its **body** when the attempt
+is claimed and appends it after the sandbox contract as *standing steps*
+(*features/workflow-templates*). Nothing of the body is stored on the Job, because `hkb queue <id>
+"…"` replaces a brief wholesale and would drop it. It is the board's answer to "how does work here
+finish", which stopped being the core's sentence to write with
+*decisions/adr-017-the-workflow-is-content* decision 5.
 
 > This list has gone stale three times. The controller used to read the Board through a hand-listed
 > `select` that had the same problem, and `defaultPluginPaths` was missing from it — so ADR-012's

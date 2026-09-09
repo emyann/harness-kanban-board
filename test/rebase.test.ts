@@ -33,7 +33,8 @@ const {
 const {
   createWorktree, baseFor, baseRef, checkRef, fetchBase, heldWork, isAttemptBranch, validRef,
 } = await import('../src/worktree.ts');
-const { withProtocol } = await import('../src/brief.ts');
+const { withSandbox } = await import('../src/brief.ts');
+const { JOB_FIELDS } = await import('../src/inputs.ts');
 
 const git = (cwd: string, args: string[]) => {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -41,6 +42,8 @@ const git = (cwd: string, args: string[]) => {
   return r.stdout.trim();
 };
 const at = (cwd: string, ref: string) => git(cwd, ['rev-parse', ref]);
+/** The same, for a question whose answer may legitimately be "nothing set". */
+const gitOut = (cwd: string, args: string[]) => spawnSync('git', args, { cwd, encoding: 'utf8' }).stdout.trim();
 
 /** A remote, and a clone with a first commit on `main`. */
 function makeRemote(name: string): { origin: string; repo: string; other: string } {
@@ -663,9 +666,9 @@ test('a base that has gone does not kill an attempt RESUMING in a checkout it al
 });
 
 test('a chain step is told the right things about its parent branch, by the controller', async () => {
-  // `withProtocol` is tested directly above; this is the half that binds it. The controller decides
-  // whether the worker may fetch and what the pull request opens against, and both were wrong in a
-  // way no unit test of the renderer could see.
+  // `withSandbox` is tested directly above; this is the half that binds it. The controller decides
+  // whether the worker may fetch and what it rebases onto, and both were wrong in a way no unit
+  // test of the renderer could see. At the shipped defaults: nothing here configures the gate.
   const { repo } = makeRemote('advice');
   const db = openBoard();
   const board = await db.board.upsert({
@@ -673,11 +676,15 @@ test('a chain step is told the right things about its parent branch, by the cont
   });
   const first = await db.job.create({ data: { boardId: board.id, name: 'one', brief: 'write it' } });
 
-  const prompts: string[] = [];
+  const specs: WorkerSpec[] = [];
+  /** `core.hooksPath` as the WORKER sees it, read while the run is in flight — the worktree is
+   * swept once the work is pushed, so afterwards there is nothing left to ask. */
+  const hooks: string[] = [];
   const runtime: Runtime = {
     name: 'capturing',
     async run(spec: WorkerSpec, onEvent?: (e: RuntimeEvent) => void): Promise<WorkerOutcome> {
-      prompts.push(spec.prompt);
+      specs.push(spec);
+      hooks.push(gitOut(spec.cwd, ['config', '--get', 'core.hooksPath']));
       const branch = git(spec.cwd, ['branch', '--show-current']);
       work(spec.cwd, `f${spec.taskId}.txt`, 'x\n', 'work');
       git(spec.cwd, ['push', '-q', '-u', 'origin', branch]);
@@ -694,17 +701,37 @@ test('a chain step is told the right things about its parent branch, by the cont
     where: { id: first.id }, include: { attempts: true },
   })).attempts[0].branch ?? '';
 
-  // The trunk Job: fetch its base, open against the default branch.
-  assert.match(prompts[0], new RegExp(`git fetch origin main`), 'a trunk Job refreshes its own base');
-  assert.doesNotMatch(prompts[0], /gh pr create[^\n]*--base/, 'and opens against the default branch');
+  // The trunk Job: fetch its base, rebase onto it, and nothing about a forge.
+  assert.match(specs[0].prompt, /git fetch origin main/, 'a trunk Job refreshes its own base');
+  assert.doesNotMatch(specs[0].prompt, /pull request/i, 'the core stopped asking for one');
+  // And the rules it does not merely ask for. The branch rule is git's now — a `pre-push` hook
+  // installed on the worktree (`test/push.test.ts` runs it against a real remote) — and what the
+  // runtime is handed is the flag that turns on the two refusals keeping that hook on the path.
+  // Read off the spec, because that is what builds the gate.
+  assert.equal(
+    specs[0].admission?.sandboxed,
+    true,
+    'the sandbox gate is wired at the shipped defaults, not only when a test asks for it',
+  );
+  assert.ok(hooks[0], 'and the worktree was actually pointed at a hook while the worker ran in it');
+  assert.ok(!hooks[0].startsWith(specs[0].cwd), 'at a path outside the checkout the worker can write');
 
-  await db.job.create({ data: { boardId: board.id, name: 'two', brief: 'add to it', base: parent } });
+  await db.job.create({
+    data: {
+      boardId: board.id, name: 'two', brief: 'add to it', base: parent,
+      // The fact that used to be `BaseAdvice.prBase`, as data a step's own content can read.
+      inputs: ['where=self:base'],
+    },
+  });
   await reconcile({ runtime, cwd: repo, board: 'advice', readPr: false });
 
-  const step = prompts[1];
+  const step = specs[1].prompt;
   assert.match(step, new RegExp(`git rebase origin/${parent}`), 'the chain step still rebases');
   assert.doesNotMatch(step, /git fetch/, 'but fetches nothing — that ref is its parent\'s lease');
-  assert.match(step, new RegExp(`gh pr create[^\\n]*--base ${parent}`), 'and opens against its parent');
+  assert.match(step, new RegExp(`### \`where\`  \\(self:base\\)\\s+\`{5}\\s+${parent}`),
+    '`self:base` is the branch the checkout was cut from — and without `origin/`, which `gh pr create --base` rejects');
+  assert.match(step, new RegExp(`Your base .* is \`origin/${parent}\``),
+    'and the contract still names the tracking ref, which is the spelling a rebase wants');
 });
 
 test('a base that is on the REMOTE but not in this clone says so, instead of "wait for it"', async () => {
@@ -803,51 +830,52 @@ test('a Job\'s branch is rebased onto ITS base, never the repository\'s default'
 
 // ---------------------------------------------------------------- the prompt half
 
-test('the protocol asks the worker to rebase BEFORE it pushes, since after it cannot', () => {
-  const p = withProtocol('do the thing', 'kb-1-1', { rebaseOnto: 'origin/main' });
-  const rebaseAt = p.indexOf('git rebase origin/main');
-  const pushAt = p.indexOf('git push -u origin kb-1-1');
-  assert.ok(rebaseAt > 0, 'it is asked for');
-  assert.ok(rebaseAt < pushAt, 'and it is asked for before the push, which is the only place it is free');
-  assert.match(p, /3\. Push it/, 'the steps are renumbered rather than repeating a number');
-  assert.match(p, /5\. Reply with one line/);
+test('the sandbox contract asks the worker to rebase before it finishes, then to push', () => {
+  // It used to say "before you PUSH", which put the rebase in the wrong relationship to the step
+  // after it: what the machinery refuses on is the branch being on the base when the ATTEMPT ends.
+  // The push is still asked for — the core reads pushed state (`pushedRef`, `sweepWorktrees`), so
+  // ADR-017's derivation moved it to content one card early. It leaves when #49 retires the reads.
+  const p = withSandbox('do the thing', 'kb-1-1', { rebaseOnto: 'origin/main' });
+  assert.match(p, /Before you finish, rebase onto the base/);
+  assert.ok(p.indexOf('git rebase origin/main') > p.indexOf('Commit it on'), 'after the commit it rebases');
+  assert.ok(p.indexOf('git push -u origin kb-1-1') > p.indexOf('git rebase origin/main'), 'and pushes after that');
+  assert.match(p, /4\. Reply with one line/, 'the steps are renumbered rather than repeating a number');
 });
 
-test('the protocol does not ask a worker to fetch a branch that is somebody\'s lease', () => {
+test('the contract does not ask a worker to fetch a branch that is somebody\'s lease', () => {
   // The third direction this hole has been opened from: `fetchBase` refuses to refresh an attempt
   // branch, and the prompt then asked the worker to do it — inside a worktree, whose ref store is
   // the parent repo's.
-  const p = withProtocol('do it', 'kb-34-1', { rebaseOnto: 'origin/kb-33-1', fetch: false });
+  const p = withSandbox('do it', 'kb-34-1', { rebaseOnto: 'origin/kb-33-1', fetch: false });
   assert.match(p, /git rebase origin\/kb-33-1/, 'it still rebases');
   assert.doesNotMatch(p, /git fetch/, 'and it fetches nothing at all');
   assert.match(p, /do NOT fetch it first/, 'said out loud, so it does not read as an omission');
 });
 
-test('a pull request for a based Job opens against that base, not the default branch', () => {
-  // Without this the diff carries the parent step's commits and merging it merges the parent's
-  // unreviewed work into the trunk — the rebase keeps the BRANCH right, this keeps the REVIEW right.
-  const p = withProtocol('do it', 'kb-34-1', { rebaseOnto: 'origin/kb-33-1', fetch: false, prBase: 'kb-33-1' });
-  assert.match(p, /gh pr create .*--head kb-34-1 --base kb-33-1/);
-  assert.match(p, /NOT the default branch/);
-
-  const plain = withProtocol('do it', 'kb-1-1', { rebaseOnto: 'origin/main' });
-  assert.doesNotMatch(plain, /gh pr create[^\n]*--base/, 'and a Job with no base still says nothing');
-  assert.match(plain, /against the default branch/);
+test('where the review opens is no longer the core\'s to say — the base is data instead', () => {
+  // `BaseAdvice.prBase` wrote "open it against `kb-33-1`" into prose that only a pull request step
+  // could use, in a core that no longer knows whether this Job opens one. The fact survives as
+  // `self:base` (`src/inputs.ts`), where a workflow's own steps can ask for it.
+  const p = withSandbox('do it', 'kb-34-1', { rebaseOnto: 'origin/kb-33-1', fetch: false });
+  assert.doesNotMatch(p, /pull request/i);
+  assert.doesNotMatch(p, /--base/);
+  assert.ok((JOB_FIELDS as readonly string[]).includes('base'), 'and it is a field a Job may read about itself');
 });
 
-test('the protocol never asks for a BLANKET fetch, which would undo the lease it is paired with', () => {
+test('the contract never asks for a BLANKET fetch, which would undo the lease it is paired with', () => {
   // A worktree shares its parent's ref store, so `git fetch origin` inside one updates
   // `refs/remotes/origin/kb-<id>-<k>` — the exact ref `--force-with-lease` compares against.
   // `fetchBase` narrows itself for this reason; asking the worker to widen it again gives it back.
-  const p = withProtocol('do the thing', 'kb-1-1', { rebaseOnto: 'origin/main' });
+  const p = withSandbox('do the thing', 'kb-1-1', { rebaseOnto: 'origin/main' });
   assert.match(p, /git fetch origin main\b/, 'the base branch, by name');
   assert.doesNotMatch(p, /git fetch origin(?!\s+\S)/, 'and never a bare `git fetch origin`');
 });
 
 test('a repository with no remote is not told to fetch one', () => {
-  const p = withProtocol('do the thing', 'kb-1-1', { rebaseOnto: 'HEAD' });
+  const p = withSandbox('do the thing', 'kb-1-1', { rebaseOnto: 'HEAD' });
   assert.doesNotMatch(p, /git fetch origin/);
   assert.match(p, /2\. Push it/, 'and the steps close back up');
+  assert.match(p, /3\. Reply with one line/);
 });
 
 // ---------------------------------------------------------------- through the controller, at the shipped defaults

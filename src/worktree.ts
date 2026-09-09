@@ -647,10 +647,19 @@ export function existingWorktree(root: string, jobId: number, k: number, want?: 
   const dir = path.join(root, '.hkb', 'worktrees', branchFor(jobId, k));
   if (!fs.existsSync(dir)) return null;
   // Read the branch off the checkout rather than deriving it: a collision on the remote may have
-  // given the first attempt a suffixed name, and resuming onto the derived one would put the
-  // session on a branch its own commits are not on.
+  // given the first attempt a suffixed name (`freeBranch`), and resuming onto the derived one would
+  // put the session on a branch its own commits are not on.
+  //
+  // **But only a name this Job could have been given.** What is in the checkout is whatever the last
+  // attempt left there, and a worker can `git switch` — so attempt 1 ending on `develop` used to
+  // make `develop` this attempt's own branch, which is the branch the sandbox then licenses a push
+  // to (`src/push.ts`). The suffix form is the only variation hkb itself produces, so anything else
+  // is a worker's doing and the derived name is the right answer: the worktree is put back on the
+  // branch it was cut on, and a run that wandered off does not get to rename the sandbox.
   const on = git(dir, ['branch', '--show-current']);
-  const branch = on.status === 0 && on.stdout.trim() ? on.stdout.trim() : branchFor(jobId, k);
+  const found = on.status === 0 ? on.stdout.trim() : '';
+  const mine = new RegExp(`^${branchFor(jobId, k)}(-\\d+)?$`);
+  const branch = found && mine.test(found) ? found : branchFor(jobId, k);
   const baseLabel = baseFor(root, want);
   return { path: dir, branch, baseLabel, base: resolveBase(root, baseLabel) };
 }

@@ -11,15 +11,15 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: prisma/schema.prisma
-    sha: 34921e6803578d6831938ada63d477d55a95eb6a
+    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
   - path: src/controller.ts
-    sha: 67e1a217f67ec6731ebcc0cd491d5f55d712be81
+    sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
   - path: src/runtime/index.ts
-    sha: 55007f26fe6b9e4ec107997eef5aba74ec4643e6
+    sha: cbfa18bd1871a66bdb1fcd59e77a0f6b7ac5bbb1
   - path: src/hkb.ts
-    sha: f7cca4f068b7ccb229e6f7b87727de198f9efb6e
+    sha: 7b95039ab59dbcf5234373c716a5db86a15db8fb
   - path: src/inputs.ts
-    sha: ffd76fce7689fe1c9a1dc0db3756cdf343d2b623
+    sha: 140cf48b8b323742a57e3e604b6853f829c72b6c
 related:
   [
     decisions/adr-007-workload-scheduler,
@@ -28,7 +28,7 @@ related:
     architecture/job-kind,
     architecture/overview,
   ]
-generated_at_commit: 6d4142a
+generated_at_commit: f063b7a
 last_refreshed: 2026-09-09
 ---
 

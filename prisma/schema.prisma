@@ -173,6 +173,19 @@ model Board {
   /// every worker on it. Null — the shipped default — means nothing runs.
   defaultCheck        String?
 
+  /// The name of a workflow in `.hkb/workflows/` — how work on this board FINISHES.
+  ///
+  /// ADR-017 decision 1: a board's default workflow is a file, not code. The core tells a worker the
+  /// sandbox contract and nothing else, so "push and open a pull request" has to come from
+  /// somewhere, and a hand-filed Job (`hkb new --brief …`, no `--from`) had nowhere to get it. This
+  /// is that somewhere.
+  ///
+  /// It composes differently from every other default here, and deliberately: the frontmatter fills
+  /// spec nulls the way `--from` would, and the BODY is appended to the brief as standing steps
+  /// (`src/templates.ts`). A Job filed WITH `--from` ignores it entirely — that workflow governs.
+  /// Null, the shipped default, means a Job gets the sandbox contract and nothing else.
+  defaultWorkflow     String?
+
   events Event[]
 
   controller Controller?

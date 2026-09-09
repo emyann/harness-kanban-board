@@ -9,9 +9,9 @@ covers:
   - path: bin/hkb.ts
     sha: 698dd0e673a442929b7314d6bb409f87f89b8251
   - path: src/hkb.ts
-    sha: f7cca4f068b7ccb229e6f7b87727de198f9efb6e
+    sha: 306d4fa2d8af038fbfd904dbb17161850a65e942
   - path: src/controller.ts
-    sha: 67e1a217f67ec6731ebcc0cd491d5f55d712be81
+    sha: 3673f449a7ebf15f9b21900915183b3bec63b6e5
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/db.ts
@@ -21,23 +21,23 @@ covers:
   - path: src/artifacts.ts
     sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
   - path: src/inputs.ts
-    sha: ffd76fce7689fe1c9a1dc0db3756cdf343d2b623
+    sha: 140cf48b8b323742a57e3e604b6853f829c72b6c
   - path: src/proposals.ts
     sha: fd5e1eee8b847c9b4024d1bf5f635a85907baae4
   - path: src/templates.ts
-    sha: fb6b019b10b138755c8f1b6e753dc19adb9d5735
+    sha: 5377df2c14203132e63b836c3685a7f6b0e9d9bc
   - path: src/labels.ts
     sha: b524ef31fce5611a1a676dfb4631aaa83ecba926
   - path: src/watch.ts
     sha: 992b53f9dc3ef4284c2a1bf0201794490afee393
   - path: src/brief.ts
-    sha: 9090eb71378c7dac7b89cf63c2140f1e97e98c69
+    sha: a56db1e2f49d60c695034ecd14f73c5c258cce85
   - path: src/worktree.ts
-    sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
+    sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
   - path: src/pulls.ts
     sha: a27f00a986f576c2d3ed035902c0a1c9f9a9300c
   - path: prisma/schema.prisma
-    sha: 34921e6803578d6831938ada63d477d55a95eb6a
+    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
 related:
   [
     architecture/job-kind,
@@ -48,7 +48,7 @@ related:
     decisions/adr-009-retiring-the-first-system,
     decisions/adr-011-proposals-not-board-access,
   ]
-generated_at_commit: 6d4142a
+generated_at_commit: 32ea87c
 last_refreshed: 2026-09-09
 ---
 

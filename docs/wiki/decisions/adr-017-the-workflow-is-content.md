@@ -11,13 +11,13 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/brief.ts
-    sha: 9090eb71378c7dac7b89cf63c2140f1e97e98c69
+    sha: 97737608be17c28aeca4bf859902c9c5b6ec4d89
   - path: src/templates.ts
-    sha: fb6b019b10b138755c8f1b6e753dc19adb9d5735
+    sha: 1004bfccbdd46a7e2f875ba59d30d59b4107dbb9
   - path: prisma/schema.prisma
-    sha: 34921e6803578d6831938ada63d477d55a95eb6a
-generated_at_commit: 26814cb
-last_refreshed: 2026-09-08
+    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
+generated_at_commit: f063b7a
+last_refreshed: 2026-09-09
 related:
   [
     decisions/adr-007-workload-scheduler,

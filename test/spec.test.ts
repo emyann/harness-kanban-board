@@ -105,12 +105,16 @@ test('boardDefaults renames the columns to what a Job calls them, and keeps the 
   assert.deepEqual(boardDefaults(board), {
     model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 5,
     allowedTools: ['Read', 'Grep'], pluginPaths: null, guide: 'CLAUDE.md', base: 'origin/develop',
-    check: 'npm test',
+    check: 'npm test', workflow: null,
   });
   assert.deepEqual(boardDefaults({}), {
     model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null,
-    allowedTools: null, pluginPaths: null, guide: null, base: null, check: null,
+    allowedTools: null, pluginPaths: null, guide: null, base: null, check: null, workflow: null,
   });
+  // The one default here that fills no column on a Job: `hkb new` expands the workflow at file time
+  // (`src/templates.ts`), so it rides in this shape to be PRINTED and is never resolved.
+  assert.equal(boardDefaults({ defaultWorkflow: 'implement' }).workflow, 'implement');
+  assert.equal(hasDefaults({ defaultWorkflow: 'implement' }), true, 'a board that appends steps to every brief has a default');
 });
 
 /**
