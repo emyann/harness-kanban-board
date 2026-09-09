@@ -4,7 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { readTemplate, workflowPath, placeholders, WORKFLOW_DIR, TEMPLATE_KEYS, TEMPLATE_MAX_BYTES } from '../src/templates.ts';
+import {
+  readTemplate, workflowPath, placeholders, standingStepsFrom, withStandingSteps, WORKFLOW_DIR,
+  TEMPLATE_KEYS, TEMPLATE_MAX_BYTES,
+} from '../src/templates.ts';
 
 /**
  * The format is machinery (ADR-015 decision 3), so what is tested here is what it REFUSES.
@@ -313,4 +316,39 @@ test('the exemption is for ONE key: a single bracketed item on any other scalar 
   }
   const shell = repo({ [wf('d.md')]: '---\nname: d\ncheck: [ -f dist/index.js ]\n---\nbody\n' });
   assert.equal(readTemplate(shell, 'd').spec.check, '[ -f dist/index.js ]', 'and the shell test still parses on the key it is for');
+});
+
+// --- standing steps: the board's default workflow -------------------------
+
+/**
+ * `withStandingSteps` / `standingStepsFrom` — the one place a file's body and the line's brief both
+ * survive (ADR-017 decision 1).
+ *
+ * `--from` REPLACES: the workflow is the work, so its body is the brief. A board's default is the
+ * opposite claim — a hand-written brief says WHAT to do and the default says what doing it ends in
+ * — so it composes. The pair is written and read here so that `hkb show` can name the source of a
+ * Job's standing steps without a column to disagree with the text the worker is actually given.
+ */
+test('standing steps are appended after the brief, and name where they came from', () => {
+  const out = withStandingSteps('Fix the parser.', 'implement', 'Push it, then open a pull request.');
+  assert.match(out, /^Fix the parser\./, 'the brief comes first — it is what to do');
+  assert.match(out, /Standing steps for work on this board, from the workflow `implement`:/);
+  assert.ok(out.indexOf('Push it') > out.indexOf('Fix the parser'), 'and the contract reads last');
+  assert.equal(standingStepsFrom(out), 'implement', 'and it is readable back off the Job');
+});
+
+test('a brief with no standing steps says so, rather than guessing', () => {
+  assert.equal(standingStepsFrom('Fix the parser.'), null);
+  assert.equal(standingStepsFrom(''), null);
+  assert.equal(standingStepsFrom(undefined as never), null);
+  // Empty steps are not steps: a workflow with a blank body cannot be filed at all
+  // (`readTemplate` refuses it), and nothing should claim a source for an absence.
+  assert.equal(withStandingSteps('Fix it.', 'implement', '   '), 'Fix it.');
+});
+
+test('the last block wins, because that is the one hkb wrote', () => {
+  // A brief that QUOTES the sentence — a card about this feature, for instance — is describing
+  // something. The appended block is always at the bottom.
+  const quoted = 'A brief that says: Standing steps for work on this board, from the workflow `other`:';
+  assert.equal(standingStepsFrom(withStandingSteps(quoted, 'implement', 'do the thing')), 'implement');
 });

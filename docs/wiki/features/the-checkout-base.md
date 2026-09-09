@@ -9,13 +9,13 @@ covers:
   - path: src/worktree.ts
     sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
   - path: src/spec.ts
-    sha: d3fba5cc6bb9a1cebeea496bf445f4165c3cecbc
+    sha: 8792a804835fd0602a992aeccf978e110fe2a98f
   - path: src/controller.ts
-    sha: 67e1a217f67ec6731ebcc0cd491d5f55d712be81
+    sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
   - path: src/rebase.ts
     sha: 5b0df395ad3a5c5a8b2bad44a782d40e92d40d28
   - path: prisma/schema.prisma
-    sha: 34921e6803578d6831938ada63d477d55a95eb6a
+    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
 related:
   [
     features/rebase-and-verify,
@@ -24,7 +24,7 @@ related:
     architecture/job-kind,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: 6d4142a
+generated_at_commit: 8aa5ade
 last_refreshed: 2026-09-09
 ---
 
@@ -162,21 +162,27 @@ branch is a surprise waiting in a diff nobody can explain.
 
 ## What the worker is told
 
-The base changes three things in the brief (`withProtocol`, `src/brief.ts`), and the controller
-computes all three because only it knows the facts:
+The base changes two things in the brief (`withSandbox`, `src/brief.ts`), and the controller
+computes both because only it knows the facts:
 
 - **whether to rebase at all** — omitted for a resumed attempt, whose branch is already on the
   remote, where the rebase makes the next push non-fast-forward and the next rule in the same
-  protocol forbids the force that would fix it.
+  contract forbids the force that would fix it.
 - **whether the worker may fetch first** — `false` when the base is an attempt branch. A worktree
   shares its parent's ref store, so `git fetch origin kb-33-1` there updates
   `refs/remotes/origin/kb-33-1` exactly as `fetchBase` would have. This is the *third* direction
   that one hole has been opened from: a blanket fetch in the prompt, then an attempt branch as a
   base, then the prompt again by way of the base. The rebase step stays; only the fetch goes.
-- **what the pull request opens against** — `gh pr create` with no `--base` targets the repository's
-  default branch, so a chain step's diff would carry its parent's commits and merging it would merge
-  the parent's unreviewed work into the trunk. The rebase keeps the *branch* on the right base; only
-  this keeps the *review* on it.
+There used to be a third — **what the pull request opens against** — and it left with the pull
+request itself (*decisions/adr-017-the-workflow-is-content* decision 5). The concern it answered is
+real and unchanged: `gh pr create` with no `--base` targets the repository's default branch, so a
+chain step's diff would carry its parent's commits and merging it would merge the parent's
+unreviewed work into the trunk. The rebase keeps the *branch* on the right base; only the review's
+base keeps the *review* on it. What changed is who says so: the fact is now readable as data —
+`--input where=self:base` gives a run the resolved ref its checkout was cut from (`origin/kb-33-1`,
+or the default branch's ref), so the step's own content can open the review against it
+(`JOB_FIELDS`, `src/inputs.ts`; `hkb --help`). A workflow that opens pull requests declares it; the
+core, which does not know whether this Job opens one, no longer guesses.
 
 ## What it makes possible, and what it does not
 

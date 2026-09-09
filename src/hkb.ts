@@ -20,7 +20,10 @@ import { eventLine, watchEvents, watchWhere, WATCH_FALLBACK_MS } from './watch.t
 import { checkPluginPath, pluginList } from './plugins.ts';
 import { CHECK_COMMAND_MAX_BYTES, describeCheck, storedCheck } from './check.ts';
 import { checkInputSpec, declaredInputs, renderBrief, describeSource } from './inputs.ts';
-import { readTemplate, placeholders, WORKFLOW_DIR } from './templates.ts';
+import {
+  readTemplate, placeholders, standingStepsFrom, withStandingSteps, workflowPath, WORKFLOW_DIR,
+  type Template,
+} from './templates.ts';
 import { fakeRuntime } from './runtime/fake.ts';
 import * as daemon from './daemon.ts';
 import { EFFORTS, boardDefaults, hasDefaults, resolveSpec, type SpecSource } from './spec.ts';
@@ -198,12 +201,15 @@ const HELP = `hkb — run one agent against one brief
                           \`board\`             this board's Jobs, phases and outcomes
                           \`value:<literal>\`   a payload the caller pushes, not one hkb fetches
                           \`self:<field>\`      this Job about itself — id, name, board, attempt,
-                                              slot, branch, worktree, repo
+                                              slot, branch, base, worktree, repo
                         Read before the run and put in the prompt; an input the board cannot read
                         fails the attempt without spending one. Narrow --allow-tool alongside it
                         and the Job sees what it was given and no more.
                         \`self:slot\` is the one that answers "which concurrent worker am I" — a
                         small integer no other live run holds, for a port or a database name.
+                        \`self:base\` is the resolved ref this Job's branch was cut from —
+                        \`origin/main\`, or \`origin/kb-33-1\` for a step chained onto another — so a
+                        step's own steps can say "open it against your base" and mean it.
                         A \`value:\` may also be interpolated into the brief as {{name}} or
                         {{name.field}} — whichever way the brief arrived. Only \`value:\`, because
                         the brief is instruction and a fetched source is data.
@@ -305,6 +311,13 @@ const HELP = `hkb — run one agent against one brief
                         the contributor guide names, as in \`npm run lint && npm test\`. A Job's
                         own --check wins, and \`hkb job set <id> --check ""\` opts one Job out of
                         this entirely; with neither set, nothing runs.
+       --workflow <name>|none  how work on this board FINISHES: the workflow in
+                        \`${WORKFLOW_DIR}/\` whose frontmatter fills what a Job did not say and
+                        whose BODY is appended to its brief as standing steps — "push your branch,
+                        open a pull request against your base". hkb itself tells a worker only what
+                        it will refuse on afterwards (its own branch, the rebase, never the trunk),
+                        so anything past that is a step's content and lives here. A Job filed with
+                        \`--from\` ignores it: that workflow governs. Null appends nothing.
 
   hkb migrate               apply this build's pending migrations to the board, deliberately
   hkb version               what this build is
@@ -547,6 +560,11 @@ export function describeDefaults(d: ReturnType<typeof boardDefaults>): string {
     // shell line that runs with the daemon's privileges and decides whether an attempt failed —
     // a board-wide check nobody can see is exactly the surprise this line exists to prevent.
     d.check !== null ? `check=${d.check}` : null,
+    // And the steps every hand-filed Job on this board is given on top of its brief. The loudest of
+    // the three grants for the same reason as the check: it is text that reaches a worker as
+    // instruction, and a board that silently appends "open a pull request" to every brief is a
+    // surprise the operator should be able to read off one line (ADR-017 decision 1).
+    d.workflow !== null ? `workflow=${d.workflow}` : null,
   ].filter((p): p is string => p !== null);
   return parts.length ? parts.join(' ') : '(none)';
 }
@@ -649,6 +667,9 @@ const OPTIONS = {
       // a rule for which one wins per key, and "the flag you typed wins over the file" is the only
       // precedence anyone should have to hold.
       from: { type: 'string' },
+      // The board's default workflow, on `hkb boards set`. A name, never a body: the file is read
+      // from the board's repository, so what a board appends to every brief changes by merge.
+      workflow: { type: 'string' },
       model: { type: 'string' },
       effort: { type: 'string' },
       board: { type: 'string' },
@@ -869,6 +890,52 @@ export async function main(argv: string[]): Promise<number> {
       // for, with nothing created. It resolves against the board's REPOSITORY, never the cwd and
       // never a worktree: the same fence as a guide and a plugin grant (`src/templates.ts`).
       const tpl = values.from !== undefined ? readTemplate(scope.repoPath, given(values.from, '--from')) : null;
+      // The BOARD's default workflow — how work on this board finishes (ADR-017 decision 1).
+      //
+      // Only when nobody said `--from`. With one, that workflow governs entirely: composing the two
+      // would mean a workflow author could not write a step that finishes differently from the
+      // board, and "the more specific thing wins" is the precedence rule everywhere else here.
+      //
+      // Not for a `--propose` Job either, and for the reason `withWorktree` exists in
+      // `src/brief.ts`: a proposing Job's whole output is one JSON file, so a brief that also ends
+      // in "commit it and open a pull request" is not an instruction a worker can follow. Measured
+      // once already, on the protocol this replaces.
+      //
+      // Read from the BOARD row rather than from `scope`, because the row is where the default is,
+      // and the board may not exist yet — filing the first Job in a repository creates it, and a
+      // board that does not exist has no default to apply.
+      let dflt: Template | null = null;
+      if (!tpl && !values.propose) {
+        const known = await db.board.findUnique({ where: { slug }, select: { defaultWorkflow: true } });
+        const wanted = known?.defaultWorkflow?.trim();
+        if (wanted) {
+          // Refused HERE, by name, with nothing created — the same rule `--from` follows. A board
+          // pointing at a workflow that is not in the repository is a mistake the operator can fix
+          // in one command, and discovering it at claim time would mean a Job that is missing the
+          // steps everything else on the board got.
+          try {
+            dflt = readTemplate(scope.repoPath, wanted);
+          } catch (e) {
+            throw usage(
+              `board ${slug} files every Job with the workflow \`${wanted}\`, and ${(e as Error).message}`
+              + ` Add the file, or point the board somewhere else: \`hkb boards set ${slug} --workflow <name>|none\`.`,
+            );
+          }
+          // A default workflow's body is appended to somebody else's brief, so there is nothing for
+          // a placeholder to be filled from — `--input` on the line belongs to the Job's own brief.
+          // Refused rather than passed through, because the literal text `{{page}}` in a worker's
+          // instructions is the one outcome nobody would have chosen.
+          const want = placeholders(dflt.brief);
+          if (want.length) {
+            throw usage(
+              `the workflow \`${dflt.name}\` is board ${slug}'s default, and its body refers to `
+              + `${want.map((n) => `\`{{${n}}}\``).join(', ')} — standing steps are appended to every brief filed here, `
+              + 'so there is nothing to fill them from. Write the steps without placeholders, or use it with '
+              + `\`hkb new --from ${dflt.name}\`, where the Job can declare the inputs.`,
+            );
+          }
+        }
+      }
       // Whether the operator TYPED `--check`, read before the workflow fills the gaps below — after
       // the fill, `values.check` no longer says which of the two it came from.
       const checkTyped = values.check !== undefined;
@@ -879,6 +946,16 @@ export async function main(argv: string[]): Promise<number> {
         // to it — a `--allow-tool` that could only widen a workflow's surface would be a grant
         // nobody could narrow.
         for (const [k, v] of Object.entries(tpl.spec)) {
+          if ((values as Record<string, unknown>)[k] === undefined) (values as Record<string, unknown>)[k] = v;
+        }
+      }
+      // The board's default fills the same gaps the same way — the line wins, then the file, then
+      // the board's own `default*` columns, which `src/spec.ts` resolves later against whatever is
+      // still null. Only the BODY composes differently (see `withStandingSteps`); the spec half is
+      // `--from`'s rule exactly, because a default that could not be overridden on the line would be
+      // a ceiling, and a ceiling is a different kind of fact.
+      if (dflt) {
+        for (const [k, v] of Object.entries(dflt.spec)) {
           if ((values as Record<string, unknown>)[k] === undefined) (values as Record<string, unknown>)[k] = v;
         }
       }
@@ -964,6 +1041,11 @@ export async function main(argv: string[]): Promise<number> {
       // rather than remembering it keeps the run path with one rule: everything in `inputs` is
       // rendered, and nothing is rendered twice.
       inputs = inputs.filter((i) => !rendered.used.has(i.name));
+      // The standing steps, after the brief and after the interpolation: the brief says WHAT to do
+      // and this says what doing it ends in, so it reads last and it is not a template for anything.
+      // Composed into the stored brief rather than remembered as a reference, on this file's own
+      // rule — what the board stores is what the run is given (`src/templates.ts`).
+      const briefText = dflt ? withStandingSteps(rendered.text, dflt.name, dflt.brief) : rendered.text;
       // A repo-relative path, checked at file time like every other declaration and for the same
       // reason as an input's: it names a file the BOARD will read with the operator's authority and
       // put in front of a model, so a path that was never legal must not become state. Undefined
@@ -1034,7 +1116,7 @@ export async function main(argv: string[]): Promise<number> {
           : null;
       const job = await db.job.create({
         data: {
-          boardId: board.id, name, brief: rendered.text,
+          boardId: board.id, name, brief: briefText,
           // Null rather than `[]` for a Job that declares nothing: "produces no file" and "produced
           // none of the files it promised" are different facts, and only the second is a failure.
           ...(exports.length ? { exports } : {}),
@@ -1075,12 +1157,16 @@ export async function main(argv: string[]): Promise<number> {
       // "an attempt can fail on a command nobody printed" surprise this echo exists to prevent. The
       // board row is already in hand, so this costs nothing and reads like `hkb show`.
       const filedCheck = resolveSpec(job, board).check;
-      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports, results, artifacts, inputs, labels, proposes, check: jsonCheck(filedCheck, proposes), from: tpl?.name ?? null }, () =>
+      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports, results, artifacts, inputs, labels, proposes, check: jsonCheck(filedCheck, proposes), from: tpl?.name ?? null, standingSteps: dflt?.name ?? null }, () =>
         console.log(`#${job.id} ${job.name}  [${job.phase}]  on ${slug}`
           + (triage ? `  — noted, not queued. \`hkb queue ${job.id}\` when it is work` : '')
           // Named because the Job no longer remembers: a workflow is expanded at file time and gone,
           // so this line is the only place the two are ever seen together.
           + (tpl ? `\n  from workflow ${tpl.name}${tpl.description ? ` — ${tpl.description}` : ''}` : '')
+          // Said out loud for the same reason: this brief is not only what was typed, and a worker
+          // that is going to be told something the operator did not write should not be the first
+          // to find out.
+          + (dflt ? `\n  finishes with ${dflt.name}${dflt.description ? ` — ${dflt.description}` : ''}  [board ${slug}]` : '')
           + (exports.length ? `\n  must produce  ${exports.join(', ')}` : '')
           + (results.length ? `\n  must report   ${results.join(', ')}` : '')
           + (artifacts.length ? `\n  must hand over ${artifacts.join(', ')}` : '')
@@ -1197,7 +1283,11 @@ export async function main(argv: string[]): Promise<number> {
       // object `hkb new --json` prints, so the two verbs cannot disagree about the command that
       // will judge this Job. See `jsonCheck`. Every other raw column is left as it is: they are
       // traced under `spec` alongside, and this is the one that was answering two ways.
-      emit(out, { ...job, check: jsonCheck(spec.check, job.proposes), spec }, () => {
+      // Where the standing steps came from, if this Job has any — read back out of the brief that
+      // carries them (`standingStepsFrom`), which is the only record there is: a workflow is
+      // expanded at file time and a column would be a second, staler copy of the same fact.
+      const steps = standingStepsFrom(job.brief);
+      emit(out, { ...job, check: jsonCheck(spec.check, job.proposes), spec, standingSteps: steps }, () => {
         console.log(`#${job.id} ${job.name}`);
         // One board per machine, one Board per repository: a Job you did not expect is usually a
         // Job on a board you were not thinking about. Which board, and which checkout it will run
@@ -1294,6 +1384,10 @@ export async function main(argv: string[]): Promise<number> {
         if (job.lastError) console.log(`  error    ${job.lastError}`);
         if (job.lastSessionId) console.log(`  resume   ${job.lastSessionId}`);
         console.log(`  brief    ${job.brief.split('\n')[0].slice(0, 88)}${job.brief.length > 88 ? ' …' : ''}`);
+        // The part of the brief nobody typed. Named like every other resolved field's source, and
+        // for the same reason: a worker is told these steps, and an operator reading this screen to
+        // find out why it opened a pull request should not have to read the whole brief to see it.
+        if (steps) console.log(`  steps    standing steps from workflow ${steps}, appended when it was filed`);
         if (!job.attempts.length) console.log('  attempts (none yet)');
         for (const a of job.attempts) {
           // Spent, against the cap this attempt was frozen at. The frozen number and not today's
@@ -1786,6 +1880,25 @@ export async function main(argv: string[]): Promise<number> {
           if (!raw) throw usage(`--guide was given nothing — pass a repo-relative path like CLAUDE.md, or "${CLEAR}" to clear the grant`);
           data.defaultGuide = raw === CLEAR ? null : checkExportPath(raw);
         }
+        // The workflow whose body every hand-filed Job on this board finishes with, and whose
+        // frontmatter fills what the Job did not say (ADR-017 decision 1).
+        //
+        // The NAME is checked and the file is not, which is the same call `--base` above makes and
+        // for a sharper reason: the usual way to set this is in the pull request that
+        // ADDS the workflow file, so refusing a name whose file is not merged yet would refuse the
+        // one command anybody is going to run. `hkb new` is where a missing file is caught, with the
+        // operator standing there and nothing yet created.
+        if (values.workflow !== undefined) {
+          const raw = given(values.workflow, '--workflow', `"${CLEAR}"`);
+          if (!raw) throw usage(`--workflow was given nothing — pass a workflow name like implement, or "${CLEAR}" to append nothing to a brief`);
+          if (raw === CLEAR) data.defaultWorkflow = null;
+          else {
+            // Refuses a name that could never be a workflow, and normalises the `.md` an operator
+            // who tab-completed the file will have typed.
+            workflowPath(raw);
+            data.defaultWorkflow = raw.trim().replace(/\.md$/, '');
+          }
+        }
         if (values['allow-tools'] !== undefined) {
           const raw = given(values['allow-tools'], '--allow-tools', `"${CLEAR}"`);
           if (!raw) throw usage(`--allow-tools was given nothing — pass a comma-separated list, or "${CLEAR}" to clear the default`);
@@ -1812,8 +1925,8 @@ export async function main(argv: string[]): Promise<number> {
           throw usage(
             'hkb boards set needs something to set — a ceiling (--max-concurrent <n>, --daily-budget <usd>|none)'
             + ' or a spec default (--model, --effort, --max-turns, --max-budget,'
-            + ' --max-retries, --allow-tools, --default-plugin-dirs, --guide, --base, --check;'
-            + ' "none" clears one)',
+            + ' --max-retries, --allow-tools, --default-plugin-dirs, --guide, --base, --check,'
+            + ' --workflow; "none" clears one)',
           );
         }
 

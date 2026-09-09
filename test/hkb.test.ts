@@ -966,12 +966,12 @@ test('hkb boards set carries the spec defaults, and none clears one', async () =
     'boards', 'set', 'defaults', '--model', 'claude-haiku-4-5', '--effort', 'low',
     '--max-turns', '8', '--max-budget', '0.25', '--max-retries', '0',
     '--allow-tools', 'Read,Grep', '--default-plugin-dirs', '.claude', '--guide', 'CLAUDE.md',
-    '--base', 'origin/develop', '--check', 'npm test', '--json',
+    '--base', 'origin/develop', '--check', 'npm test', '--workflow', 'implement', '--json',
   )).out);
   assert.deepEqual(set.defaults, {
     model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 0,
     allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'], guide: 'CLAUDE.md', base: 'origin/develop',
-    check: 'npm test',
+    check: 'npm test', workflow: 'implement',
   });
 
   const cleared = json((await hkb('boards', 'set', 'defaults', '--model', 'none', '--json')).out);
@@ -997,6 +997,18 @@ test('hkb boards set carries the spec defaults, and none clears one', async () =
   );
   const noGuide = json((await hkb('boards', 'set', 'defaults', '--guide', 'none', '--json')).out);
   assert.equal(noGuide.defaults.guide, null, '"none" clears the grant rather than naming a file called none');
+
+  // The default workflow: a NAME, checked for being one, and not for the file existing — the usual
+  // way to set this is in the pull request that adds the workflow, so requiring the file to be
+  // merged already would refuse the one command anybody runs. `hkb new` catches a missing file.
+  const noSteps = json((await hkb('boards', 'set', 'defaults', '--workflow', 'none', '--json')).out);
+  assert.equal(noSteps.defaults.workflow, null, '"none" appends nothing to a brief again');
+  await assert.rejects(
+    () => main(['boards', 'set', 'defaults', '--workflow', '../elsewhere/steps']),
+    /is not a workflow name/,
+  );
+  const typed = json((await hkb('boards', 'set', 'defaults', '--workflow', 'implement.md', '--json')).out);
+  assert.equal(typed.defaults.workflow, 'implement', 'the `.md` an operator tab-completed is not part of the name');
 
   // The grant is a path the board acts on with the operator's authority, so a path that was never
   // legal must not become state — the same fence `--export` sits behind (ADR-012).
@@ -1152,7 +1164,7 @@ test('hkb boards prints a defaults line only for the boards that have one', asyn
   const bare = rows.find((r) => r.board !== 'listed-defaults' && !r.hasDefaults);
   assert.ok(bare, 'a board with no defaults exists in this suite');
   assert.deepEqual(bare.defaults,
-    { model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null, base: null, check: null },
+    { model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null, base: null, check: null, workflow: null },
     '--json carries the key either way: a consumer inferring absence from a missing key reads a shape, not a record');
 });
 
@@ -1354,17 +1366,17 @@ test('the board defaults line names every grant, including the ones nobody can o
     describeDefaults({
       model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 0,
       allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'], guide: 'CLAUDE.md', base: 'origin/develop',
-      check: 'npm test',
+      check: 'npm test', workflow: 'implement',
     }),
-    'model=claude-haiku-4-5 effort=low maxTurns=8 maxBudget=$0.25 maxRetries=0 allowTools=Read|Grep plugins=.claude guide=CLAUDE.md base=origin/develop check=npm test',
+    'model=claude-haiku-4-5 effort=low maxTurns=8 maxBudget=$0.25 maxRetries=0 allowTools=Read|Grep plugins=.claude guide=CLAUDE.md base=origin/develop check=npm test workflow=implement',
   );
   assert.equal(
-    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null, base: null, check: null }),
+    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null, base: null, check: null, workflow: null }),
     '(none)',
   );
   // An empty list is a value and says so; a null is an absence and says nothing.
   assert.match(
-    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: [], pluginPaths: [], guide: null, base: null, check: null }),
+    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: [], pluginPaths: [], guide: null, base: null, check: null, workflow: null }),
     /allowTools=\(none\) plugins=\(none\)/,
   );
 });
@@ -1862,6 +1874,96 @@ test('a workflow`s placeholders interpolate from `value:` inputs, and are refuse
     () => hkb('new', 'a page', '--from', 'templated', '--board', 'suite-repo'),
     /needs `\{\{page\}\}`.*--input page=value:/s,
   );
+});
+
+/**
+ * A board's default workflow — how work on this board FINISHES (ADR-017 decisions 1 and 5).
+ *
+ * The core stopped telling every worker to push and open a pull request, because nothing refuses on
+ * either. That left a hand-filed Job with nowhere to get the steps from, and this is the somewhere.
+ * What is asserted is the composition, which is deliberately NOT `--from`'s: the frontmatter fills
+ * spec nulls the same way, and the body is APPENDED rather than replacing the brief.
+ */
+test('a board`s default workflow fills the spec nulls and appends its body as standing steps', async () => {
+  workflow('finishing', [
+    '---', 'name: finishing', 'description: how work here ends', 'guide: README.md',
+    'label: [workflow=finishing]', 'max-budget: 3', '---', '',
+    'Push your branch and open a draft pull request.', '',
+  ].join('\n'));
+  await hkb('boards', 'set', 'suite-repo', '--workflow', 'finishing');
+
+  const j = json((await hkb(
+    'new', 'a hand-filed Job', '--brief', 'Fix the parser.', '--board', 'suite-repo', '--json',
+  )).out) as { id: number; standingSteps: string };
+  assert.equal(j.standingSteps, 'finishing', 'and it is echoed: a worker is told something nobody typed');
+  const row = await db.job.findUniqueOrThrow({ where: { id: j.id } });
+
+  assert.match(row.brief, /^Fix the parser\./, 'the brief still says WHAT to do, first');
+  assert.match(row.brief, /Standing steps for work on this board, from the workflow `finishing`:/);
+  assert.match(row.brief, /Push your branch and open a draft pull request\./, 'and the file says how it ends');
+  assert.equal(row.guide, 'README.md', 'the frontmatter fills a null exactly as `--from` would');
+  assert.equal(row.maxBudgetUsd, 3);
+  assert.deepEqual(row.labels, { workflow: 'finishing' });
+
+  // The line still wins over the file, which is the precedence everywhere else here.
+  const typed = json((await hkb(
+    'new', 'louder', '--brief', 'Do it.', '--max-budget', '0.5', '--board', 'suite-repo', '--json',
+  )).out) as { id: number };
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: typed.id } })).maxBudgetUsd, 0.5);
+});
+
+test('hkb show names where the standing steps came from', async () => {
+  const j = json((await hkb('new', 'shown', '--brief', 'Fix it.', '--board', 'suite-repo', '--json')).out) as { id: number };
+  const out = (await hkb('show', String(j.id), '--board', 'suite-repo')).out;
+  assert.match(out, /steps\s+standing steps from workflow finishing/,
+    'the part of the brief nobody typed is named, like every other resolved field`s source');
+  assert.equal(json((await hkb('show', String(j.id), '--board', 'suite-repo', '--json')).out).standingSteps, 'finishing');
+});
+
+test('--from governs entirely: a Job filed from a workflow gets no standing steps', async () => {
+  // Composing the two would mean a workflow author could not write a step that finishes differently
+  // from the board — and "the more specific thing wins" is the rule the rest of this file follows.
+  const j = json((await hkb('new', 'from a workflow', '--from', 'paged', '--board', 'suite-repo', '--json')).out) as { id: number; standingSteps: string | null };
+  assert.equal(j.standingSteps, null);
+  const row = await db.job.findUniqueOrThrow({ where: { id: j.id } });
+  assert.equal(row.brief, 'Draft the page.', 'the workflow`s own body, and nothing appended to it');
+  assert.equal(row.guide, 'README.md', 'from `paged`, not from the board`s default');
+});
+
+test('a proposing Job gets none either — its whole output is a file, and it commits nothing', async () => {
+  // The contradiction `withWorktree` exists for, arriving from the other side: a brief ending in
+  // "push your branch and open a pull request" is not an instruction a proposing Job can follow.
+  const j = json((await hkb('new', 'breaks it down', '--brief', 'Split this up.', '--propose', '--board', 'suite-repo', '--json')).out) as { id: number; standingSteps: string | null };
+  assert.equal(j.standingSteps, null);
+  assert.doesNotMatch((await db.job.findUniqueOrThrow({ where: { id: j.id } })).brief, /Standing steps/);
+});
+
+test('a default workflow that is not there is refused at FILE time, by name, with nothing created', async () => {
+  await hkb('boards', 'set', 'suite-repo', '--workflow', 'gone-missing');
+  const before = await db.job.count();
+  await assert.rejects(
+    () => hkb('new', 'x', '--brief', 'do it', '--board', 'suite-repo'),
+    (e: Error & { exitCode?: number }) => {
+      assert.equal(e.exitCode, 2);
+      assert.match(e.message, /board suite-repo files every Job with the workflow `gone-missing`/);
+      assert.match(e.message, /hkb boards set suite-repo --workflow <name>\|none/, 'and how to fix it');
+      return true;
+    },
+  );
+  assert.equal(await db.job.count(), before, 'a Job missing the steps everything else got is worse than a refusal');
+});
+
+test('a default workflow may not use placeholders — there is nothing to fill them from', async () => {
+  workflow('placeheld', ['---', 'name: placeheld', '---', '', 'Ship it to {{where}}.', ''].join('\n'));
+  await hkb('boards', 'set', 'suite-repo', '--workflow', 'placeheld');
+  await assert.rejects(
+    () => hkb('new', 'x', '--brief', 'do it', '--board', 'suite-repo'),
+    /`\{\{where\}\}`.*appended to every brief/s,
+  );
+  // And back to a board that says nothing, so the tests after this one are unaffected.
+  await hkb('boards', 'set', 'suite-repo', '--workflow', 'none');
+  const j = json((await hkb('new', 'plain again', '--brief', 'Do it.', '--board', 'suite-repo', '--json')).out) as { standingSteps: string | null };
+  assert.equal(j.standingSteps, null);
 });
 
 // ---------------------------------------------------------------- labels

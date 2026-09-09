@@ -1,68 +1,66 @@
 import { PROPOSAL_MAX_BYTES, PROPOSAL_MAX_JOBS } from './proposals.ts';
 
 /**
- * What every isolated Job is told, on top of its own brief.
+ * The **sandbox contract**: what every isolated Job is told, on top of its own brief.
  *
- * The worker never merges and never touches the operator's checkout — it commits on the branch it
- * was given and opens a *draft* pull request. A human merges. That is what keeps the Job kind
- * dumb: `succeeded` means the session ended, and whether the work is any good is a judgement made
- * by whoever reads the diff.
+ * ADR-017 decision 5 drew the line this file now sits on, and the boundary inventory of 2026-09-07
+ * stated it in one sentence: *the git sandbox contract is core; the pull request is one consumer's
+ * opinion.* So the test for a line being here is not whether it is good advice — it is whether the
+ * machinery **refuses** on it afterwards. Every line below is backed by a refusal, and everything
+ * that was not moved out to a workflow file (`src/templates.ts`), which is where a step's content
+ * lives:
  *
- * Stated as a protocol rather than a hope. The two rules a worker could plausibly break — pushing
- * to the default branch, and merging its own work — are named explicitly, because "do not" is
- * cheaper here than discovering it afterwards.
+ *   - **commit on your branch** — the branch is what the core reads. Uncommitted work is invisible
+ *     to `ahead` and `onBase` (`src/rebase.ts`), so a run that leaves its changes in the tree
+ *     produced nothing as far as anything downstream can tell.
+ *   - **rebase onto the base before you finish** — the worktree was cut from `base` when the attempt
+ *     was claimed and the base moves while the work runs (`docs/rebuild-plan.md` item 10). After the
+ *     run the controller compares the branch against the base as it is *then* and fails the attempt
+ *     when it cannot be put there, so this is the prompt half of a pairing whose other half refuses.
+ *   - **never push to the default branch, never merge, never force any branch but your own** — the
+ *     escape rule of the sandbox, and the one line here that is not only prose: `src/push.ts` parses
+ *     the `git push` and `src/admission.ts` denies it at layer 2 (`docs/workflow-study.md` §4).
+ *   - **if you cannot finish, still commit** — the worktree is kept, and a commit is the only form
+ *     in which unfinished work survives the sweep.
  *
- * **Rebase before the push, and only before it.** The worktree was cut from `base` when the attempt
- * was claimed, and the base moves while the work runs — that is `docs/rebuild-plan.md` item 10.
- * Asking for it here is free, and here is where it is cheapest: after the push a branch can only be
- * rebased by rewriting the remote, which the worker is forbidden to do and the controller then has
- * to (`src/rebase.ts`). This is prose, and prose guarantees nothing (ADR-014) — the controller
- * checks it afterwards, and that is the mechanism. The pairing is the point: the prompt makes it
- * usually true and free, the check makes it true.
+ * *Before you finish*, deliberately, and not *before you push*: whether this Job pushes at all is a
+ * workflow's business. What was moved out with it — `git push -u`, the draft pull request, the reply
+ * with its URL, and the attribution rule, which is a fact about one repository and lives in that
+ * repository's own guide — has no refusal behind it and never did.
  *
- * Three things about the base are the caller's to get right, and every one of them was wrong first:
+ * Two things about the base are the caller's to get right, and both were wrong first:
  *
- *   - **the fetch is narrowed to one branch, and sometimes refused outright.** `git fetch origin`
- *     inside a worktree updates every remote-tracking ref in the shared store,
- *     `refs/remotes/origin/kb-<id>-<k>` included — the exact ref `--force-with-lease` compares
- *     against. `fetchBase` narrows itself for that reason and refuses an attempt branch entirely;
- *     a prompt that says otherwise hands the protection straight back, which is what `fetch: false`
- *     is for.
  *   - **`rebaseOnto` is passed only when a rebase is legal here.** A resumed attempt lands in a
- *     checkout whose branch is already on the remote; rebasing there makes the next push
- *     non-fast-forward, and the rule below forbids the force that would fix it. Asking anyway is
- *     asking for a step with no legal ending, so the caller omits it and the controller rebases
- *     after the run instead.
- *   - **`prBase` is not optional decoration.** A pull request opened with no `--base` targets the
- *     repository's default branch, so a chain step's diff would carry its parent's commits and
- *     merging it would merge the parent's unreviewed work into the trunk. The rebase keeps the
- *     branch on the right base; only this keeps the *review* on it.
+ *     checkout whose branch is already on the remote; rebasing there makes a later push
+ *     non-fast-forward. While the controller is the thing that force-pushes (`src/rebase.ts`), the
+ *     step has no legal ending, so the caller omits it and the controller rebases after the run.
+ *   - **the fetch is refused outright for an attempt branch.** `git fetch origin kb-33-1` inside a
+ *     worktree updates `refs/remotes/origin/kb-33-1` in the *shared* ref store — the exact ref
+ *     `--force-with-lease` compares against for Job 33's own push. `fetchBase` refuses it for that
+ *     reason, and a prompt that asks the worker to make the fetch hands the protection straight
+ *     back. Both of these outlive only as long as the controller rewrites branches at all; the
+ *     narrowing of an ordinary fetch to one branch does not, and it is gone.
  */
 export type BaseAdvice = {
-  /** The ref to rebase onto before pushing, or absent when a rebase here has no legal ending. */
+  /** The ref to rebase onto before finishing, or absent when a rebase here has no legal ending. */
   rebaseOnto?: string;
   /** May that ref be fetched first? False when its remote-tracking copy is somebody's lease. */
   fetch?: boolean;
-  /** The branch the pull request opens against, when it is not the repository's default. */
-  prBase?: string;
 };
 
-export function withProtocol(brief: string, branch: string, base: BaseAdvice = {}): string {
+export function withSandbox(brief: string, branch: string, base: BaseAdvice = {}): string {
   // Only when there is a remote to rebase against. `baseRef` falls back to `HEAD` in a repository
   // with no origin, and telling a worker to `git fetch origin` there is an instruction to fail.
   const onto = base.rebaseOnto?.startsWith('origin/') ? base.rebaseOnto : null;
   const rebasing = onto
     ? [
-      `  2. Rebase onto what you will be merged into, BEFORE you push:`,
+      '  2. Before you finish, rebase onto the base you were cut from — it moved while you worked:',
       base.fetch === false
         // Deliberate, and said out loud so it does not read as an omission somebody should fix.
         ? `     \`git rebase ${onto}\` — do NOT fetch it first; hkb tracks that branch itself.`
         : `     \`git fetch origin ${onto.slice('origin/'.length)} && git rebase ${onto}\``,
-      ...(base.fetch === false
-        ? []
-        : ['     Fetch that ONE branch, not everything — hkb compares the rest against what it last saw.']),
-      '     Then re-run the checks: the base has probably moved since this worktree was cut, and a',
-      '     branch that was green against a stale base is not evidence about the merge.',
+      '     Then re-run the checks: a branch that was green against a stale base is not evidence',
+      '     about the merge.',
     ]
     : [];
   /** Steps after the rebase shift by one when there is one. */
@@ -73,29 +71,18 @@ export function withProtocol(brief: string, branch: string, base: BaseAdvice = {
     '---',
     '',
     'You are working in a git worktree of your own, already checked out on the branch',
-    `\`${branch}\`. When the work is done:`,
+    `\`${branch}\`. It is yours — nothing else writes it. When the work is done:`,
     '',
     `  1. Commit it on \`${branch}\`. Write a plain message: a short imperative subject, and a body`,
-    '     explaining why if the why is not obvious.',
+    '     explaining why if the why is not obvious. Uncommitted work is work nothing can see.',
     ...rebasing,
-    `  ${n(2)}. Push it: \`git push -u origin ${branch}\``,
-    base.prBase
-      ? `  ${n(3)}. Open a DRAFT pull request against \`${base.prBase}\` — NOT the default branch, which`
-      : `  ${n(3)}. Open a DRAFT pull request against the default branch:`,
-    ...(base.prBase
-      ? ['     would put the commits you were built on into your own diff:']
-      : []),
-    `     \`gh pr create --draft --title "…" --body "…" --head ${branch}`
-      + `${base.prBase ? ` --base ${base.prBase}` : ''}\``,
-    `  ${n(4)}. Reply with one line: what you did, and the PR URL.`,
+    `  ${n(2)}. Reply with one line: what you did, and the branch.`,
     '',
     'Rules:',
-    '  - Never push to the default branch, and never merge. A human reviews and merges.',
-    '  - Never `git push --force`.',
-    '  - Do not add a Co-Authored-By trailer, a session URL, or a "Generated with" line to the',
-    '    commit or the PR body. These are public repositories.',
-    '  - If you cannot finish, still commit and push what you have, open the draft PR, and say',
-    '    plainly what is unfinished. Work that is not pushed is work that is lost.',
+    '  - Never push to the default branch, and never merge.',
+    `  - Never force-push any branch but \`${branch}\`, and use \`--force-with-lease\` when you do.`,
+    '  - If you cannot finish, still commit what you have and say plainly what is unfinished. The',
+    '    worktree is kept, and a commit is the only form uncommitted work survives in.',
   ].join('\n');
 }
 
@@ -163,7 +150,7 @@ export function withArtifacts(brief: string, paths: Record<string, string>): str
     ...names.map((n) => `  - \`${n}\` → \`${paths[n]}\``),
     '',
     'These paths are outside your checkout: the board keeps them, and nothing you write there',
-    'appears in your diff or your pull request. There is no size limit — hand the whole thing over',
+    'appears in your diff or in anything built from it. There is no size limit — hand the whole over',
     'rather than summarising it. A name may be a directory if you have more than one file to give.',
     'A declared file you do not write fails the attempt.',
   ].join('\n');
@@ -172,9 +159,9 @@ export function withArtifacts(brief: string, paths: Record<string, string>): str
 /**
  * The results contract, appended to whatever brief the Job already has.
  *
- * Separate from `withProtocol` on purpose: that one is the *pull request* protocol and is applied
- * only to an isolated Job, because only an isolated Job has a branch. Results are the opposite case
- * — they matter most to a Job that produces no commit at all — so this is applied to both.
+ * Separate from `withSandbox` on purpose: that one is the sandbox contract and is applied only to an
+ * isolated Job, because only an isolated Job has a branch. Results are the opposite case — they
+ * matter most to a Job that produces no commit at all — so this is applied to both.
  *
  * The paths are absolute and outside every checkout (`src/results.ts`), so writing one cannot land
  * in the worker's diff. Stated as a hard requirement rather than a suggestion, because the
@@ -204,7 +191,7 @@ export function withResults(brief: string, paths: Record<string, string>): strin
  * What an approved Job is told, in place of its brief.
  *
  * ADR-010 decision 4, and the piece that makes a gate work rather than merely pause: a resumed
- * attempt otherwise re-sends `withProtocol(job.brief, branch)`, so an approved Job would propose
+ * attempt otherwise re-sends `withSandbox(job.brief, branch)`, so an approved Job would propose
  * again instead of applying. The session is continued (`lastSessionId`), so the agent already holds
  * everything it proposed — this only has to say that a person said yes, and in whose words.
  *
@@ -421,24 +408,6 @@ export function withStandingRules(brief: string): string {
  * attempt fail costs a whole run (`src/proposals.ts` is what refuses).
  */
 /**
- * What an isolated Job is told when its deliverable is **not a diff**.
- *
- * `withProtocol` above is the *pull request* protocol, and giving it to a Job that produces no
- * commit is worse than giving it nothing: composed with the proposal contract, one prompt told a
- * worker both to "commit and push what you have" and to "write the file and stop", which is not an
- * instruction at all. Found by printing the prompt before spending a live run on it.
- *
- * The worktree is still worth naming. It is the sandbox — the reason the worker cannot touch the
- * operator's checkout — and a worker that does not know it is in one will look for the repository
- * somewhere else. So this says where it is standing and what that place is *for*, and nothing about
- * commits.
- *
- * ADR-008 decided this generally: *"`isolate` returns to meaning one thing — where the work runs.
- * The pull-request protocol becomes one declarable output shape among several, selected by the spec
- * rather than implied by having a worktree."* That is still unimplemented for every other kind of
- * output-only Job; this covers the one where the contradiction is explicit.
- */
-/**
  * The repository's contributor guide, put in front of everything else.
  *
  * **Prepended, and framed as instruction** — which is the whole difference between this and
@@ -469,6 +438,23 @@ export function withGuide(brief: string, guide: string, from: string): string {
   ].join('\n');
 }
 
+/**
+ * What an isolated Job is told when its deliverable is **not a diff**.
+ *
+ * `withSandbox` above asks for a commit, and asking a Job that produces no commit for one is worse
+ * than telling it nothing: composed with the proposal contract, one prompt told a worker both to
+ * "commit what you have" and to "write the file and stop", which is not an instruction at all. Found
+ * by printing the prompt before spending a live run on it.
+ *
+ * The worktree is still worth naming. It is the sandbox — the reason the worker cannot touch the
+ * operator's checkout — and a worker that does not know it is in one will look for the repository
+ * somewhere else. So this says where it is standing and what that place is *for*, and nothing about
+ * commits.
+ *
+ * ADR-008 decided this generally: *"`isolate` returns to meaning one thing — where the work runs."*
+ * That is still unimplemented for every other kind of output-only Job; this covers the one where the
+ * contradiction is explicit.
+ */
 export function withWorktree(brief: string, branch: string): string {
   return [
     brief.trimEnd(),
@@ -476,8 +462,8 @@ export function withWorktree(brief: string, branch: string): string {
     '---',
     '',
     `You are working in a git worktree of your own, checked out on \`${branch}\`. It is a sandbox, not`,
-    'a deliverable: nothing you leave in it is collected, and you should not commit, push, or open a',
-    'pull request. Read and scratch freely; what you are asked to hand over is below.',
+    'a deliverable: nothing you leave in it is collected, and you should not commit or push anything.',
+    'Read and scratch freely; what you are asked to hand over is below.',
   ].join('\n');
 }
 

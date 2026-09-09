@@ -1,5 +1,7 @@
 import type { HookCallbackMatcher, HookInput, HookJSONOutput } from '@anthropic-ai/claude-agent-sdk';
 
+import { checkPush, type PushPolicy } from './push.ts';
+
 /**
  * Admission control.
  *
@@ -53,6 +55,20 @@ export type AdmissionPolicy = {
   /** Tools nothing may ever call, whatever the prompt says. */
   deny?: string[];
   /**
+   * Which branch this worker may push, when it has one at all.
+   *
+   * The sandbox contract's escape rule, at the layer that can refuse it. `src/brief.ts` asks a
+   * worker not to push the default branch and asking is layer 6 — *"guarantees nothing"*
+   * (`docs/workflow-study.md` §4) — while this hook already reads every `Bash` call the worker
+   * makes. `src/push.ts` is the decision; this is where it lands.
+   *
+   * Absent for a workload with no branch of its own: a `--no-isolate` Job runs in the operator's
+   * checkout, where "its own branch" names nothing, and a rule whose subject does not exist is not
+   * a rule. Such a Job is not given the sandbox contract either, so prose and guard cover exactly
+   * the same population.
+   */
+  push?: PushPolicy;
+  /**
    * The whole tool surface. A tool not on this list is denied *by the hook*, not by the permission
    * mode — because the mode is not always in our hands. Measured: in a session nested inside another
    * Claude Code process, `permissionMode: 'dontAsk'` with `Agent` absent from `allowedTools` still
@@ -94,6 +110,19 @@ export function admissionCallback(policy: AdmissionPolicy = {}) {
     if (policy.allow && !policy.allow.includes(tool)) {
       policy.onDecision?.(`deny ${tool} (not on the allowlist)`);
       return deny(`${tool} is not part of this workload's tool surface. Available: ${policy.allow.join(', ')}.`);
+    }
+
+    // The push rule, before the Agent branch because it is about a different tool entirely. Read off
+    // the same `Bash` input the SDK is about to run, so what is judged is what runs.
+    if (tool === 'Bash' && policy.push) {
+      const command = toolInput.command;
+      if (typeof command === 'string') {
+        const why = checkPush(command, policy.push);
+        if (why) {
+          policy.onDecision?.(`deny Bash — ${why.split('.')[0]}`);
+          return deny(why);
+        }
+      }
     }
 
     if (tool !== 'Agent') return allow();

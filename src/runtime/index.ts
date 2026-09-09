@@ -50,7 +50,13 @@ export type WorkerSpec = {
    */
   isolated?: boolean;
   /** Extra admission policy for this run. `isolated` above decides the isolation half. */
-  admission?: { deny?: string[]; admitSpawn?: (input: Record<string, unknown>) => Promise<string | null> | (string | null); onDecision?: (d: string) => void };
+  admission?: {
+    deny?: string[];
+    admitSpawn?: (input: Record<string, unknown>) => Promise<string | null> | (string | null);
+    /** The branch this worker owns, and the trunk it may not write (`src/push.ts`). */
+    push?: { branch: string; defaultBranch: string };
+    onDecision?: (d: string) => void;
+  };
   /** Resume a previous session instead of starting cold — the retry path. */
   resume?: string;
   /**

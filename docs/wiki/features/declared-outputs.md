@@ -13,16 +13,16 @@ covers:
   - path: src/worktree.ts
     sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
   - path: src/controller.ts
-    sha: 67e1a217f67ec6731ebcc0cd491d5f55d712be81
+    sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
   - path: src/brief.ts
-    sha: 9090eb71378c7dac7b89cf63c2140f1e97e98c69
+    sha: 97737608be17c28aeca4bf859902c9c5b6ec4d89
   - path: src/hkb.ts
-    sha: f7cca4f068b7ccb229e6f7b87727de198f9efb6e
+    sha: 7b95039ab59dbcf5234373c716a5db86a15db8fb
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: prisma/schema.prisma
-    sha: 34921e6803578d6831938ada63d477d55a95eb6a
-generated_at_commit: 6d4142a
+    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
+generated_at_commit: f063b7a
 last_refreshed: 2026-09-09
 related: [decisions/adr-008-declared-outputs, decisions/adr-011-proposals-not-board-access, features/proposals, features/worktree-includes, architecture/job-kind, architecture/the-board]
 ---
@@ -235,24 +235,29 @@ behind and asserts each one turns the answer off (`test/hkb.test.ts`, `producedN
 "I looked and there is nothing to change" is a real outcome; what is not acceptable is
 that it reads exactly like a Job that shipped a pull request (`src/hkb.ts:705-716`).
 
-## Known gap: the pull-request protocol is still implied by the worktree
+## The gap that closed: the worktree no longer implies a pull request
 
 ADR-008 decided that `isolate` returns to meaning one thing — *where* the work runs — and
 that the pull-request protocol becomes one declarable output shape among several, selected
 by the spec rather than implied by having a worktree
-(`docs/wiki/decisions/adr-008-declared-outputs.md`). That half has not shipped. The prompt
-is still assembled as: if there is a worktree, append `withProtocol` — commit, push, open a
-draft PR, "work that is not pushed is work that is lost" — unless the Job proposes, in
-which case it gets the sandbox note instead (`src/controller.ts:1110-1111`,
-`src/brief.ts:50-100`, `src/brief.ts:403-413`).
+(`docs/wiki/decisions/adr-008-declared-outputs.md`). It stayed open through several
+releases: the prompt was assembled as *if there is a worktree, append the protocol* —
+commit, push, open a draft PR, "work that is not pushed is work that is lost" — so an
+isolated Job whose entire deliverable was a `--result` or an `--artifact` was told to push
+work it did not have, on top of a contract telling it to write somewhere outside the
+checkout.
 
-So an isolated Job whose entire deliverable is a `--result` or an `--artifact` is told to
-push work it does not have, on top of a results or artifacts contract telling it to write
-somewhere outside the checkout. `withWorktree` covers only the proposing case, where the
-contradiction was explicit enough to be found by printing the prompt; its own docblock
-records that the general case remains open (`src/brief.ts:354-371`). Nothing about
-collection depends on this — the outputs are gathered either way — but the prompt a
-result-only Job reads is not the one its declaration describes.
+ADR-017 decision 5 closed it from the other end, and by removal rather than by a switch:
+the core now appends only the **sandbox contract** (`withSandbox`, `src/brief.ts`), which
+asks for a commit and says nothing about a push, a forge or a review. Those steps come from
+a board's default workflow — content a person wrote for the Jobs it fits
+(*features/workflow-templates*). A result-only Job filed on a board with no default
+workflow now reads a prompt that describes exactly what it was declared to produce.
+
+What remains is smaller and is a *content* question rather than a machinery one: a board
+whose default workflow says "open a pull request" appends that to a result-only Job filed on
+it too. The board-level answers are `--from` (which suppresses the default) and, for a Job
+that proposes, the exclusion the CLI already makes.
 
 ## Related
 

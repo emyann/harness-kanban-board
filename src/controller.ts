@@ -1,6 +1,6 @@
 import { openBoard } from './db.ts';
 import {
-  baseFor, createWorktree, exportOutputs, existingWorktree, fetchBase, isAttemptBranch,
+  baseFor, baseRef, createWorktree, exportOutputs, existingWorktree, fetchBase, isAttemptBranch,
   newestWorktree, lockWorktree, onRemote, pushedRef, removeWorktree, resolves, unlockWorktree,
   type Worktree,
 } from './worktree.ts';
@@ -8,7 +8,7 @@ import { rebaseNote, rebaseOntoBase, rebaseShortfall, type RebaseResult } from '
 import { prForBranch } from './pulls.ts';
 import {
   approvedPrompt, withArtifacts, withCheck, withCheckFailure, withGuide, withInputs, withProposal,
-  withProtocol, withResults, withStandingRules, withWorktree,
+  withResults, withSandbox, withStandingRules, withWorktree,
 } from './brief.ts';
 import {
   checkShortfall, describeCheck, runCheck, storedCheck, type CheckRecord,
@@ -33,6 +33,15 @@ import { gateClaim, windowStart, type ClaimGate } from './limits.ts';
 import { resolveSpec } from './spec.ts';
 import { holderId, holderLiveness } from './liveness.ts';
 import type { Runtime, RuntimeEvent, WorkerOutcome } from './runtime/index.ts';
+
+/**
+ * The `self:` fields that only a Job with a checkout of its own has an answer for.
+ *
+ * Named here rather than tested inline, because the failure is a message and not a crash: a Job that
+ * declares `self:base` and runs `--no-isolate` is refused either way, and the difference is whether
+ * the operator is told *why* the field is empty or left to work it out.
+ */
+const NEEDS_WORKTREE = new Set(['branch', 'worktree', 'base']);
 
 /**
  * The controller for the Job kind.
@@ -1131,14 +1140,20 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
             slot: String(slot),
             branch: wt?.branch ?? null,
             worktree: wt?.path ?? null,
+            // The ref this attempt's branch was cut from, RESOLVED — `origin/main`, or `origin/kb-33-1`
+            // for a chain step. The same value the checkout was made with, so content that says "open
+            // a pull request against your base" and the branch that was actually cut cannot disagree.
+            // It exists because the pull request left the core (ADR-017 decision 5): what used to be
+            // `BaseAdvice.prBase`, hardcoded into the protocol, is now data a workflow can ask for.
+            base: wt?.baseLabel ?? null,
             repo: cwd,
           };
           const got = self[vf.jobRef.field];
-          // Null is a real answer for `branch` and `worktree` on an un-isolated Job, and a Job that
-          // declared one has asked for something that does not exist here. Refused rather than
-          // rendered empty, which is the same rule every other declaration follows.
+          // Null is a real answer for `branch`, `worktree` and `base` on an un-isolated Job, and a
+          // Job that declared one has asked for something that does not exist here. Refused rather
+          // than rendered empty, which is the same rule every other declaration follows.
           if (got == null) {
-            unread.push({ name: want.name, source, why: `this Job has no \`${vf.jobRef.field}\`${vf.jobRef.field === 'branch' || vf.jobRef.field === 'worktree' ? ' — it is running without a worktree (`--no-isolate`)' : ''}` });
+            unread.push({ name: want.name, source, why: `this Job has no \`${vf.jobRef.field}\`${NEEDS_WORKTREE.has(vf.jobRef.field) ? ' — it is running without a worktree (`--no-isolate`)' : ''}` });
           } else {
             readInputs.push({ name: want.name, source, text: got });
           }
@@ -1216,25 +1231,22 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       // that fetch; a prompt that asks the worker to make it hands the protection straight back, and
       // that is the third time this exact hole has been opened from a different direction.
       //
-      // `prBase` — whenever the Job named a base at all. A pull request opened with no `--base`
-      // targets the repository's default branch, so a chain step's diff would carry its parent's
-      // commits and merging it would merge the parent's unreviewed work into the trunk. The rebase
-      // keeps the branch on the right base; only this keeps the review on it.
+      // What is NOT here any more is `prBase`. Where a pull request opens — where one is opened at
+      // all — is a step's content and belongs to the workflow that asks for it (ADR-017 decision 5).
+      // `self:base` is how that content gets the same value as data (`src/inputs.ts`).
       const baseBranch = wt ? wt.baseLabel.replace(/^origin\//, '') : null;
       const baseAdvice = wt
         ? {
           rebaseOnto: pushedRef(cwd, wt.branch) ? undefined : wt.baseLabel,
           fetch: !(baseBranch && isAttemptBranch(baseBranch)),
-          prBase: spec.base.value && baseBranch ? baseBranch : undefined,
         }
         : undefined;
-      // The pull-request protocol, or the sandbox note, or neither. A PROPOSING Job produces no
-      // commit, so telling it to open a draft pull request contradicts the contract appended below —
-      // one prompt saying both "push what you have" and "write the file and stop" is not an
-      // instruction. It still needs to know it is standing in a worktree, which is what `withWorktree`
-      // says and all it says.
+      // The sandbox contract, or the sandbox note, or neither. A PROPOSING Job produces no commit, so
+      // asking it to commit contradicts the contract appended below — one prompt saying both "commit
+      // what you have" and "write the file and stop" is not an instruction. It still needs to know it
+      // is standing in a worktree, which is what `withWorktree` says and all it says.
       const opening = approvalPrompt
-        ?? (wt ? (job.proposes ? withWorktree(job.brief, wt.branch) : withProtocol(job.brief, wt.branch, baseAdvice)) : job.brief);
+        ?? (wt ? (job.proposes ? withWorktree(job.brief, wt.branch) : withSandbox(job.brief, wt.branch, baseAdvice)) : job.brief);
       // What the last attempt's check refused, on top of whatever this attempt was going to be told.
       // ADR-016 §3 makes the check part of the completion condition, so a resumed attempt that is not
       // told about it is one that wakes up believing it finished — the retry-that-does-not-know-why
@@ -1313,6 +1325,14 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
           // is what an absent value means. The admission gate is built from this same list
           // (`src/runtime/claude.ts`), so narrowing it here is what actually refuses.
           allowedTools: spec.allowedTools.value ?? undefined,
+          // The sandbox's escape rule, at the layer that can refuse it (`src/push.ts`). The prompt
+          // asks; this is what happens when the asking does not work. Only for a Job with a branch
+          // of its own — a `--no-isolate` Job runs in the operator's checkout, where "your own
+          // branch" names nothing, and it is not given the sandbox contract either.
+          //
+          // The default branch comes from `baseRef`, which is where every other answer to "what is
+          // the trunk here" comes from: a second way of asking is a second answer waiting to differ.
+          ...(wt ? { admission: { push: { branch: wt.branch, defaultBranch: baseRef(cwd).replace(/^origin\//, '') } } } : {}),
           // Resolved against the BOARD'S REPOSITORY (`cwd` above), never the worktree — ADR-012,
           // `src/plugins.ts`. A worker writes in its worktree, so a grant that resolved there would
           // let a Job write a hook its own next attempt executes. Against the repository, a merge is

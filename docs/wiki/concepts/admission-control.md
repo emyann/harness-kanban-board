@@ -1,18 +1,20 @@
 ---
 title: Admission control — an instruction is not an invariant
-summary: Why hkb enforces its tool surface, worktree isolation and (later) dependency ordering in a PreToolUse hook rather than in a prompt, a permission mode, or canUseTool — with the three measurements that ruled the other three out.
+summary: Why hkb enforces its tool surface, worktree isolation, which branch a worker may push, and (later) dependency ordering in a PreToolUse hook rather than in a prompt, a permission mode, or canUseTool — with the three measurements that ruled the other three out.
 category: concepts
 kind: explanation
 audience: [dev]
 read_when: "adding a rule an agent must obey, reviewing anything that says 'the prompt tells it to', or wiring a new workload kind's constraints"
 covers:
   - path: src/admission.ts
-    sha: aab84ccd1178b085cea79d2c4566149145027b9e
+    sha: ce4e291113aa9868314ce771f7fd1deb97b67ba8
   - path: src/runtime/claude.ts
     sha: 5ae775633cae411b71443add232b79f1325c4075
-generated_at_commit: 6075a95
-last_refreshed: 2026-09-08
-related: [architecture/runtime-layer, architecture/job-kind, decisions/adr-007-workload-scheduler, gotchas/prompt-is-not-a-guarantee]
+  - path: src/push.ts
+    sha: 100b9b32da8da3d35f8ded2f7a46feef116e1fdd
+generated_at_commit: 8aa5ade
+last_refreshed: 2026-09-09
+related: [architecture/runtime-layer, architecture/job-kind, decisions/adr-007-workload-scheduler, decisions/adr-017-the-workflow-is-content, gotchas/prompt-is-not-a-guarantee]
 ---
 
 # Admission control
@@ -84,6 +86,41 @@ be decoration.
   A parent that omits it cannot skip it. Verified against the real SDK: a spawn
   with no isolation parameter came back `mutate Agent — isolation injected`.
 
+## The push rule — the sandbox's escape hatch, closed
+
+`policy.push` is the third power's newest user, and the clearest example of the
+distinction this page opens with. *"Never push to the default branch, and never
+merge"* was a sentence in the worker's prompt: layer 6 of
+`docs/workflow-study.md` §4, *"guarantees nothing; measured guaranteeing nothing
+twice"*. The hook already reads every `Bash` call, so the same rule now sits at
+layer 2, where it can refuse.
+
+The decision itself is a pure module — `checkPush` (`src/push.ts`) — for the
+reason `src/limits.ts` and `src/liveness.ts` are: the case that matters is the
+refusing one, and it is testable without a shell. It reads the argv the way
+`git push` documents it (options, a remote, then refspecs) and admits a push only
+when **every refspec targets the attempt's own branch**. Refused: the default
+branch by name or by `HEAD:main`, another Job's branch, `--all`/`--mirror`, a
+glob, a delete, and a plain `--force` *even to its own branch* —
+`--force-with-lease` is the same operation with the guarantee that nothing arrived
+since you last looked, and nothing wants the version without it.
+
+It is **conservative by construction**: a push behind `$(…)`, a variable or a
+nested `sh -c` cannot be understood from a string, so it is refused with the form
+that works rather than guessed at. A false refusal costs one plainer command; a
+false admission costs somebody's trunk.
+
+The policy is passed only for a Job that *has* a branch (`src/controller.ts`,
+where `wt` decides it), and the default branch in it comes from `baseRef` — the
+same place every other answer to "what is the trunk here" comes from. A
+`--no-isolate` Job runs in the operator's own checkout, where "your own branch"
+names nothing; it is not given the sandbox contract either, so the prose and the
+guard cover exactly the same population.
+
+This is the pairing ADR-017 decision 5 leaves behind: `src/brief.ts` says only
+what the machinery will refuse on afterwards, and this is one of the two things it
+refuses on.
+
 ## The isolation rule follows the parent
 
 `subagentIsolation` is `'force'` or `'forbid'`, and the runtime derives it from
@@ -115,7 +152,9 @@ harness where it belongs.
 
 - The gate only sees tool calls made through the session it was passed to. It
   cannot police anything a worker does with a shell it was already granted — a
-  `Bash` grant is a grant to the whole machine.
+  `Bash` grant is a grant to the whole machine. The push rule narrows one shape of
+  that (a `git push` it can read) and does not close it: a script in the checkout
+  that pushes, or a `git` alias, is a shell doing what shells do.
 - A hook `allow` does not override a deny rule or a critical-path `rm`; those are
   evaluated after it and still apply. The gate can refuse more than the mode, never
   less.

@@ -9,14 +9,14 @@ covers:
   - path: src/proposals.ts
     sha: fd5e1eee8b847c9b4024d1bf5f635a85907baae4
   - path: src/controller.ts
-    sha: 67e1a217f67ec6731ebcc0cd491d5f55d712be81
+    sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
   - path: src/brief.ts
-    sha: 9090eb71378c7dac7b89cf63c2140f1e97e98c69
+    sha: 97737608be17c28aeca4bf859902c9c5b6ec4d89
   - path: prisma/schema.prisma
-    sha: 34921e6803578d6831938ada63d477d55a95eb6a
+    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
   - path: src/hkb.ts
-    sha: f7cca4f068b7ccb229e6f7b87727de198f9efb6e
-generated_at_commit: 6d4142a
+    sha: 7b95039ab59dbcf5234373c716a5db86a15db8fb
+generated_at_commit: f063b7a
 last_refreshed: 2026-09-09
 related:
   [
@@ -41,12 +41,14 @@ related:
 |---|---|---|
 | Ask | the worker | writes `proposal.json` into its artifact directory (`withProposal`, `src/brief.ts`) |
 
-An isolated proposing Job gets the **worktree note** rather than the pull-request protocol
+An isolated proposing Job gets the **worktree note** rather than the sandbox contract
 (`withWorktree`, `src/brief.ts`): the worktree is still the sandbox, but a proposal is not a diff,
-and a prompt that said both *commit and push what you have* and *write the file and stop* was not an
-instruction. ADR-008 decided this generally — the protocol should be selected by the spec rather than
-implied by having a worktree — and that half is still unimplemented for every other output-only Job
-(`FINDINGS.md`).
+and a prompt that said both *commit what you have* and *write the file and stop* was not an
+instruction. ADR-008 decided this generally — what a Job is told to produce should be selected by
+the spec rather than implied by having a worktree — and ADR-017 decision 5 finished it from the
+other end: the core no longer mentions a pull request to *any* Job. The same exclusion is why a
+proposing Job is not given a board's **default workflow** either — its standing steps would be the
+contradiction arriving by another route (*features/workflow-templates*).
 
 And it does not **keep** that worktree once it suspends, where an ordinary gated Job does: a gated
 Job's approval resumes a session *in* its checkout, while a proposer's approval is applied by the
@@ -180,7 +182,7 @@ Four defects came out of that one run, all now fixed and all invisible to a fake
 
 | What the run showed | What was wrong |
 |---|---|
-| the prompt told it to open a draft PR *and* to write the file and stop | the pull-request protocol was applied to a Job that produces no diff |
+| the prompt told it to open a draft PR *and* to write the file and stop | the pull-request protocol (as it then was) was applied to a Job that produces no diff |
 | `hkb run` said `1 to retry` | a suspended Job was counted as retrying — the machine will not pick it up, a person must |
 | `hkb show` said `error completed` | `lastError` fell through to the outcome word for every suspended Job |
 | `hkb ls` said `produced nothing` | a proposer only reaches `succeeded` once its rows are filed, which is not nothing |

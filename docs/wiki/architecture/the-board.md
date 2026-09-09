@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "adding a column, deciding whether something belongs on the Job or the Attempt, writing a migration, or explaining why a board refuses to open"
 covers:
   - path: prisma/schema.prisma
-    sha: 34921e6803578d6831938ada63d477d55a95eb6a
+    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
   - path: src/schema.ts
     sha: ee1920b789eb96be121c8bba20cc92e452ddf818
   - path: src/db.ts
@@ -15,9 +15,9 @@ covers:
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/spec.ts
-    sha: d3fba5cc6bb9a1cebeea496bf445f4165c3cecbc
-generated_at_commit: 6075a95
-last_refreshed: 2026-09-08
+    sha: 8792a804835fd0602a992aeccf978e110fe2a98f
+generated_at_commit: 8aa5ade
+last_refreshed: 2026-09-09
 related:
   [
     architecture/job-kind,
@@ -69,6 +69,12 @@ The distinction that decides who wins is *default* versus *ceiling*. A default i
 freely override, resolved in `src/spec.ts`. A ceiling is a limit a Job may not exceed, enforced at
 claim time in `src/limits.ts`. `Board.defaultMaxBudgetUsd` is the first; `Board.dailyBudgetUsd` and
 `maxConcurrent` are the second, and no Job column overrides them.
+
+`Board.defaultWorkflow` is a third thing again, and the only board column with no Job twin: it names
+a workflow file, and `hkb new` expands it into the columns above and into the brief at file time, so
+nothing downstream resolves it (*features/workflow-templates*). A board default that fills a null is
+a *value*; this one is a *source* for values, plus the standing steps that say how work on this
+board finishes.
 
 A Job that recorded `maxTurns: 20` because nobody said otherwise would outrank its board's default
 for ever — so the columns stay null, and `hkb show` prints where each resolved value came from,

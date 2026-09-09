@@ -7,15 +7,15 @@ audience: [dev]
 read_when: "changing how a worker is launched, deciding what to persist about a run, or adding a second runtime"
 covers:
   - path: src/runtime/index.ts
-    sha: 55007f26fe6b9e4ec107997eef5aba74ec4643e6
+    sha: cbfa18bd1871a66bdb1fcd59e77a0f6b7ac5bbb1
   - path: src/plugins.ts
     sha: 8057664cf308d860315bd9abe7b941a00fcf4519
   - path: src/runtime/claude.ts
     sha: 5ae775633cae411b71443add232b79f1325c4075
   - path: src/runtime/fake.ts
     sha: 94f9f21ab7c9702506ae625dff37ac15ecfdbcce
-generated_at_commit: 6075a95
-last_refreshed: 2026-09-08
+generated_at_commit: 8aa5ade
+last_refreshed: 2026-09-09
 related: [decisions/adr-007-workload-scheduler, architecture/job-kind, concepts/admission-control, concepts/worker-identity]
 ---
 

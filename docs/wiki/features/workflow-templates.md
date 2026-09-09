@@ -1,27 +1,30 @@
 ---
 title: Workflow templates (`.hkb/workflows/`, `hkb new --from`)
-summary: "Work that recurs is a file, not a command you retype: frontmatter is the spec, the body is the brief, and the keys are the CLI flags so one vocabulary documents both. Expanded once at file time, fenced to the board's repository, and hkb's own workflow comes through the same door."
+summary: "Work that recurs is a file, not a command you retype: frontmatter is the spec, the body is the brief, and the keys are the CLI flags so one vocabulary documents both. Expanded once at file time, fenced to the board's repository, and hkb's own workflows come through the same door — including the board's default one, whose body is appended to every hand-filed brief as the steps that finish it."
 category: features
 kind: explanation
 audience: [dev]
-read_when: "authoring a workflow, adding a flag to `hkb new`, or deciding whether something belongs in the format (machinery) or in a workflow file (content)"
+read_when: "authoring a workflow, setting a board's default one, adding a flag to `hkb new`, or deciding whether something belongs in the format (machinery) or in a workflow file (content)"
 covers:
   - path: src/templates.ts
-    sha: fb6b019b10b138755c8f1b6e753dc19adb9d5735
+    sha: 1004bfccbdd46a7e2f875ba59d30d59b4107dbb9
   - path: src/hkb.ts
-    sha: f7cca4f068b7ccb229e6f7b87727de198f9efb6e
+    sha: 7b95039ab59dbcf5234373c716a5db86a15db8fb
   - path: src/inputs.ts
-    sha: ffd76fce7689fe1c9a1dc0db3756cdf343d2b623
+    sha: 140cf48b8b323742a57e3e604b6853f829c72b6c
+  - path: prisma/schema.prisma
+    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
 related:
   [
     features/the-checkout-base,
     decisions/adr-015-machinery-and-consumer,
+    decisions/adr-017-the-workflow-is-content,
     architecture/job-kind,
     features/declared-outputs,
     concepts/ceilings,
     features/proposals,
   ]
-generated_at_commit: 6d4142a
+generated_at_commit: f063b7a
 last_refreshed: 2026-09-09
 ---
 
@@ -207,6 +210,51 @@ The workflow's own `name:` becomes the Job's name when none is given
 still wins, being the more specific value. `--brief` likewise overrides the body
 (`src/hkb.ts:614-619`).
 
+### A board's default workflow: how work here FINISHES
+
+`Board.defaultWorkflow` names a workflow in the same `.hkb/workflows/`, set with
+`hkb boards set <slug> --workflow <name>|none` and printed beside the board's other defaults
+(`describeDefaults`, `src/hkb.ts`). It exists because of what left the core:
+[ADR-017](../decisions/adr-017-the-workflow-is-content.md) decision 5 moved *push, open a draft pull
+request, a human merges* out of `src/brief.ts`, and a Job filed by hand — `hkb new --brief …`, no
+`--from` — then had nowhere to get those steps from. Decision 1 says where: **a board's default
+workflow is a file, not code.**
+
+It composes **differently from `--from`, deliberately**:
+
+| | `--from <x>` | `Board.defaultWorkflow` |
+|---|---|---|
+| the frontmatter | fills what the line did not say | the same, one level further out (line, then file, then the board's `default*` columns) |
+| the body | **is** the brief; `--brief` replaces it | is **appended** to the brief as *standing steps* |
+| both at once | the default is not applied at all — `x` governs | — |
+
+The asymmetry is the whole design. `--from` says *this workflow is the work*, so its body is the
+brief. A board default says *this is how work on this board finishes* — a hand-written brief still
+says WHAT to do, and the default says what doing it ends in — so overwriting one with the other would
+make the default either useless or destructive. It is the one place a file's body and the line's
+brief both survive (`withStandingSteps`, `src/templates.ts`).
+
+Three refusals and one exclusion, each with a reason that is not tidiness:
+
+- **A default workflow that is not in the repository is refused at file time, by name**, with nothing
+  created and the fix in the message (`hkb boards set <slug> --workflow <name>|none`). Not at claim
+  time: a Job silently missing the steps every other Job on the board got is worse than a refusal.
+- **The name is checked at `hkb boards set`; the file's existence is not.** The usual way to set this
+  is in the pull request that *adds* the workflow, so requiring it to be merged already would refuse
+  the one command anybody runs. Same call `--base` makes, for the same reason.
+- **A default workflow may not use `{{placeholders}}`.** Its body is appended to somebody else's
+  brief, so there is nothing to fill them from; the alternative is the literal text `{{page}}` in a
+  worker's instructions.
+- **A `--propose` Job gets none.** Its whole output is one JSON file, so a brief ending in "commit it
+  and open a pull request" is not an instruction a worker can follow — the same contradiction
+  `withWorktree` exists for (`features/proposals`), arriving from the other side.
+
+Provenance is **derived, not stored**: the appended block names its workflow in one line, and
+`standingStepsFrom` (`src/templates.ts`) reads it back for `hkb show`, which prints
+`steps  standing steps from workflow <name>`. A column would be a second record of a fact the brief
+already carries — one that could disagree with the text the worker is actually given, which is the
+thing this whole section's "expanded at file time" rule exists to prevent.
+
 ### Placeholders, and the hole that had to be closed explicitly
 
 A workflow body may carry `{{name}}`, rendered from the Job's `value:` inputs and *only* from those —
@@ -226,7 +274,15 @@ and refuses, naming the placeholders and the flags that supply them (`src/hkb.ts
 ADR-015 decision 4: **hkb's own workflows are ordinary workflows.** No privileged path, no
 `templates/` inside the package, no second mechanism.
 
-`.hkb/workflows/draft-wiki-page.md` in this repository is the one that exists — the four 2026-09-06
+There are two. `.hkb/workflows/implement.md` is this board's **default**: the finishing steps for
+work in this repository — push, open a draft pull request against your base, a human reviews and
+merges. It says nothing hkb could enforce, which is exactly why it is a file. It deliberately does
+*not* declare `input: [base=self:base]`, though `self:base` is the ref its step wants: a board
+default reaches every hand-filed Job including a `--no-isolate` one, which has no checkout of its own
+and would fail on an input it cannot resolve. A workflow used with `--from`, on a Job known to have a
+branch, is where that declaration belongs.
+
+`.hkb/workflows/draft-wiki-page.md` is the other — the four 2026-09-06
 briefs, reconstructed with their shared 80% as the body and their per-page half as four
 placeholders (`page`, `cover`, `sources`, `wrong`). It is read by exactly the `readTemplate` a user's
 workflow is read by, and it ships in no tarball: `files` in `package.json` does not name `.hkb`, and
@@ -255,6 +311,11 @@ having spent $1.56 and produced nothing. A workflow is where that lesson can be 
   refusal for a workflow that is not there (`src/templates.ts:164-173`, `src/templates.ts:222-231`),
   which is where a person actually needs it, but discovering the set means typing a wrong name or
   listing the directory.
+- **Re-briefing a triage item drops its standing steps.** `hkb queue <id> "…"` replaces `Job.brief`
+  wholesale (`src/transitions.ts`), and the steps live in that string — so a note filed on a board
+  with a default workflow, then queued with a new brief, loses them. Queued without a re-brief it
+  keeps them. The composition belongs to `queue` rather than to this feature, which is why it is a
+  gap and not a bug in `withStandingSteps`.
 - **One workflow per Job.** `--from` is not repeatable, deliberately: two workflows would need a rule
   for which one wins per key, and "the flag you typed wins over the file" is the only precedence
   worth asking anyone to hold (`src/hkb.ts:518-522`).

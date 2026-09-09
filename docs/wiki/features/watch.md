@@ -9,10 +9,10 @@ covers:
   - path: src/watch.ts
     sha: 992b53f9dc3ef4284c2a1bf0201794490afee393
   - path: src/hkb.ts
-    sha: f7cca4f068b7ccb229e6f7b87727de198f9efb6e
+    sha: 7b95039ab59dbcf5234373c716a5db86a15db8fb
   - path: prisma/schema.prisma
-    sha: 34921e6803578d6831938ada63d477d55a95eb6a
-generated_at_commit: 6d4142a
+    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
+generated_at_commit: f063b7a
 last_refreshed: 2026-09-09
 related:
   [

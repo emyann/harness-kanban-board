@@ -11,11 +11,11 @@ covers:
   - path: src/worktree.ts
     sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
   - path: src/controller.ts
-    sha: 67e1a217f67ec6731ebcc0cd491d5f55d712be81
+    sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
   - path: src/brief.ts
-    sha: 9090eb71378c7dac7b89cf63c2140f1e97e98c69
+    sha: 97737608be17c28aeca4bf859902c9c5b6ec4d89
   - path: prisma/schema.prisma
-    sha: 34921e6803578d6831938ada63d477d55a95eb6a
+    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
 related:
   [
     features/the-checkout-base,
@@ -25,7 +25,7 @@ related:
     features/declared-outputs,
     decisions/adr-014-no-preset-three-rules,
   ]
-generated_at_commit: 6d4142a
+generated_at_commit: f063b7a
 last_refreshed: 2026-09-09
 ---
 
@@ -92,8 +92,10 @@ after another, each able to burn the full twenty-second timeout before any worke
 
 ## Why the controller rewrites history the worker may not
 
-The worker's protocol has always said *never `git push --force`* (`withProtocol`, `src/brief.ts`)
-and that rule is unchanged. But a branch that has already been pushed and whose base has since
+The worker's contract has never let it force-push a branch that is not its own, and since ADR-017
+decision 5 it may force-push its own **only with `--force-with-lease`** (`withSandbox`,
+`src/brief.ts`; enforced, not asked for, by `src/push.ts`). The blanket *never `git push --force`*
+that used to sit there was protecting this: the compare ref `--force-with-lease` reads. But a branch that has already been pushed and whose base has since
 moved can only be rebased by rewriting what is on the remote. If the worker may not and a human
 should not have to, the controller is the only candidate left — and it is a defensible owner: it
 created the branch, and `kb-<id>-<k>` is hkb's namespace on that remote.
@@ -112,16 +114,18 @@ own tracking ref says it is.
 The brief asks for a rebase only when the branch has **not yet been pushed** — which the controller
 decides with `pushedRef`. A resumed attempt lands in the previous attempt's checkout, on a branch
 already on the remote: rebasing there makes the next `git push -u` a non-fast-forward rejection, and
-the very next rule in the same protocol forbids the force that would fix it. Asking anyway is asking
-for a step with no legal ending, and a worker in that position reports a failed push and often
-skips the pull request entirely. The controller rebases that case itself after the run.
+the force that would fix it is the controller's rewrite of a branch it is holding a lease over.
+Asking anyway is asking for a step with no legal ending, and a worker in that position reports a
+failed push and often skips whatever it was going to do next. The controller rebases that case
+itself after the run.
 
 ## The prompt half, and why it is not the mechanism
 
-`withProtocol` now asks the worker to rebase **before** it pushes, and only when there is an
-`origin/` base to rebase onto — telling a worker in a remote-less repository to `git fetch origin`
-is an instruction to fail. The step is placed before the push because that is the one moment it is
-free: after the push it costs a rewrite.
+`withSandbox` asks the worker to rebase **before it finishes**, and only when there is an `origin/`
+base to rebase onto — telling a worker in a remote-less repository to `git fetch origin` is an
+instruction to fail. It used to say *before you push*, which stopped being the core's sentence to
+write when pushing became a step's content (*decisions/adr-017-the-workflow-is-content* decision 5);
+the moment it is free is unchanged, and a workflow that pushes puts its push after this.
 
 ADR-014 recorded that prompt text is layer 6 and guarantees nothing, and that is exactly the
 relationship here. The prose makes the common case free — `rebaseOntoBase` then finds the branch

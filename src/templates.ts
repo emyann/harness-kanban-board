@@ -369,6 +369,63 @@ export function readTemplate(repoPath: string | null, name: string): Template {
 }
 
 /**
+ * The line that says where a Job's standing steps came from. Matched as well as written, so the two
+ * cannot drift: `hkb show` reads a filed Job's provenance back out of the brief it stores.
+ */
+const STANDING = (name: string) => `Standing steps for work on this board, from the workflow \`${name}\`:`;
+const STANDING_RE = /^Standing steps for work on this board, from the workflow `([A-Za-z0-9][A-Za-z0-9_-]*)`:$/m;
+
+/**
+ * The board's default workflow, appended to a hand-written brief as **standing steps**.
+ *
+ * The one place a file's body and the line's brief both survive, and the asymmetry is the point.
+ * `--from <x>` says *x is the work*, so x's body IS the brief and a `--brief` on the line replaces
+ * it. A board default says *this is how work on this board finishes* — a hand-written brief still
+ * says WHAT to do, and the default says what doing it ends in. Overwriting one with the other would
+ * make the board's default either useless or destructive, so they compose instead.
+ *
+ * Appended rather than prepended, on `withResults`' rule: what follows the work is a contract to
+ * satisfy at the end, and last is where a requirement reads best.
+ *
+ * **Expanded at file time and then gone**, like every other thing a workflow supplies (see this
+ * file's header): the Job holds the text, editing the file later changes nothing already filed, and
+ * `hkb show` cannot disagree with the prompt. The naming line is what buys the provenance back — see
+ * `standingStepsFrom`.
+ */
+export function withStandingSteps(brief: string, workflow: string, steps: string): string {
+  if (!steps.trim()) return brief;
+  return [
+    brief.trimEnd(),
+    '',
+    '---',
+    '',
+    STANDING(workflow),
+    '',
+    steps.trim(),
+  ].join('\n');
+}
+
+/**
+ * Which workflow a filed Job's standing steps came from, or null.
+ *
+ * **Derived from the brief rather than stored in a column**, and that is the same choice the rest of
+ * this file makes: a workflow is expanded at file time, so a column would be a second record of a
+ * fact the brief already carries — one that could disagree with the text the worker is actually
+ * given. `hkb show` names the source of every resolved field; this is how it names this one.
+ *
+ * The last match wins, because the block is appended: a brief that quotes the sentence is describing
+ * something, and the one at the bottom is the one hkb wrote.
+ */
+export function standingStepsFrom(brief: string): string | null {
+  let found: string | null = null;
+  for (const line of String(brief ?? '').split('\n')) {
+    const m = STANDING_RE.exec(line);
+    if (m) found = m[1];
+  }
+  return found;
+}
+
+/**
  * The `{{name}}` placeholders a brief refers to.
  *
  * `renderBrief` refuses an unknown placeholder, but only for a Job that declares inputs **at all** —

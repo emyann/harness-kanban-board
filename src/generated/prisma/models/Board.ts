@@ -60,6 +60,7 @@ export type BoardMinAggregateOutputType = {
   defaultGuide: string | null
   defaultBase: string | null
   defaultCheck: string | null
+  defaultWorkflow: string | null
   createdAt: Date | null
   updatedAt: Date | null
 }
@@ -80,6 +81,7 @@ export type BoardMaxAggregateOutputType = {
   defaultGuide: string | null
   defaultBase: string | null
   defaultCheck: string | null
+  defaultWorkflow: string | null
   createdAt: Date | null
   updatedAt: Date | null
 }
@@ -102,6 +104,7 @@ export type BoardCountAggregateOutputType = {
   defaultGuide: number
   defaultBase: number
   defaultCheck: number
+  defaultWorkflow: number
   createdAt: number
   updatedAt: number
   _all: number
@@ -142,6 +145,7 @@ export type BoardMinAggregateInputType = {
   defaultGuide?: true
   defaultBase?: true
   defaultCheck?: true
+  defaultWorkflow?: true
   createdAt?: true
   updatedAt?: true
 }
@@ -162,6 +166,7 @@ export type BoardMaxAggregateInputType = {
   defaultGuide?: true
   defaultBase?: true
   defaultCheck?: true
+  defaultWorkflow?: true
   createdAt?: true
   updatedAt?: true
 }
@@ -184,6 +189,7 @@ export type BoardCountAggregateInputType = {
   defaultGuide?: true
   defaultBase?: true
   defaultCheck?: true
+  defaultWorkflow?: true
   createdAt?: true
   updatedAt?: true
   _all?: true
@@ -293,6 +299,7 @@ export type BoardGroupByOutputType = {
   defaultGuide: string | null
   defaultBase: string | null
   defaultCheck: string | null
+  defaultWorkflow: string | null
   createdAt: Date
   updatedAt: Date
   _count: BoardCountAggregateOutputType | null
@@ -338,6 +345,7 @@ export type BoardWhereInput = {
   defaultGuide?: Prisma.StringNullableFilter<"Board"> | string | null
   defaultBase?: Prisma.StringNullableFilter<"Board"> | string | null
   defaultCheck?: Prisma.StringNullableFilter<"Board"> | string | null
+  defaultWorkflow?: Prisma.StringNullableFilter<"Board"> | string | null
   createdAt?: Prisma.DateTimeFilter<"Board"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"Board"> | Date | string
   jobs?: Prisma.JobListRelationFilter
@@ -363,6 +371,7 @@ export type BoardOrderByWithRelationInput = {
   defaultGuide?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultBase?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultCheck?: Prisma.SortOrderInput | Prisma.SortOrder
+  defaultWorkflow?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   jobs?: Prisma.JobOrderByRelationAggregateInput
@@ -391,6 +400,7 @@ export type BoardWhereUniqueInput = Prisma.AtLeast<{
   defaultGuide?: Prisma.StringNullableFilter<"Board"> | string | null
   defaultBase?: Prisma.StringNullableFilter<"Board"> | string | null
   defaultCheck?: Prisma.StringNullableFilter<"Board"> | string | null
+  defaultWorkflow?: Prisma.StringNullableFilter<"Board"> | string | null
   createdAt?: Prisma.DateTimeFilter<"Board"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"Board"> | Date | string
   jobs?: Prisma.JobListRelationFilter
@@ -416,6 +426,7 @@ export type BoardOrderByWithAggregationInput = {
   defaultGuide?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultBase?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultCheck?: Prisma.SortOrderInput | Prisma.SortOrder
+  defaultWorkflow?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   _count?: Prisma.BoardCountOrderByAggregateInput
@@ -446,6 +457,7 @@ export type BoardScalarWhereWithAggregatesInput = {
   defaultGuide?: Prisma.StringNullableWithAggregatesFilter<"Board"> | string | null
   defaultBase?: Prisma.StringNullableWithAggregatesFilter<"Board"> | string | null
   defaultCheck?: Prisma.StringNullableWithAggregatesFilter<"Board"> | string | null
+  defaultWorkflow?: Prisma.StringNullableWithAggregatesFilter<"Board"> | string | null
   createdAt?: Prisma.DateTimeWithAggregatesFilter<"Board"> | Date | string
   updatedAt?: Prisma.DateTimeWithAggregatesFilter<"Board"> | Date | string
 }
@@ -467,6 +479,7 @@ export type BoardCreateInput = {
   defaultGuide?: string | null
   defaultBase?: string | null
   defaultCheck?: string | null
+  defaultWorkflow?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobCreateNestedManyWithoutBoardInput
@@ -492,6 +505,7 @@ export type BoardUncheckedCreateInput = {
   defaultGuide?: string | null
   defaultBase?: string | null
   defaultCheck?: string | null
+  defaultWorkflow?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobUncheckedCreateNestedManyWithoutBoardInput
@@ -516,6 +530,7 @@ export type BoardUpdateInput = {
   defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultBase?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUpdateManyWithoutBoardNestedInput
@@ -541,6 +556,7 @@ export type BoardUncheckedUpdateInput = {
   defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultBase?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUncheckedUpdateManyWithoutBoardNestedInput
@@ -566,6 +582,7 @@ export type BoardCreateManyInput = {
   defaultGuide?: string | null
   defaultBase?: string | null
   defaultCheck?: string | null
+  defaultWorkflow?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
 }
@@ -587,6 +604,7 @@ export type BoardUpdateManyMutationInput = {
   defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultBase?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -609,6 +627,7 @@ export type BoardUncheckedUpdateManyInput = {
   defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultBase?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -631,6 +650,7 @@ export type BoardCountOrderByAggregateInput = {
   defaultGuide?: Prisma.SortOrder
   defaultBase?: Prisma.SortOrder
   defaultCheck?: Prisma.SortOrder
+  defaultWorkflow?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
 }
@@ -660,6 +680,7 @@ export type BoardMaxOrderByAggregateInput = {
   defaultGuide?: Prisma.SortOrder
   defaultBase?: Prisma.SortOrder
   defaultCheck?: Prisma.SortOrder
+  defaultWorkflow?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
 }
@@ -680,6 +701,7 @@ export type BoardMinOrderByAggregateInput = {
   defaultGuide?: Prisma.SortOrder
   defaultBase?: Prisma.SortOrder
   defaultCheck?: Prisma.SortOrder
+  defaultWorkflow?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
 }
@@ -804,6 +826,7 @@ export type BoardCreateWithoutControllerInput = {
   defaultGuide?: string | null
   defaultBase?: string | null
   defaultCheck?: string | null
+  defaultWorkflow?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobCreateNestedManyWithoutBoardInput
@@ -828,6 +851,7 @@ export type BoardUncheckedCreateWithoutControllerInput = {
   defaultGuide?: string | null
   defaultBase?: string | null
   defaultCheck?: string | null
+  defaultWorkflow?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobUncheckedCreateNestedManyWithoutBoardInput
@@ -867,6 +891,7 @@ export type BoardUpdateWithoutControllerInput = {
   defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultBase?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUpdateManyWithoutBoardNestedInput
@@ -891,6 +916,7 @@ export type BoardUncheckedUpdateWithoutControllerInput = {
   defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultBase?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUncheckedUpdateManyWithoutBoardNestedInput
@@ -914,6 +940,7 @@ export type BoardCreateWithoutJobsInput = {
   defaultGuide?: string | null
   defaultBase?: string | null
   defaultCheck?: string | null
+  defaultWorkflow?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   events?: Prisma.EventCreateNestedManyWithoutBoardInput
@@ -938,6 +965,7 @@ export type BoardUncheckedCreateWithoutJobsInput = {
   defaultGuide?: string | null
   defaultBase?: string | null
   defaultCheck?: string | null
+  defaultWorkflow?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   events?: Prisma.EventUncheckedCreateNestedManyWithoutBoardInput
@@ -977,6 +1005,7 @@ export type BoardUpdateWithoutJobsInput = {
   defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultBase?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   events?: Prisma.EventUpdateManyWithoutBoardNestedInput
@@ -1001,6 +1030,7 @@ export type BoardUncheckedUpdateWithoutJobsInput = {
   defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultBase?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   events?: Prisma.EventUncheckedUpdateManyWithoutBoardNestedInput
@@ -1024,6 +1054,7 @@ export type BoardCreateWithoutEventsInput = {
   defaultGuide?: string | null
   defaultBase?: string | null
   defaultCheck?: string | null
+  defaultWorkflow?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobCreateNestedManyWithoutBoardInput
@@ -1048,6 +1079,7 @@ export type BoardUncheckedCreateWithoutEventsInput = {
   defaultGuide?: string | null
   defaultBase?: string | null
   defaultCheck?: string | null
+  defaultWorkflow?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobUncheckedCreateNestedManyWithoutBoardInput
@@ -1087,6 +1119,7 @@ export type BoardUpdateWithoutEventsInput = {
   defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultBase?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUpdateManyWithoutBoardNestedInput
@@ -1111,6 +1144,7 @@ export type BoardUncheckedUpdateWithoutEventsInput = {
   defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultBase?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUncheckedUpdateManyWithoutBoardNestedInput
@@ -1175,6 +1209,7 @@ export type BoardSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
   defaultGuide?: boolean
   defaultBase?: boolean
   defaultCheck?: boolean
+  defaultWorkflow?: boolean
   createdAt?: boolean
   updatedAt?: boolean
   jobs?: boolean | Prisma.Board$jobsArgs<ExtArgs>
@@ -1201,6 +1236,7 @@ export type BoardSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extensi
   defaultGuide?: boolean
   defaultBase?: boolean
   defaultCheck?: boolean
+  defaultWorkflow?: boolean
   createdAt?: boolean
   updatedAt?: boolean
 }, ExtArgs["result"]["board"]>
@@ -1223,6 +1259,7 @@ export type BoardSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensi
   defaultGuide?: boolean
   defaultBase?: boolean
   defaultCheck?: boolean
+  defaultWorkflow?: boolean
   createdAt?: boolean
   updatedAt?: boolean
 }, ExtArgs["result"]["board"]>
@@ -1245,11 +1282,12 @@ export type BoardSelectScalar = {
   defaultGuide?: boolean
   defaultBase?: boolean
   defaultCheck?: boolean
+  defaultWorkflow?: boolean
   createdAt?: boolean
   updatedAt?: boolean
 }
 
-export type BoardOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "slug" | "repoPath" | "pausedAt" | "pausedBy" | "dailyBudgetUsd" | "maxConcurrent" | "defaultModel" | "defaultEffort" | "defaultMaxTurns" | "defaultMaxBudgetUsd" | "defaultMaxRetries" | "defaultAllowedTools" | "defaultPluginPaths" | "defaultGuide" | "defaultBase" | "defaultCheck" | "createdAt" | "updatedAt", ExtArgs["result"]["board"]>
+export type BoardOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "slug" | "repoPath" | "pausedAt" | "pausedBy" | "dailyBudgetUsd" | "maxConcurrent" | "defaultModel" | "defaultEffort" | "defaultMaxTurns" | "defaultMaxBudgetUsd" | "defaultMaxRetries" | "defaultAllowedTools" | "defaultPluginPaths" | "defaultGuide" | "defaultBase" | "defaultCheck" | "defaultWorkflow" | "createdAt" | "updatedAt", ExtArgs["result"]["board"]>
 export type BoardInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   jobs?: boolean | Prisma.Board$jobsArgs<ExtArgs>
   events?: boolean | Prisma.Board$eventsArgs<ExtArgs>
@@ -1348,6 +1386,20 @@ export type $BoardPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs 
      * every worker on it. Null — the shipped default — means nothing runs.
      */
     defaultCheck: string | null
+    /**
+     * The name of a workflow in `.hkb/workflows/` — how work on this board FINISHES.
+     * 
+     * ADR-017 decision 1: a board's default workflow is a file, not code. The core tells a worker the
+     * sandbox contract and nothing else, so "push and open a pull request" has to come from
+     * somewhere, and a hand-filed Job (`hkb new --brief …`, no `--from`) had nowhere to get it. This
+     * is that somewhere.
+     * 
+     * It composes differently from every other default here, and deliberately: the frontmatter fills
+     * spec nulls the way `--from` would, and the BODY is appended to the brief as standing steps
+     * (`src/templates.ts`). A Job filed WITH `--from` ignores it entirely — that workflow governs.
+     * Null, the shipped default, means a Job gets the sandbox contract and nothing else.
+     */
+    defaultWorkflow: string | null
     createdAt: Date
     updatedAt: Date
   }, ExtArgs["result"]["board"]>
@@ -1793,6 +1845,7 @@ export interface BoardFieldRefs {
   readonly defaultGuide: Prisma.FieldRef<"Board", 'String'>
   readonly defaultBase: Prisma.FieldRef<"Board", 'String'>
   readonly defaultCheck: Prisma.FieldRef<"Board", 'String'>
+  readonly defaultWorkflow: Prisma.FieldRef<"Board", 'String'>
   readonly createdAt: Prisma.FieldRef<"Board", 'DateTime'>
   readonly updatedAt: Prisma.FieldRef<"Board", 'DateTime'>
 }

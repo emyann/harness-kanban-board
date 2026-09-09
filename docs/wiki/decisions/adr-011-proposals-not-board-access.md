@@ -11,21 +11,21 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/admission.ts
-    sha: aab84ccd1178b085cea79d2c4566149145027b9e
+    sha: ce4e291113aa9868314ce771f7fd1deb97b67ba8
   - path: src/results.ts
     sha: 0fc3dc145a1c515267534909aee79f034effa61b
   - path: src/controller.ts
-    sha: 67e1a217f67ec6731ebcc0cd491d5f55d712be81
+    sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
   - path: src/runtime/claude.ts
     sha: 5ae775633cae411b71443add232b79f1325c4075
   - path: src/brief.ts
-    sha: 9090eb71378c7dac7b89cf63c2140f1e97e98c69
+    sha: 97737608be17c28aeca4bf859902c9c5b6ec4d89
   - path: prisma/schema.prisma
-    sha: 34921e6803578d6831938ada63d477d55a95eb6a
+    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
   - path: src/artifacts.ts
     sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
   - path: src/inputs.ts
-    sha: ffd76fce7689fe1c9a1dc0db3756cdf343d2b623
+    sha: 140cf48b8b323742a57e3e604b6853f829c72b6c
 related:
   [
     decisions/adr-007-workload-scheduler,
@@ -35,7 +35,7 @@ related:
     architecture/job-kind,
     architecture/the-loop,
   ]
-generated_at_commit: 6d4142a
+generated_at_commit: f063b7a
 last_refreshed: 2026-09-09
 ---
 

@@ -1595,11 +1595,11 @@ test('a create failure that is NOT a duplicate stops the pass rather than being 
   await db.$executeRawUnsafe('PRAGMA foreign_keys=ON');
 });
 
-test('an isolated proposing Job is NOT told to open a pull request', async () => {
+test('an isolated proposing Job is NOT told to commit', async () => {
   // The contradiction this pins, found by printing the prompt rather than by a failing test: an
-  // isolated Job gets the pull-request protocol, and a proposing one gets the proposal contract, so
-  // one prompt told a worker both to "commit and push what you have" and to "write the file and
-  // stop". A worker cannot obey both, and which one it picks is not something to leave to chance.
+  // isolated Job gets the sandbox contract, and a proposing one gets the proposal contract, so one
+  // prompt told a worker both to "commit what you have" and to "write the file and stop". A worker
+  // cannot obey both, and which one it picks is not something to leave to chance.
   const b = await proposalBoard();
   let seen = '';
   const spy = {
@@ -1618,7 +1618,7 @@ test('an isolated proposing Job is NOT told to open a pull request', async () =>
   });
   await reconcile({ runtime: spy, cwd, board: 'proposals', readPr: false });
 
-  assert.doesNotMatch(seen, /DRAFT pull request/, 'a proposal is not a diff and has nothing to open a PR for');
+  assert.doesNotMatch(seen, /Commit it on/, 'a proposal is not a diff and has nothing to commit');
   assert.doesNotMatch(seen, /git push/);
   assert.match(seen, new RegExp(`worktree of your own, checked out on \`kb-${job.id}-1\``),
     'it still has to know where it is standing — the worktree is the sandbox');
@@ -1629,7 +1629,38 @@ test('an isolated proposing Job is NOT told to open a pull request', async () =>
     data: { boardId: b.id, name: 'ordinary isolated', brief: 'do the work', maxBudgetUsd: 1, maxRetries: 0 },
   });
   await reconcile({ runtime: spy, cwd, only: plain.id, board: 'proposals', readPr: false });
-  assert.match(seen, /Open a DRAFT pull request/);
+  assert.match(seen, new RegExp(`Commit it on \`kb-${plain.id}-1\``));
+});
+
+test('an isolated Job with no guide and no default workflow gets the contract and nothing else', async () => {
+  // The shipped defaults, on a board that configures nothing: what a worker is told is its branch,
+  // the rules the controller refuses on, and its own brief. Every line that was moved out to a
+  // workflow file is asserted ABSENT, because "the core stopped saying it" is the whole change and
+  // it is invisible from the inside (ADR-017 decision 5).
+  const b = await proposalBoard();
+  let seen = '';
+  const spy = {
+    name: 'spy',
+    async run(spec: { prompt: string }) {
+      seen = spec.prompt;
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'plain isolated', brief: 'Do the work.', maxBudgetUsd: 1, maxRetries: 0 },
+  });
+  await reconcile({ runtime: spy, cwd, only: job.id, board: 'proposals', readPr: false });
+
+  assert.match(seen, new RegExp(`already checked out on the branch\\n\`kb-${job.id}-1\``), 'where it is standing');
+  assert.match(seen, /Commit it on/, 'and what the machinery reads afterwards');
+  assert.match(seen, /Never push to the default branch/, 'and the rule the gate enforces');
+  for (const gone of [/git push -u/, /pull request/i, /gh pr/i, /Co-Authored-By/i]) {
+    assert.doesNotMatch(seen, gone, 'nothing refuses on this, so nothing in the core says it');
+  }
+  // This scratch repository has no remote, so there is no base to rebase onto and no fetch to ask
+  // for — `test/rebase.test.ts` is where that half is exercised against a real one.
+  assert.doesNotMatch(seen, /git fetch/);
 });
 
 test('a suspended Job is reported as waiting, not as retrying, and carries no error', async () => {
@@ -1820,7 +1851,7 @@ test('the standing rules reach every shape of Job, including a resumed approval'
   // ADR-014 declined the claude_code preset and took one thing from it: a standing instruction for
   // when the work itself is wrong. A rule that reached only some Jobs would be one nothing could
   // rely on, so this asserts the shapes rather than one of them — isolated, bare, proposing, and a
-  // resumed attempt carrying an approver's words, which is the one that skips `withProtocol`.
+  // resumed attempt carrying an approver's words, which is the one that skips `withSandbox`.
   const b = await proposalBoard();
   let seen = '';
   const spy = {
@@ -1844,8 +1875,8 @@ test('the standing rules reach every shape of Job, including a resumed approval'
     data: { boardId: b.id, name: 'isolated', brief: 'Do it.', maxBudgetUsd: 1 },
   });
   await reconcile({ runtime: spy, cwd, only: isolated.id, board: 'proposals', readPr: false });
-  assert.ok(has(), 'an isolated Job, beside the pull-request protocol');
-  assert.match(seen, /DRAFT pull request/);
+  assert.ok(has(), 'an isolated Job, beside the sandbox contract');
+  assert.match(seen, new RegExp(`Commit it on \`kb-${isolated.id}-1\``));
 
   const proposer = await db.job.create({
     data: {
