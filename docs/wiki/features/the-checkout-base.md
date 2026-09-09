@@ -7,11 +7,11 @@ audience: [dev]
 read_when: "chaining Jobs, filing work against an integration branch, or about to give `base` the ability to name another Job"
 covers:
   - path: src/worktree.ts
-    sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
+    sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
   - path: src/spec.ts
     sha: 8792a804835fd0602a992aeccf978e110fe2a98f
   - path: src/controller.ts
-    sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
+    sha: 3673f449a7ebf15f9b21900915183b3bec63b6e5
   - path: src/rebase.ts
     sha: 5b0df395ad3a5c5a8b2bad44a782d40e92d40d28
   - path: prisma/schema.prisma
@@ -24,7 +24,7 @@ related:
     architecture/job-kind,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: 8aa5ade
+generated_at_commit: f8ea774
 last_refreshed: 2026-09-09
 ---
 
@@ -179,10 +179,21 @@ real and unchanged: `gh pr create` with no `--base` targets the repository's def
 chain step's diff would carry its parent's commits and merging it would merge the parent's
 unreviewed work into the trunk. The rebase keeps the *branch* on the right base; only the review's
 base keeps the *review* on it. What changed is who says so: the fact is now readable as data —
-`--input where=self:base` gives a run the resolved ref its checkout was cut from (`origin/kb-33-1`,
-or the default branch's ref), so the step's own content can open the review against it
-(`JOB_FIELDS`, `src/inputs.ts`; `hkb --help`). A workflow that opens pull requests declares it; the
-core, which does not know whether this Job opens one, no longer guesses.
+`--input where=self:base` gives a run the **branch name** its checkout was cut from (`kb-33-1`, or
+the default branch), so the step's own content can open the review against it (`JOB_FIELDS`,
+`src/inputs.ts`; `hkb --help`). A workflow that opens pull requests declares it; the core, which does
+not know whether this Job opens one, no longer guesses.
+
+Without the `origin/` prefix, deliberately, and it is the one place these two spellings differ: the
+caller anybody writes is `gh pr create --base {{where}}`, and `gh` wants a branch on the repository
+rather than a remote-tracking ref. The sandbox contract names the tracking ref instead
+(`Your base … is origin/kb-33-1`), because the caller *there* is `git rebase`.
+
+The contract names it on **every** attempt, including a resumed one that may not rebase at all. That
+was the first version's gap: `rebaseOnto` is dropped once the branch is on the remote, and the base
+went with it — so a resumed chain step was told nothing about its base, and its pull request opened
+against the default branch carrying its parent's commits. Exactly the failure this field exists to
+prevent, arriving through the door built to prevent it.
 
 ## What it makes possible, and what it does not
 

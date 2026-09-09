@@ -9,10 +9,10 @@ covers:
   - path: prisma/schema.prisma
     sha: 4e4b7aa6863fad5e660435982912460565ebabf3
   - path: src/controller.ts
-    sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
+    sha: 3673f449a7ebf15f9b21900915183b3bec63b6e5
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
-generated_at_commit: 8aa5ade
+generated_at_commit: f8ea774
 last_refreshed: 2026-09-09
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control, features/rebase-and-verify, features/check, architecture/transitions]
 ---
@@ -285,11 +285,13 @@ A Board carries **spec defaults** beside its ceilings: `defaultModel`, `defaultE
 `defaultPluginPaths`, `defaultGuide`, `defaultBase`, `defaultCheck` and `defaultWorkflow`. A board
 that runs cheap, high-volume work can say so once instead of on every `hkb new`.
 
-`defaultWorkflow` is the odd one and resolves nowhere: it names a file in `.hkb/workflows/`, and
-`hkb new` expands it at file time — frontmatter into the spec fields above, body appended to the
-brief as *standing steps* — so by the time the controller reads a Job there is nothing left to
-resolve (*features/workflow-templates*). It is the board's answer to "how does work here finish",
-which stopped being the core's sentence to write with
+`defaultWorkflow` is the odd one and `resolveSpec` never touches it: it names a file in
+`.hkb/workflows/`, and it is read twice at two different times. `hkb new` expands its **frontmatter**
+into the spec fields above when the Job is filed; the controller reads its **body** when the attempt
+is claimed and appends it after the sandbox contract as *standing steps*
+(*features/workflow-templates*). Nothing of the body is stored on the Job, because `hkb queue <id>
+"…"` replaces a brief wholesale and would drop it. It is the board's answer to "how does work here
+finish", which stopped being the core's sentence to write with
 *decisions/adr-017-the-workflow-is-content* decision 5.
 
 > This list has gone stale three times. The controller used to read the Board through a hand-listed

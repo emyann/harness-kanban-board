@@ -28,8 +28,9 @@ Read `README.md` for the model before changing behaviour.
   `src/schema.ts` create-and-migrate on first touch, and the refusal to open a newer board
 - `src/controller.ts` the Job kind's reconcile pass · `src/daemon.ts` that pass on a timer, detached ·
   `src/limits.ts` the ceilings · `src/liveness.ts` whether a lease holder is still running
-- `src/admission.ts` the `PreToolUse` gate that injects worktree isolation and refuses a push outside the sandbox ·
-  `src/push.ts` which branch that is · `src/worktree.ts` the checkout ·
+- `src/admission.ts` the `PreToolUse` gate that injects worktree isolation and refuses the two ways off the
+  `pre-push` hook · `src/push.ts` that hook, and which branch it admits · `src/pre-push.ts` its entry point ·
+  `src/worktree.ts` the checkout ·
   `src/brief.ts` the sandbox contract · `src/templates.ts` a workflow, and a board's default one ·
   `src/spec.ts` how a Job's spec resolves · `src/pulls.ts` the forge read ·
   `src/paths.ts` where the package is, in either layout

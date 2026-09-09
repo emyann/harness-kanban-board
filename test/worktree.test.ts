@@ -109,6 +109,31 @@ test('a resumed attempt finds the checkout the previous one left', () => {
     'resume is not restart — the work is still there');
 });
 
+test('a resumed attempt is put back on ITS branch, not on wherever the last one wandered', () => {
+  // The hole this closes: the branch read off the checkout is whatever the previous attempt LEFT
+  // there, and a worker can `git switch`. Attempt 1 ending on `develop` made `develop` this
+  // attempt's own branch — and its own branch is exactly what the sandbox licenses a push to
+  // (`src/push.ts`). The name is pinned to what hkb could have given this Job instead.
+  const first = createWorktree(repo, 22, 1);
+  git(['switch', '-q', '-c', 'develop'], first.path);
+  assert.equal(spawnSync('git', ['branch', '--show-current'], { cwd: first.path, encoding: 'utf8' }).stdout.trim(), 'develop');
+
+  const found = existingWorktree(repo, 22, 1);
+  assert.equal(found?.branch, 'kb-22-1', 'the sandbox is not renamed by the thing it sandboxes');
+});
+
+test('but a suffixed name IS this Job`s, because hkb is what gave it one', () => {
+  // `freeBranch` takes the next free suffix when the remote already has `kb-<id>-<k>`, so a resumed
+  // attempt has to accept that spelling — refusing it would put the session on a branch its own
+  // commits are not on, which is the fault the read-it-back rule exists to prevent.
+  const wt = createWorktree(repo, 23, 1);
+  git(['switch', '-q', '-c', 'kb-23-1-2'], wt.path);
+  assert.equal(existingWorktree(repo, 23, 1)?.branch, 'kb-23-1-2');
+  // And a different Job's attempt branch is still refused: the suffix rule is about THIS Job.
+  git(['switch', '-q', '-c', 'kb-99-1'], wt.path);
+  assert.equal(existingWorktree(repo, 23, 1)?.branch, 'kb-23-1');
+});
+
 test('there is nothing to resume into when the previous checkout was clean and removed', () => {
   const wt = createWorktree(repo, 21, 1);
   removeWorktree(repo, wt);

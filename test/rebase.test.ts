@@ -42,6 +42,8 @@ const git = (cwd: string, args: string[]) => {
   return r.stdout.trim();
 };
 const at = (cwd: string, ref: string) => git(cwd, ['rev-parse', ref]);
+/** The same, for a question whose answer may legitimately be "nothing set". */
+const gitOut = (cwd: string, args: string[]) => spawnSync('git', args, { cwd, encoding: 'utf8' }).stdout.trim();
 
 /** A remote, and a clone with a first commit on `main`. */
 function makeRemote(name: string): { origin: string; repo: string; other: string } {
@@ -675,10 +677,14 @@ test('a chain step is told the right things about its parent branch, by the cont
   const first = await db.job.create({ data: { boardId: board.id, name: 'one', brief: 'write it' } });
 
   const specs: WorkerSpec[] = [];
+  /** `core.hooksPath` as the WORKER sees it, read while the run is in flight — the worktree is
+   * swept once the work is pushed, so afterwards there is nothing left to ask. */
+  const hooks: string[] = [];
   const runtime: Runtime = {
     name: 'capturing',
     async run(spec: WorkerSpec, onEvent?: (e: RuntimeEvent) => void): Promise<WorkerOutcome> {
       specs.push(spec);
+      hooks.push(gitOut(spec.cwd, ['config', '--get', 'core.hooksPath']));
       const branch = git(spec.cwd, ['branch', '--show-current']);
       work(spec.cwd, `f${spec.taskId}.txt`, 'x\n', 'work');
       git(spec.cwd, ['push', '-q', '-u', 'origin', branch]);
@@ -698,13 +704,17 @@ test('a chain step is told the right things about its parent branch, by the cont
   // The trunk Job: fetch its base, rebase onto it, and nothing about a forge.
   assert.match(specs[0].prompt, /git fetch origin main/, 'a trunk Job refreshes its own base');
   assert.doesNotMatch(specs[0].prompt, /pull request/i, 'the core stopped asking for one');
-  // And the one rule it does not merely ask for: the trunk is the trunk, and this worker owns one
-  // branch. Read off the spec the runtime is handed, because that is what builds the gate.
-  assert.deepEqual(
-    specs[0].admission?.push,
-    { branch: `kb-${first.id}-1`, defaultBranch: 'main' },
-    'the push gate is wired at the shipped defaults, not only when a test asks for it',
+  // And the rules it does not merely ask for. The branch rule is git's now — a `pre-push` hook
+  // installed on the worktree (`test/push.test.ts` runs it against a real remote) — and what the
+  // runtime is handed is the flag that turns on the two refusals keeping that hook on the path.
+  // Read off the spec, because that is what builds the gate.
+  assert.equal(
+    specs[0].admission?.sandboxed,
+    true,
+    'the sandbox gate is wired at the shipped defaults, not only when a test asks for it',
   );
+  assert.ok(hooks[0], 'and the worktree was actually pointed at a hook while the worker ran in it');
+  assert.ok(!hooks[0].startsWith(specs[0].cwd), 'at a path outside the checkout the worker can write');
 
   await db.job.create({
     data: {
@@ -718,8 +728,10 @@ test('a chain step is told the right things about its parent branch, by the cont
   const step = specs[1].prompt;
   assert.match(step, new RegExp(`git rebase origin/${parent}`), 'the chain step still rebases');
   assert.doesNotMatch(step, /git fetch/, 'but fetches nothing — that ref is its parent\'s lease');
-  assert.match(step, new RegExp(`### \`where\`  \\(self:base\\)[\\s\\S]*origin/${parent}`),
-    '`self:base` is the ref the checkout was actually cut from — the parent branch, not the trunk');
+  assert.match(step, new RegExp(`### \`where\`  \\(self:base\\)\\s+\`{5}\\s+${parent}`),
+    '`self:base` is the branch the checkout was cut from — and without `origin/`, which `gh pr create --base` rejects');
+  assert.match(step, new RegExp(`Your base .* is \`origin/${parent}\``),
+    'and the contract still names the tracking ref, which is the spelling a rebase wants');
 });
 
 test('a base that is on the REMOTE but not in this clone says so, instead of "wait for it"', async () => {
@@ -818,15 +830,16 @@ test('a Job\'s branch is rebased onto ITS base, never the repository\'s default'
 
 // ---------------------------------------------------------------- the prompt half
 
-test('the sandbox contract asks the worker to rebase before it finishes', () => {
-  // It used to say "before you PUSH", which was true while the core told every worker to push.
-  // Whether a Job pushes is a workflow's business now (ADR-017 decision 5); whether its branch is on
-  // the base when the attempt ends is the machinery's, so that is what is asked for.
+test('the sandbox contract asks the worker to rebase before it finishes, then to push', () => {
+  // It used to say "before you PUSH", which put the rebase in the wrong relationship to the step
+  // after it: what the machinery refuses on is the branch being on the base when the ATTEMPT ends.
+  // The push is still asked for — the core reads pushed state (`pushedRef`, `sweepWorktrees`), so
+  // ADR-017's derivation moved it to content one card early. It leaves when #49 retires the reads.
   const p = withSandbox('do the thing', 'kb-1-1', { rebaseOnto: 'origin/main' });
   assert.match(p, /Before you finish, rebase onto the base/);
   assert.ok(p.indexOf('git rebase origin/main') > p.indexOf('Commit it on'), 'after the commit it rebases');
-  assert.match(p, /3\. Reply with one line/, 'the steps are renumbered rather than repeating a number');
-  assert.doesNotMatch(p, /git push/, 'and pushing is not one of them');
+  assert.ok(p.indexOf('git push -u origin kb-1-1') > p.indexOf('git rebase origin/main'), 'and pushes after that');
+  assert.match(p, /4\. Reply with one line/, 'the steps are renumbered rather than repeating a number');
 });
 
 test('the contract does not ask a worker to fetch a branch that is somebody\'s lease', () => {
@@ -861,7 +874,8 @@ test('the contract never asks for a BLANKET fetch, which would undo the lease it
 test('a repository with no remote is not told to fetch one', () => {
   const p = withSandbox('do the thing', 'kb-1-1', { rebaseOnto: 'HEAD' });
   assert.doesNotMatch(p, /git fetch origin/);
-  assert.match(p, /2\. Reply with one line/, 'and the steps close back up');
+  assert.match(p, /2\. Push it/, 'and the steps close back up');
+  assert.match(p, /3\. Reply with one line/);
 });
 
 // ---------------------------------------------------------------- through the controller, at the shipped defaults

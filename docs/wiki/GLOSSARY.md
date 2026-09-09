@@ -240,17 +240,24 @@ meet one in the git history, that is what it was.
 - **Runtime** — the seam that runs a worker, `run(spec) -> WorkerOutcome` (`src/runtime/index.ts`).
   Two drivers: the Claude Agent SDK (`src/runtime/claude.ts`) and a fake that spends nothing
   (`src/runtime/fake.ts`) (*architecture/runtime-layer*).
-- **Sandbox contract** — what the core tells every isolated worker, and *only* what it will refuse on
-  afterwards: you are on this branch, commit there, rebase onto your base before you finish, never
-  push the trunk, never merge, never force any branch but your own (`withSandbox`, `src/brief.ts`).
-  Everything past that — push, open a pull request, a human merges — is a *step*'s content and lives
-  in a workflow file (*decisions/adr-017-the-workflow-is-content* decision 5). The push half is
-  enforced rather than asked for (`src/push.ts`, *concepts/admission-control*).
+- **Sandbox contract** — what the core tells every isolated worker, and *only* what the machinery
+  makes true afterwards: you are on this branch, commit there, rebase onto your base before you
+  finish, push that branch, and push nothing else (`withSandbox`, `src/brief.ts`). *Open a pull
+  request, a human merges* is a **step**'s content and lives in a workflow file
+  (*decisions/adr-017-the-workflow-is-content* decision 5); the push does not, because the core still
+  reads pushed state. `never merge` is the one line with nothing behind it, and the contract says so
+  rather than listing it beside the rules that are enforced.
+- **Pre-push hook** — how "push only your own branch" stops being prose. hkb installs a `pre-push`
+  hook on the attempt's worktree at a `core.hooksPath` outside every checkout, pinned at claim time
+  to the branch it gave the attempt (`installPushHook`, `src/push.ts`). git hands it the resolved
+  refs, so aliases, `-c` config, redirects and nested shells are already gone — which the string
+  parser it replaced could not say (*concepts/admission-control*).
 - **Standing steps** — the body of a board's **default workflow** (`Board.defaultWorkflow`), appended
-  to the brief of every Job filed on that board without `--from` — how work on this board *finishes*,
-  as opposed to what this Job is (`withStandingSteps`, `src/templates.ts`). The one place a file's
-  body and a hand-written brief both survive; `hkb show` names the workflow it came from, read back
-  out of the brief rather than out of a column (*features/workflow-templates*).
+  after the sandbox contract for every isolated Job on that board filed without `--from` — how work
+  on this board *finishes*, as opposed to what this Job is (`withStandingSteps`, `src/templates.ts`).
+  Composed **when the attempt is claimed**, never stored on the Job: a brief that carried them would
+  lose them to the next `hkb queue <id> "…"`. `hkb show` names the workflow from the board column
+  (*features/workflow-templates*).
 - **Sweep** — reclaiming worktrees on the daemon's tick rather than at the end of a run, because
   "safe to delete" is a state a worktree enters *later*, when its pull request lands
   (`sweepWorktrees`, `src/worktree.ts`). It is what bounds disk by `maxConcurrent × repo size`

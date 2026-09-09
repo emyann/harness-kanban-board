@@ -1,15 +1,15 @@
 ---
 title: Workflow templates (`.hkb/workflows/`, `hkb new --from`)
-summary: "Work that recurs is a file, not a command you retype: frontmatter is the spec, the body is the brief, and the keys are the CLI flags so one vocabulary documents both. Expanded once at file time, fenced to the board's repository, and hkb's own workflows come through the same door — including the board's default one, whose body is appended to every hand-filed brief as the steps that finish it."
+summary: "Work that recurs is a file, not a command you retype: frontmatter is the spec, the body is the brief, and the keys are the CLI flags so one vocabulary documents both. Expanded once at file time, fenced to the board's repository, and hkb's own workflows come through the same door — including the board's default one, whose frontmatter fills the spec when a Job is filed and whose body is appended as standing steps when it runs."
 category: features
 kind: explanation
 audience: [dev]
 read_when: "authoring a workflow, setting a board's default one, adding a flag to `hkb new`, or deciding whether something belongs in the format (machinery) or in a workflow file (content)"
 covers:
   - path: src/templates.ts
-    sha: 1004bfccbdd46a7e2f875ba59d30d59b4107dbb9
+    sha: 5377df2c14203132e63b836c3685a7f6b0e9d9bc
   - path: src/hkb.ts
-    sha: 7b95039ab59dbcf5234373c716a5db86a15db8fb
+    sha: 306d4fa2d8af038fbfd904dbb17161850a65e942
   - path: src/inputs.ts
     sha: 140cf48b8b323742a57e3e604b6853f829c72b6c
   - path: prisma/schema.prisma
@@ -24,7 +24,7 @@ related:
     concepts/ceilings,
     features/proposals,
   ]
-generated_at_commit: f063b7a
+generated_at_commit: 32ea87c
 last_refreshed: 2026-09-09
 ---
 
@@ -225,7 +225,8 @@ It composes **differently from `--from`, deliberately**:
 | | `--from <x>` | `Board.defaultWorkflow` |
 |---|---|---|
 | the frontmatter | fills what the line did not say | the same, one level further out (line, then file, then the board's `default*` columns) |
-| the body | **is** the brief; `--brief` replaces it | is **appended** to the brief as *standing steps* |
+| the body | **is** the brief; `--brief` replaces it | is **appended as standing steps**, after the sandbox contract |
+| when the body is read | at file time, into `Job.brief` | **at claim time**, from the board as it is then |
 | both at once | the default is not applied at all — `x` governs | — |
 
 The asymmetry is the whole design. `--from` says *this workflow is the work*, so its body is the
@@ -234,26 +235,52 @@ says WHAT to do, and the default says what doing it ends in — so overwriting o
 make the default either useless or destructive. It is the one place a file's body and the line's
 brief both survive (`withStandingSteps`, `src/templates.ts`).
 
-Three refusals and one exclusion, each with a reason that is not tidiness:
+#### The frontmatter is expanded at file time; the body is composed at CLAIM time
 
-- **A default workflow that is not in the repository is refused at file time, by name**, with nothing
-  created and the fix in the message (`hkb boards set <slug> --workflow <name>|none`). Not at claim
-  time: a Job silently missing the steps every other Job on the board got is worse than a refusal.
+This is the one place a workflow breaks the "expanded once, then gone" rule above, and it is the
+correction the first implementation needed. The steps were baked into `Job.brief` by `hkb new`, and
+that was wrong three ways at once:
+
+1. **`hkb queue <id> "…"` replaces a brief wholesale**, and so does `hkb job set --brief`. That path
+   is the board's own inbox — how a triage note becomes work — so the steps and the record of them
+   were dropped every single time, silently.
+2. **They reached `--no-isolate` Jobs**, which get no worktree and no branch, and told them to push
+   one.
+3. **They landed before the sandbox contract**, so a worker read *"open the PR, reply with the URL"*
+   and then *"1. commit, 2. rebase, 3. push, 4. reply with the branch"* — two reply contracts, in the
+   wrong order.
+
+So the *body* is read by the controller when the attempt is claimed and appended after the contract,
+the way the guide and the check line are (`src/controller.ts`). Nothing is stored on the Job. The
+*frontmatter* still expands at file time, because those are columns and a column filled later is a
+column `hkb show` could not print.
+
+It also makes the default behave like a default: editing the workflow changes the next attempt,
+including the next attempt of a Job filed last week.
+
+Three refusals and two exclusions, each with a reason that is not tidiness:
+
+- **A default workflow that is not in the repository is refused at `hkb new`, by name**, with nothing
+  created and the fix in the message (`hkb boards set <slug> --workflow <name>|none`) — the operator
+  is standing there, and that is the cheapest place to find it.
+- **And refused again at claim time, the same way**, because the file can be deleted after the Job is
+  filed. The attempt fails without spending anything and says the same sentence. A Job silently
+  missing the steps every other Job on the board got is worse than either refusal.
 - **The name is checked at `hkb boards set`; the file's existence is not.** The usual way to set this
   is in the pull request that *adds* the workflow, so requiring it to be merged already would refuse
   the one command anybody runs. Same call `--base` makes, for the same reason.
 - **A default workflow may not use `{{placeholders}}`.** Its body is appended to somebody else's
   brief, so there is nothing to fill them from; the alternative is the literal text `{{page}}` in a
   worker's instructions.
-- **A `--propose` Job gets none.** Its whole output is one JSON file, so a brief ending in "commit it
-  and open a pull request" is not an instruction a worker can follow — the same contradiction
-  `withWorktree` exists for (`features/proposals`), arriving from the other side.
+- **A `--propose` Job gets none, and neither does a `--no-isolate` one.** A proposer's whole output is
+  one JSON file, so a brief ending in "open a pull request" is not an instruction a worker can follow
+  — the same contradiction `withWorktree` exists for (`features/proposals`), arriving from the other
+  side. A `--no-isolate` Job has no branch for the steps to be about at all.
 
-Provenance is **derived, not stored**: the appended block names its workflow in one line, and
-`standingStepsFrom` (`src/templates.ts`) reads it back for `hkb show`, which prints
-`steps  standing steps from workflow <name>`. A column would be a second record of a fact the brief
-already carries — one that could disagree with the text the worker is actually given, which is the
-thing this whole section's "expanded at file time" rule exists to prevent.
+The record is `Board.defaultWorkflow` itself, and `hkb show` reads it there — printing
+`steps  standing steps from workflow <name>`, for the two populations above excepted. It used to be
+recovered by parsing the appended block back out of the stored brief, which made the brief the
+record; that is precisely the coupling `hkb queue` broke.
 
 ### Placeholders, and the hole that had to be closed explicitly
 

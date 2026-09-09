@@ -1654,8 +1654,9 @@ test('an isolated Job with no guide and no default workflow gets the contract an
 
   assert.match(seen, new RegExp(`already checked out on the branch\\n\`kb-${job.id}-1\``), 'where it is standing');
   assert.match(seen, /Commit it on/, 'and what the machinery reads afterwards');
-  assert.match(seen, /Never push to the default branch/, 'and the rule the gate enforces');
-  for (const gone of [/git push -u/, /pull request/i, /gh pr/i, /Co-Authored-By/i]) {
+  assert.match(seen, new RegExp(`git push -u origin kb-${job.id}-1`), 'and to push it, which the sweep and the rebase both read');
+  assert.match(seen, new RegExp(`\`kb-${job.id}-1\` is the only branch you may push`), 'and the rule the hook enforces');
+  for (const gone of [/pull request/i, /gh pr/i, /Co-Authored-By/i, /--force-with-lease/]) {
     assert.doesNotMatch(seen, gone, 'nothing refuses on this, so nothing in the core says it');
   }
   // This scratch repository has no remote, so there is no base to rebase onto and no fetch to ask
@@ -2855,4 +2856,105 @@ test('the briefing carries BOTH tails, each labelled with the stream it came fro
   }, 'npm test');
   assert.doesNotMatch(oneSided, /printed on stdout/);
   assert.match(oneSided, /printed on stderr/);
+});
+
+// ---------------------------------------------------------------- standing steps, at claim time
+
+/**
+ * The board's default workflow reaches a worker from the CONTROLLER, not from `hkb new`.
+ *
+ * `hkb new` used to expand the steps into `Job.brief`, and that placement was wrong three ways:
+ * `hkb queue <id> "…"` replaced the brief and dropped them, a `--no-isolate` Job was told to push a
+ * branch it did not have, and they landed BEFORE the sandbox contract — so a worker read "open the
+ * PR, reply with the URL" and then "1. commit, 2. rebase, 3. reply with the branch".
+ *
+ * These are the claim-time half. The refusing case is the last one, and it runs at the shipped
+ * defaults: a board pointing at a workflow that is not in the repository.
+ */
+const stepsBoard = async () => {
+  const b = await db.board.upsert({
+    where: { slug: 'steps' },
+    update: { repoPath: cwd, defaultWorkflow: null, maxConcurrent: 5, pausedAt: null },
+    create: { slug: 'steps', repoPath: cwd, maxConcurrent: 5 },
+  });
+  fs.mkdirSync(path.join(cwd, '.hkb', 'workflows'), { recursive: true });
+  fs.writeFileSync(
+    path.join(cwd, '.hkb', 'workflows', 'ends.md'),
+    '---\nname: ends\n---\n\nOpen a draft pull request against your base.\n',
+  );
+  return b;
+};
+
+const promptOf = () => {
+  let seen = '';
+  const runtime = {
+    name: 'spy',
+    async run(spec: { prompt: string }) {
+      seen = spec.prompt;
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+  return { runtime, seen: () => seen };
+};
+
+test('the board`s steps reach a worker whose brief never carried them, AFTER the contract', async () => {
+  const b = await stepsBoard();
+  await db.board.update({ where: { id: b.id }, data: { defaultWorkflow: 'ends' } });
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'briefed by hand', brief: 'Fix the parser.', maxBudgetUsd: 1, maxRetries: 0 },
+  });
+  const spy = promptOf();
+  await reconcile({ runtime: spy.runtime, cwd, only: job.id, board: 'steps', readPr: false });
+  const seen = spy.seen();
+
+  assert.match(seen, /Standing steps for work on this board, from the workflow `ends`:/);
+  assert.match(seen, /Open a draft pull request against your base\./);
+  // The ordering that was backwards: the core says how work is done here, the board says what doing
+  // it ends in. Two reply contracts in the wrong order is not an instruction.
+  assert.ok(seen.indexOf('Commit it on') < seen.indexOf('Standing steps'), 'the contract comes first');
+  // And the Job row is untouched — nothing was frozen onto it, which is what lets `hkb queue` work.
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: job.id } })).brief, 'Fix the parser.');
+});
+
+test('a proposing Job gets no steps: its whole output is one JSON file', async () => {
+  const b = await stepsBoard();
+  await db.board.update({ where: { id: b.id }, data: { defaultWorkflow: 'ends' } });
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'proposer', brief: 'Think it through.', proposes: 'jobs', maxBudgetUsd: 1, maxRetries: 0 },
+  });
+  const spy = promptOf();
+  await reconcile({ runtime: spy.runtime, cwd, only: job.id, board: 'steps', readPr: false });
+  assert.doesNotMatch(spy.seen(), /Standing steps/);
+});
+
+test('a --no-isolate Job gets no steps either — it has no branch for them to be about', async () => {
+  const b = await stepsBoard();
+  await db.board.update({ where: { id: b.id }, data: { defaultWorkflow: 'ends' } });
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'in place', brief: 'Look at it.', isolate: false, maxBudgetUsd: 1, maxRetries: 0 },
+  });
+  const spy = promptOf();
+  await reconcile({ runtime: spy.runtime, cwd, only: job.id, board: 'steps', readPr: false });
+  assert.doesNotMatch(spy.seen(), /Standing steps/);
+  assert.doesNotMatch(spy.seen(), /pull request/i, 'and it is not told to open one for a branch it does not have');
+});
+
+test('a board pointing at a workflow that is not there REFUSES the attempt, and names the fix', async () => {
+  // The refusing case, at the shipped defaults. Running without the steps would be every Job on the
+  // board quietly finishing half-way — which is the failure this whole placement exists because of.
+  const b = await stepsBoard();
+  await db.board.update({ where: { id: b.id }, data: { defaultWorkflow: 'gone' } });
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'orphaned steps', brief: 'Fix it.', maxBudgetUsd: 1, maxRetries: 0 },
+  });
+  let ran = false;
+  const runtime = { name: 'never', async run() { ran = true; throw new Error('the runtime must not be reached'); } } as never;
+  await reconcile({ runtime, cwd, only: job.id, board: 'steps', readPr: false });
+
+  assert.equal(ran, false, 'nothing was spent on a Job that could not be briefed');
+  const row = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+  assert.equal(row.phase, 'failed');
+  assert.match(row.lastError ?? '', /workflow `gone`/);
+  assert.match(row.lastError ?? '', /hkb boards set steps --workflow/, 'and the message names the fix');
 });

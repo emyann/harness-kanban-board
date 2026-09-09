@@ -9,11 +9,11 @@ covers:
   - path: src/rebase.ts
     sha: 5b0df395ad3a5c5a8b2bad44a782d40e92d40d28
   - path: src/worktree.ts
-    sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
+    sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
   - path: src/controller.ts
-    sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
+    sha: 3673f449a7ebf15f9b21900915183b3bec63b6e5
   - path: src/brief.ts
-    sha: 97737608be17c28aeca4bf859902c9c5b6ec4d89
+    sha: a56db1e2f49d60c695034ecd14f73c5c258cce85
   - path: prisma/schema.prisma
     sha: 4e4b7aa6863fad5e660435982912460565ebabf3
 related:
@@ -25,7 +25,7 @@ related:
     features/declared-outputs,
     decisions/adr-014-no-preset-three-rules,
   ]
-generated_at_commit: f063b7a
+generated_at_commit: f8ea774
 last_refreshed: 2026-09-09
 ---
 
@@ -92,10 +92,14 @@ after another, each able to burn the full twenty-second timeout before any worke
 
 ## Why the controller rewrites history the worker may not
 
-The worker's contract has never let it force-push a branch that is not its own, and since ADR-017
-decision 5 it may force-push its own **only with `--force-with-lease`** (`withSandbox`,
-`src/brief.ts`; enforced, not asked for, by `src/push.ts`). The blanket *never `git push --force`*
-that used to sit there was protecting this: the compare ref `--force-with-lease` reads. But a branch that has already been pushed and whose base has since
+The worker's contract says *never `git push --force`* (`withSandbox`, `src/brief.ts`) and that rule
+is unchanged. It was briefly loosened — a `--force-with-lease` licence, on the grounds that the
+worker owns its branch — and that reopened exactly what the paragraph below closes: an approved
+resume would have rewritten a branch whose pull request somebody had taken out of draft, which
+`mayRewrite` refuses to let the *controller* do. The licence is gone; the branch rule that is
+enforced is *which* branch, by a `pre-push` hook (`src/push.ts`, *concepts/admission-control*).
+
+But a branch that has already been pushed and whose base has since
 moved can only be rebased by rewriting what is on the remote. If the worker may not and a human
 should not have to, the controller is the only candidate left — and it is a defensible owner: it
 created the branch, and `kb-<id>-<k>` is hkb's namespace on that remote.

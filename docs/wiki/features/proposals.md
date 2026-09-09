@@ -9,14 +9,14 @@ covers:
   - path: src/proposals.ts
     sha: fd5e1eee8b847c9b4024d1bf5f635a85907baae4
   - path: src/controller.ts
-    sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
+    sha: 3673f449a7ebf15f9b21900915183b3bec63b6e5
   - path: src/brief.ts
-    sha: 97737608be17c28aeca4bf859902c9c5b6ec4d89
+    sha: a56db1e2f49d60c695034ecd14f73c5c258cce85
   - path: prisma/schema.prisma
     sha: 4e4b7aa6863fad5e660435982912460565ebabf3
   - path: src/hkb.ts
-    sha: 7b95039ab59dbcf5234373c716a5db86a15db8fb
-generated_at_commit: f063b7a
+    sha: 306d4fa2d8af038fbfd904dbb17161850a65e942
+generated_at_commit: 32ea87c
 last_refreshed: 2026-09-09
 related:
   [
@@ -48,7 +48,9 @@ instruction. ADR-008 decided this generally — what a Job is told to produce sh
 the spec rather than implied by having a worktree — and ADR-017 decision 5 finished it from the
 other end: the core no longer mentions a pull request to *any* Job. The same exclusion is why a
 proposing Job is not given a board's **default workflow** either — its standing steps would be the
-contradiction arriving by another route (*features/workflow-templates*).
+contradiction arriving by another route. The exclusion is made twice, at `hkb new` and again where
+the steps are actually composed at claim time, because a Job can become a proposer after it is filed
+(*features/workflow-templates*).
 
 And it does not **keep** that worktree once it suspends, where an ordinary gated Job does: a gated
 Job's approval resumes a session *in* its checkout, while a proposer's approval is applied by the

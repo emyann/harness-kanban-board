@@ -6,9 +6,7 @@ import { PROPOSAL_MAX_BYTES, PROPOSAL_MAX_JOBS } from './proposals.ts';
  * ADR-017 decision 5 drew the line this file now sits on, and the boundary inventory of 2026-09-07
  * stated it in one sentence: *the git sandbox contract is core; the pull request is one consumer's
  * opinion.* So the test for a line being here is not whether it is good advice — it is whether the
- * machinery **refuses** on it afterwards. Every line below is backed by a refusal, and everything
- * that was not moved out to a workflow file (`src/templates.ts`), which is where a step's content
- * lives:
+ * machinery is what makes it true afterwards:
  *
  *   - **commit on your branch** — the branch is what the core reads. Uncommitted work is invisible
  *     to `ahead` and `onBase` (`src/rebase.ts`), so a run that leaves its changes in the tree
@@ -17,31 +15,51 @@ import { PROPOSAL_MAX_BYTES, PROPOSAL_MAX_JOBS } from './proposals.ts';
  *     was claimed and the base moves while the work runs (`docs/rebuild-plan.md` item 10). After the
  *     run the controller compares the branch against the base as it is *then* and fails the attempt
  *     when it cannot be put there, so this is the prompt half of a pairing whose other half refuses.
- *   - **never push to the default branch, never merge, never force any branch but your own** — the
- *     escape rule of the sandbox, and the one line here that is not only prose: `src/push.ts` parses
- *     the `git push` and `src/admission.ts` denies it at layer 2 (`docs/workflow-study.md` §4).
- *   - **if you cannot finish, still commit** — the worktree is kept, and a commit is the only form
- *     in which unfinished work survives the sweep.
+ *   - **push your branch** — and this is the line ADR-017 nearly moved out one card too early. It
+ *     reads like a step's content, and it is not yet: the core *reads pushed state*. `pushedRef`
+ *     decides whether a rebase is legal at all, `sweepWorktrees` keeps a checkout for ever when its
+ *     work "has never been pushed anywhere", and `src/rebase.ts` lease-pushes on the controller's
+ *     own authority. Taken out of here with `Board.defaultWorkflow` unset — which is every board on
+ *     its first day — every `--from` Job, every proposal-created child and every hand-filed Job
+ *     commits, replies, and is recorded `succeeded — produced nothing`. The line leaves when #49
+ *     retires the reads, and not before.
+ *   - **push only your own branch, and never delete one** — the escape rule of the sandbox, and the
+ *     one line here that is not prose at all: a `pre-push` hook installed on this worktree refuses
+ *     everything else, after git has resolved the aliases, config and shells that a parser of the
+ *     command line could not (`src/push.ts`).
+ *   - **if you cannot finish, still commit and push** — the worktree is kept, and a commit is the
+ *     only form in which unfinished work survives the sweep.
  *
- * *Before you finish*, deliberately, and not *before you push*: whether this Job pushes at all is a
- * workflow's business. What was moved out with it — `git push -u`, the draft pull request, the reply
- * with its URL, and the attribution rule, which is a fact about one repository and lives in that
- * repository's own guide — has no refusal behind it and never did.
+ * **`never merge` is the exception, and it is written as one.** A merge on the forge is an API call
+ * no git hook is on the path of, so that line is asking rather than refusing — and the header of a
+ * file whose whole claim is "every line here is enforced" may not quietly carry one that is not.
+ * It is grouped under a sentence that says so.
  *
- * Two things about the base are the caller's to get right, and both were wrong first:
+ * What DID move out to a workflow file (`src/templates.ts`) is the pull request: `gh pr create`,
+ * which base it opens against, the reply carrying its URL, and the attribution rule, which is a fact
+ * about one repository. The attribution rule left as prose in both directions — the runtime sets the
+ * SDK's own `attribution` option instead (`src/runtime/claude.ts`), which is mechanism where a
+ * sentence was.
+ *
+ * Three things about the base are the caller's to get right, and all three were wrong first:
  *
  *   - **`rebaseOnto` is passed only when a rebase is legal here.** A resumed attempt lands in a
- *     checkout whose branch is already on the remote; rebasing there makes a later push
- *     non-fast-forward. While the controller is the thing that force-pushes (`src/rebase.ts`), the
- *     step has no legal ending, so the caller omits it and the controller rebases after the run.
+ *     checkout whose branch is already on the remote; rebasing there makes the next push
+ *     non-fast-forward, and the rule below forbids the force that would fix it. The step has no
+ *     legal ending, so the caller omits it and the controller rebases after the run.
+ *   - **`base` is passed always, including then.** It is what a workflow's own step means by "your
+ *     base", and a resumed chain step used to be told nothing about it at all — so its pull request
+ *     opened against the default branch carrying its parent's commits, the exact failure the base
+ *     was named to prevent.
  *   - **the fetch is refused outright for an attempt branch.** `git fetch origin kb-33-1` inside a
  *     worktree updates `refs/remotes/origin/kb-33-1` in the *shared* ref store — the exact ref
  *     `--force-with-lease` compares against for Job 33's own push. `fetchBase` refuses it for that
  *     reason, and a prompt that asks the worker to make the fetch hands the protection straight
- *     back. Both of these outlive only as long as the controller rewrites branches at all; the
- *     narrowing of an ordinary fetch to one branch does not, and it is gone.
+ *     back.
  */
 export type BaseAdvice = {
+  /** The ref the worktree was cut from, whatever may be done about it. `origin/main`, or an attempt branch. */
+  base?: string;
   /** The ref to rebase onto before finishing, or absent when a rebase here has no legal ending. */
   rebaseOnto?: string;
   /** May that ref be fetched first? False when its remote-tracking copy is somebody's lease. */
@@ -59,12 +77,21 @@ export function withSandbox(brief: string, branch: string, base: BaseAdvice = {}
         // Deliberate, and said out loud so it does not read as an omission somebody should fix.
         ? `     \`git rebase ${onto}\` — do NOT fetch it first; hkb tracks that branch itself.`
         : `     \`git fetch origin ${onto.slice('origin/'.length)} && git rebase ${onto}\``,
+      ...(base.fetch === false
+        ? []
+        : ['     Fetch that ONE branch, not everything — hkb compares the rest against what it last saw.']),
       '     Then re-run the checks: a branch that was green against a stale base is not evidence',
       '     about the merge.',
     ]
     : [];
   /** Steps after the rebase shift by one when there is one. */
   const n = (i: number) => i + (rebasing.length ? 1 : 0);
+  // Named whether or not it can be rebased onto, because a step somebody else wrote says "your
+  // base" and has to mean this. A resumed attempt is the case that proves it: nothing may be
+  // rebased there, and the pull request still opens against exactly this ref.
+  const naming = base.base
+    ? ['', `Your base — what this branch was cut from, and what it will be reviewed against — is \`${base.base}\`.`]
+    : [];
   return [
     brief.trim(),
     '',
@@ -76,13 +103,22 @@ export function withSandbox(brief: string, branch: string, base: BaseAdvice = {}
     `  1. Commit it on \`${branch}\`. Write a plain message: a short imperative subject, and a body`,
     '     explaining why if the why is not obvious. Uncommitted work is work nothing can see.',
     ...rebasing,
-    `  ${n(2)}. Reply with one line: what you did, and the branch.`,
+    `  ${n(2)}. Push it: \`git push -u origin ${branch}\``,
+    `  ${n(3)}. Reply with one line: what you did, and the branch.`,
+    ...naming,
     '',
-    'Rules:',
-    '  - Never push to the default branch, and never merge.',
-    `  - Never force-push any branch but \`${branch}\`, and use \`--force-with-lease\` when you do.`,
-    '  - If you cannot finish, still commit what you have and say plainly what is unfinished. The',
-    '    worktree is kept, and a commit is the only form uncommitted work survives in.',
+    'Rules, and hkb refuses on these rather than trusting them:',
+    `  - \`${branch}\` is the only branch you may push, and you may not delete anything on the remote.`,
+    '    A push of anything else is refused by a git hook, whatever form it is written in.',
+    '  - Never `git push --force`. A branch that has already been pushed and whose base has moved is',
+    '    the controller\'s to rewrite, not yours.',
+    '',
+    'And one rule that is asking, because nothing here can refuse it:',
+    '  - Never merge — not into the default branch, and not anywhere else. What happens to your',
+    '    work once it is pushed is decided outside this Job.',
+    '',
+    'If you cannot finish, still commit and push what you have and say plainly what is unfinished.',
+    'The worktree is kept, and a commit is the only form uncommitted work survives in.',
   ].join('\n');
 }
 

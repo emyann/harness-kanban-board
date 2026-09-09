@@ -1,9 +1,10 @@
 ## If you are an hkb worker
 
 You were launched by hkb with a brief and a git worktree of your own, and the machinery already told you the rest:
-the sandbox contract is in `src/brief.ts`, and it is exactly what the controller refuses on afterwards.
-The finishing steps — push, open a draft pull request, a human merges — came with your brief from
-`.hkb/workflows/implement.md`, this board's default workflow, because they are a step's content and not hkb's.
+the sandbox contract is in `src/brief.ts` — commit on your branch, rebase onto your base, push that branch and
+nothing else — and it is exactly what the controller and a `pre-push` hook refuse on afterwards. The step after
+it, the draft pull request a human reviews and merges, came with your brief from
+`.hkb/workflows/implement.md`, this board's default workflow, because that part is a step's content and not hkb's.
 
 ## Project wiki (LLM-maintained)
 

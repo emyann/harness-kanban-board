@@ -1,6 +1,6 @@
 import type { HookCallbackMatcher, HookInput, HookJSONOutput } from '@anthropic-ai/claude-agent-sdk';
 
-import { checkPush, type PushPolicy } from './push.ts';
+import { checkHookEscape } from './push.ts';
 
 /**
  * Admission control.
@@ -55,19 +55,23 @@ export type AdmissionPolicy = {
   /** Tools nothing may ever call, whatever the prompt says. */
   deny?: string[];
   /**
-   * Which branch this worker may push, when it has one at all.
+   * Is this worker inside the git sandbox — and therefore under its `pre-push` hook?
    *
-   * The sandbox contract's escape rule, at the layer that can refuse it. `src/brief.ts` asks a
-   * worker not to push the default branch and asking is layer 6 — *"guarantees nothing"*
-   * (`docs/workflow-study.md` §4) — while this hook already reads every `Bash` call the worker
-   * makes. `src/push.ts` is the decision; this is where it lands.
+   * The branch rule itself is NOT here any more, and that is the correction ADR-017's review
+   * forced. Reading a `Bash` command as text to decide what a `git push` would push was measured
+   * bypassable ten ways (`src/push.ts` lists them, each against a real remote) and over-refusing on
+   * the commit form Claude Code teaches. git's own `pre-push` hook is handed the resolved refs and
+   * has none of those problems.
    *
-   * Absent for a workload with no branch of its own: a `--no-isolate` Job runs in the operator's
-   * checkout, where "its own branch" names nothing, and a rule whose subject does not exist is not
-   * a rule. Such a Job is not given the sandbox contract either, so prose and guard cover exactly
-   * the same population.
+   * What is left for this layer is the two moves that would take the hook off the path: pushing
+   * with `--no-verify`, and moving `core.hooksPath`. Both are short literal strings with no
+   * legitimate use inside a sandbox, which is exactly what the branch rule was not.
+   *
+   * False for a workload with no branch of its own: a `--no-isolate` Job runs in the operator's
+   * checkout, where there is no hook, no sandbox and nothing for these refusals to protect. Such a
+   * Job is not given the sandbox contract either, so prose and guard cover the same population.
    */
-  push?: PushPolicy;
+  sandboxed?: boolean;
   /**
    * The whole tool surface. A tool not on this list is denied *by the hook*, not by the permission
    * mode — because the mode is not always in our hands. Measured: in a session nested inside another
@@ -112,12 +116,13 @@ export function admissionCallback(policy: AdmissionPolicy = {}) {
       return deny(`${tool} is not part of this workload's tool surface. Available: ${policy.allow.join(', ')}.`);
     }
 
-    // The push rule, before the Agent branch because it is about a different tool entirely. Read off
-    // the same `Bash` input the SDK is about to run, so what is judged is what runs.
-    if (tool === 'Bash' && policy.push) {
+    // The two refusals that keep the `pre-push` hook on the path, before the Agent branch because
+    // they are about a different tool entirely. Read off the same `Bash` input the SDK is about to
+    // run, so what is judged is what runs.
+    if (tool === 'Bash' && policy.sandboxed) {
       const command = toolInput.command;
       if (typeof command === 'string') {
-        const why = checkPush(command, policy.push);
+        const why = checkHookEscape(command);
         if (why) {
           policy.onDecision?.(`deny Bash — ${why.split('.')[0]}`);
           return deny(why);

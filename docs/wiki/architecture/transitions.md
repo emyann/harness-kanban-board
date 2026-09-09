@@ -11,7 +11,7 @@ covers:
   - path: src/job-spec.ts
     sha: a35febf6244b043095f44e72bcc86affa7713930
   - path: src/hkb.ts
-    sha: 7b95039ab59dbcf5234373c716a5db86a15db8fb
+    sha: 306d4fa2d8af038fbfd904dbb17161850a65e942
   - path: prisma/schema.prisma
     sha: 4e4b7aa6863fad5e660435982912460565ebabf3
 related:
@@ -21,7 +21,7 @@ related:
     decisions/adr-010-the-human-gate,
     architecture/the-board,
   ]
-generated_at_commit: f063b7a
+generated_at_commit: 32ea87c
 last_refreshed: 2026-09-09
 ---
 

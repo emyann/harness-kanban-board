@@ -1884,26 +1884,32 @@ test('a workflow`s placeholders interpolate from `value:` inputs, and are refuse
  * What is asserted is the composition, which is deliberately NOT `--from`'s: the frontmatter fills
  * spec nulls the same way, and the body is APPENDED rather than replacing the brief.
  */
-test('a board`s default workflow fills the spec nulls and appends its body as standing steps', async () => {
+test('a board`s default workflow fills the spec nulls, and does NOT touch the brief', async () => {
   workflow('finishing', [
     '---', 'name: finishing', 'description: how work here ends', 'guide: README.md',
     'label: [workflow=finishing]', 'max-budget: 3', '---', '',
-    'Push your branch and open a draft pull request.', '',
+    'Open a draft pull request.', '',
   ].join('\n'));
   await hkb('boards', 'set', 'suite-repo', '--workflow', 'finishing');
 
   const j = json((await hkb(
     'new', 'a hand-filed Job', '--brief', 'Fix the parser.', '--board', 'suite-repo', '--json',
   )).out) as { id: number; standingSteps: string };
-  assert.equal(j.standingSteps, 'finishing', 'and it is echoed: a worker is told something nobody typed');
+  assert.equal(j.standingSteps, 'finishing', 'and it is echoed: a worker will be told something nobody typed');
   const row = await db.job.findUniqueOrThrow({ where: { id: j.id } });
 
-  assert.match(row.brief, /^Fix the parser\./, 'the brief still says WHAT to do, first');
-  assert.match(row.brief, /Standing steps for work on this board, from the workflow `finishing`:/);
-  assert.match(row.brief, /Push your branch and open a draft pull request\./, 'and the file says how it ends');
+  // The frontmatter fills the spec at FILE time, exactly as `--from` does — those are columns, and
+  // a column filled later would be a column `hkb show` could not print.
   assert.equal(row.guide, 'README.md', 'the frontmatter fills a null exactly as `--from` would');
   assert.equal(row.maxBudgetUsd, 3);
   assert.deepEqual(row.labels, { workflow: 'finishing' });
+
+  // The BODY does not. It reaches the worker at claim time (`src/controller.ts`), because a brief
+  // that carried it would lose it to the next `hkb queue <id> "…"` — which is how the board's own
+  // triage inbox works, and which replaces a brief wholesale.
+  assert.equal(row.brief, 'Fix the parser.', 'the stored brief is what was typed, and only that');
+  assert.doesNotMatch(row.brief, /Standing steps/);
+  assert.doesNotMatch(row.brief, /draft pull request/);
 
   // The line still wins over the file, which is the precedence everywhere else here.
   const typed = json((await hkb(
@@ -1912,12 +1918,37 @@ test('a board`s default workflow fills the spec nulls and appends its body as st
   assert.equal((await db.job.findUniqueOrThrow({ where: { id: typed.id } })).maxBudgetUsd, 0.5);
 });
 
-test('hkb show names where the standing steps came from', async () => {
+test('standing steps survive a re-brief, because they were never in the brief', async () => {
+  // The bug this placement fixes, in one test. `hkb queue <id> "…"` is the board's inbox — the way
+  // a triage note becomes work — and it replaces the brief wholesale. With the steps baked in at
+  // file time they were dropped every single time, silently.
+  const j = json((await hkb('new', 'a note', '--triage', '--board', 'suite-repo', '--json')).out) as { id: number };
+  await hkb('queue', String(j.id), 'Actually, fix the other parser.', '--board', 'suite-repo');
+  const row = await db.job.findUniqueOrThrow({ where: { id: j.id } });
+  assert.equal(row.brief, 'Actually, fix the other parser.');
+  assert.equal(
+    json((await hkb('show', String(j.id), '--board', 'suite-repo', '--json')).out).standingSteps,
+    'finishing',
+    'the board still finishes this Job the way it finishes every other one',
+  );
+});
+
+test('hkb show names where the standing steps will come from', async () => {
   const j = json((await hkb('new', 'shown', '--brief', 'Fix it.', '--board', 'suite-repo', '--json')).out) as { id: number };
   const out = (await hkb('show', String(j.id), '--board', 'suite-repo')).out;
   assert.match(out, /steps\s+standing steps from workflow finishing/,
     'the part of the brief nobody typed is named, like every other resolved field`s source');
   assert.equal(json((await hkb('show', String(j.id), '--board', 'suite-repo', '--json')).out).standingSteps, 'finishing');
+});
+
+test('a Job the controller will not compose steps for is not told it has them', async () => {
+  // The two populations `src/controller.ts` skips: a proposing Job, whose whole output is one JSON
+  // file, and a `--no-isolate` one, which has no branch for the steps to be about. Printing a
+  // workflow name beside either would be a screen disagreeing with the prompt.
+  const prop = json((await hkb('new', 'proposer', '--brief', 'Think.', '--propose', '--board', 'suite-repo', '--json')).out) as { id: number };
+  assert.equal(json((await hkb('show', String(prop.id), '--board', 'suite-repo', '--json')).out).standingSteps, null);
+  const here = json((await hkb('new', 'in place', '--brief', 'Look.', '--no-isolate', '--board', 'suite-repo', '--json')).out) as { id: number };
+  assert.equal(json((await hkb('show', String(here.id), '--board', 'suite-repo', '--json')).out).standingSteps, null);
 });
 
 test('--from governs entirely: a Job filed from a workflow gets no standing steps', async () => {

@@ -7,14 +7,14 @@ audience: [dev]
 read_when: "changing how a worker is launched, deciding what to persist about a run, or adding a second runtime"
 covers:
   - path: src/runtime/index.ts
-    sha: cbfa18bd1871a66bdb1fcd59e77a0f6b7ac5bbb1
+    sha: 99ec06b9d41099f47b52a74873edc14b0a7d6567
   - path: src/plugins.ts
     sha: 8057664cf308d860315bd9abe7b941a00fcf4519
   - path: src/runtime/claude.ts
-    sha: 5ae775633cae411b71443add232b79f1325c4075
+    sha: 479b992254c82445bc839ebb302d748c712eec38
   - path: src/runtime/fake.ts
     sha: 94f9f21ab7c9702506ae625dff37ac15ecfdbcce
-generated_at_commit: 8aa5ade
+generated_at_commit: f8ea774
 last_refreshed: 2026-09-09
 related: [decisions/adr-007-workload-scheduler, architecture/job-kind, concepts/admission-control, concepts/worker-identity]
 ---
@@ -117,12 +117,25 @@ excludes them and `mcpServers: {}` does not either. The allowlist and the
 admission gate would have refused the calls, so this was never an open door; it
 was a set of tool definitions in every worker's context that nobody chose.
 
+**`settings: { attribution: … }`, which is a rule that used to be a sentence.**
+Every worker was asked in prose not to add a `Co-Authored-By` trailer, a
+`Claude-Session:` URL or a "Generated with" line — layer 6 of
+`docs/workflow-study.md` §4, the one that guarantees nothing. It matters more than
+most prose does: these are public repositories, and a session URL published in a
+commit leaks a private transcript link that amending the commit does not
+unpublish. The SDK owns the behaviour, so the SDK is where it is turned off —
+empty strings for `commit` and `pr`, and `sessionUrl: false`. A worker that writes
+one by hand still can; what is gone is the default that wrote it unasked.
+
 `maxBudgetUsd` is the runaway-cost stop and it covers subagent spend.
 
-One thing in that hook *is* per-run: the subagent isolation policy, which reads
-`WorkerSpec.isolated` — did this attempt get a worktree, or is it running in the
-operator's checkout? A parent with no worktree has nowhere to bring a subagent's
-work back to, so spawns are not forced into one there (`concepts/admission-control`).
+Two things in that hook *are* per-run, and both answer the same question — did
+this attempt get a worktree? The subagent isolation policy reads
+`WorkerSpec.isolated`: a parent with no worktree has nowhere to bring a subagent's
+work back to, so spawns are not forced into one there. And
+`admission.sandboxed` turns on the two refusals that keep the worktree's
+`pre-push` hook on the path, `--no-verify` and `core.hooksPath`; the branch rule
+itself is git's rather than the gate's (`concepts/admission-control`).
 
 ## Why there is a fake
 

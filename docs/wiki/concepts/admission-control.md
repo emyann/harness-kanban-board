@@ -1,18 +1,20 @@
 ---
 title: Admission control — an instruction is not an invariant
-summary: Why hkb enforces its tool surface, worktree isolation, which branch a worker may push, and (later) dependency ordering in a PreToolUse hook rather than in a prompt, a permission mode, or canUseTool — with the three measurements that ruled the other three out.
+summary: Why hkb enforces its tool surface, worktree isolation and (later) dependency ordering in a PreToolUse hook rather than in a prompt, a permission mode, or canUseTool — with the three measurements that ruled the other three out, and the fourth that moved the push rule out of the hook and into git.
 category: concepts
 kind: explanation
 audience: [dev]
 read_when: "adding a rule an agent must obey, reviewing anything that says 'the prompt tells it to', or wiring a new workload kind's constraints"
 covers:
   - path: src/admission.ts
-    sha: ce4e291113aa9868314ce771f7fd1deb97b67ba8
+    sha: 3da82a22f3e857c3142359fce3cfefda0be59da8
   - path: src/runtime/claude.ts
-    sha: 5ae775633cae411b71443add232b79f1325c4075
+    sha: 479b992254c82445bc839ebb302d748c712eec38
   - path: src/push.ts
-    sha: 100b9b32da8da3d35f8ded2f7a46feef116e1fdd
-generated_at_commit: 8aa5ade
+    sha: 79181173571e3f6359402de26638e1e5fef904ac
+  - path: src/pre-push.ts
+    sha: 589393dab0dfb3bff5d7b4edf16c7b808b85e1c7
+generated_at_commit: f8ea774
 last_refreshed: 2026-09-09
 related: [architecture/runtime-layer, architecture/job-kind, decisions/adr-007-workload-scheduler, decisions/adr-017-the-workflow-is-content, gotchas/prompt-is-not-a-guarantee]
 ---
@@ -86,40 +88,88 @@ be decoration.
   A parent that omits it cannot skip it. Verified against the real SDK: a spawn
   with no isolation parameter came back `mutate Agent — isolation injected`.
 
-## The push rule — the sandbox's escape hatch, closed
+## The push rule — and the layer it had to move to
 
-`policy.push` is the third power's newest user, and the clearest example of the
-distinction this page opens with. *"Never push to the default branch, and never
-merge"* was a sentence in the worker's prompt: layer 6 of
-`docs/workflow-study.md` §4, *"guarantees nothing; measured guaranteeing nothing
-twice"*. The hook already reads every `Bash` call, so the same rule now sits at
-layer 2, where it can refuse.
+This is the clearest example of the distinction this page opens with, and also
+the clearest example of getting that distinction right and the *layer* wrong.
 
-The decision itself is a pure module — `checkPush` (`src/push.ts`) — for the
-reason `src/limits.ts` and `src/liveness.ts` are: the case that matters is the
-refusing one, and it is testable without a shell. It reads the argv the way
-`git push` documents it (options, a remote, then refspecs) and admits a push only
-when **every refspec targets the attempt's own branch**. Refused: the default
-branch by name or by `HEAD:main`, another Job's branch, `--all`/`--mirror`, a
-glob, a delete, and a plain `--force` *even to its own branch* —
-`--force-with-lease` is the same operation with the guarantee that nothing arrived
-since you last looked, and nothing wants the version without it.
+*"Never push to the default branch"* was a sentence in the worker's prompt: layer
+6 of `docs/workflow-study.md` §4, *"guarantees nothing; measured guaranteeing
+nothing twice"*. The first fix moved it here — a pure `checkPush` module reading
+the `Bash` command as argv, refusing anything it could not place. It had a full
+test suite and it passed.
 
-It is **conservative by construction**: a push behind `$(…)`, a variable or a
-nested `sh -c` cannot be understood from a string, so it is refused with the form
-that works rather than guessed at. A false refusal costs one plainer command; a
-false admission costs somebody's trunk.
+Then the same forms were run against a real remote, and ten got through:
 
-The policy is passed only for a Job that *has* a branch (`src/controller.ts`,
-where `wt` decides it), and the default branch in it comes from `baseRef` — the
-same place every other answer to "what is the trunk here" comes from. A
-`--no-isolate` Job runs in the operator's own checkout, where "your own branch"
-names nothing; it is not given the sandbox contract either, so the prose and the
-guard cover exactly the same population.
+| what was typed | why the parser missed it |
+| --- | --- |
+| `git push -f --force-with-lease origin HEAD:main` | git's `--force` disables the lease; the parser saw a lease |
+| `git push -fu origin HEAD:main` | bundled short options |
+| `git push origin kb-7-1 >/dev/null main` | the redirect ended the segment the parser was reading |
+| `git push origin :kb-7-1` | git's delete spelling, parsed as the worker's own branch |
+| `git -c remote.origin.push=refs/heads/kb-7-1:refs/heads/main push origin` | config, not argv — and it **persists in the shared `.git/config`**, so the controller's own later `--force-with-lease` rewrote `main` |
+| `git -c alias.p=push p origin main` | an alias is resolved after the parser has finished |
+| `/usr/bin/git`, `"gi"t`, `sh -c '…'`, `python -c 'os.system(…)'` | the command's own name, and other shells |
 
-This is the pairing ADR-017 decision 5 leaves behind: `src/brief.ts` says only
-what the machinery will refuse on afterwards, and this is one of the two things it
-refuses on.
+And it over-refused in the other direction: `git commit -m "$(cat <<'EOF' … push
+… EOF)"` — the commit form Claude Code teaches — was refused for containing the
+word, along with `git stash push`, `git grep push` and a backslash-newline
+continuation.
+
+The fault is not the parser; a better parser fails the same way. **What a worker
+typed and what git does are different strings**, separated by aliases, config,
+expansion and nested shells. So the decision moved to the one place where they
+have stopped being different: git's own `pre-push` hook.
+
+### What the hook is
+
+`installPushHook` (`src/push.ts`) runs at claim time, on the attempt's worktree:
+
+- it writes `pre-push` and a policy file under `~/.hkb/hooks` — outside every
+  checkout a worker can write, because a hook under `.git/hooks` or a repository's
+  own `.githooks` is a file the worker edits with the tool it edits everything
+  else with;
+- it points that worktree at it with `git config --worktree core.hooksPath`
+  (`extensions.worktreeConfig`), so the **operator's own checkout is completely
+  unaffected** — their hooks, their pushes, no hkb in the middle;
+- the policy is **pinned at claim time** to the branch the controller created the
+  worktree on. Reading it back out of the checkout is what let attempt 1's
+  `git switch develop` license attempt 2 to push `develop`.
+
+The decision is still a pure module — `refusePush`, for the reason `src/limits.ts`
+and `src/liveness.ts` are — but what it reads is git's resolved ref list rather
+than a command line: `<local ref> <local sha> <remote ref> <remote sha>`, one line
+per ref, after everything above has already happened. The rule is one sentence:
+every ref this push updates is `refs/heads/<the attempt's branch>`, and none of
+them is a deletion. `--all`, `--mirror`, a glob refspec and every spelling of a
+delete are covered because git has already expanded them.
+
+It judges **effects, not spellings**. A `git push --all` that would move nothing
+is admitted, because it moves nothing.
+
+### What the gate still refuses
+
+Two things, and both are about the hook rather than about the push:
+`--no-verify`, which skips it, and moving `core.hooksPath` out from under it.
+Those are short literal strings with no legitimate use inside a sandbox — which is
+exactly what the branch rule was not.
+
+`policy.sandboxed` is set only for a Job that has a worktree (`src/controller.ts`,
+where `wt` decides it). A `--no-isolate` Job runs in the operator's own checkout,
+where there is no hook and nothing for these refusals to protect; it is not given
+the sandbox contract either, so the prose and the guard cover exactly the same
+population.
+
+### What it is not
+
+It is not a jail. A worker runs as the operator's user: it could chmod the policy
+back, edit `.git/config` directly, or clone the repository somewhere else and push
+from there. The bar is the honest one — a plausible mistake and a casual escape
+are refused deterministically, by the same mechanism whatever the prompt says.
+
+`never merge` is not covered at all, and `src/brief.ts` says so out loud rather
+than listing it beside the rules that are: a merge on the forge is an API call no
+git hook is ever on the path of.
 
 ## The isolation rule follows the parent
 
@@ -152,9 +202,9 @@ harness where it belongs.
 
 - The gate only sees tool calls made through the session it was passed to. It
   cannot police anything a worker does with a shell it was already granted — a
-  `Bash` grant is a grant to the whole machine. The push rule narrows one shape of
-  that (a `git push` it can read) and does not close it: a script in the checkout
-  that pushes, or a `git` alias, is a shell doing what shells do.
+  `Bash` grant is a grant to the whole machine. This is exactly why the branch rule
+  left the gate: git's hook is on the path of a script in the checkout, an alias
+  and a nested shell alike, and the gate never was.
 - A hook `allow` does not override a deny rule or a critical-path `rm`; those are
   evaluated after it and still apply. The gate can refuse more than the mode, never
   less.

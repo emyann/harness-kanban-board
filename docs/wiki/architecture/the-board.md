@@ -16,7 +16,7 @@ covers:
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/spec.ts
     sha: 8792a804835fd0602a992aeccf978e110fe2a98f
-generated_at_commit: 8aa5ade
+generated_at_commit: f8ea774
 last_refreshed: 2026-09-09
 related:
   [
@@ -71,10 +71,11 @@ claim time in `src/limits.ts`. `Board.defaultMaxBudgetUsd` is the first; `Board.
 `maxConcurrent` are the second, and no Job column overrides them.
 
 `Board.defaultWorkflow` is a third thing again, and the only board column with no Job twin: it names
-a workflow file, and `hkb new` expands it into the columns above and into the brief at file time, so
-nothing downstream resolves it (*features/workflow-templates*). A board default that fills a null is
-a *value*; this one is a *source* for values, plus the standing steps that say how work on this
-board finishes.
+a workflow file whose frontmatter `hkb new` expands into the columns above at file time, and whose
+body the controller appends to the prompt at claim time (*features/workflow-templates*). A board
+default that fills a null is a *value*; this one is a *source* for values, plus the standing steps
+that say how work on this board finishes — and those stay on the board rather than being copied onto
+the Job, so editing the file changes the next attempt of every Job here.
 
 A Job that recorded `maxTurns: 20` because nobody said otherwise would outrank its board's default
 for ever — so the columns stay null, and `hkb show` prints where each resolved value came from,

@@ -21,7 +21,7 @@ import { checkPluginPath, pluginList } from './plugins.ts';
 import { CHECK_COMMAND_MAX_BYTES, describeCheck, storedCheck } from './check.ts';
 import { checkInputSpec, declaredInputs, renderBrief, describeSource } from './inputs.ts';
 import {
-  readTemplate, placeholders, standingStepsFrom, withStandingSteps, workflowPath, WORKFLOW_DIR,
+  readTemplate, placeholders, workflowPath, WORKFLOW_DIR,
   type Template,
 } from './templates.ts';
 import { fakeRuntime } from './runtime/fake.ts';
@@ -312,12 +312,16 @@ const HELP = `hkb — run one agent against one brief
                         own --check wins, and \`hkb job set <id> --check ""\` opts one Job out of
                         this entirely; with neither set, nothing runs.
        --workflow <name>|none  how work on this board FINISHES: the workflow in
-                        \`${WORKFLOW_DIR}/\` whose frontmatter fills what a Job did not say and
-                        whose BODY is appended to its brief as standing steps — "push your branch,
-                        open a pull request against your base". hkb itself tells a worker only what
-                        it will refuse on afterwards (its own branch, the rebase, never the trunk),
-                        so anything past that is a step's content and lives here. A Job filed with
-                        \`--from\` ignores it: that workflow governs. Null appends nothing.
+                        \`${WORKFLOW_DIR}/\` whose frontmatter fills what a Job did not say when it
+                        is filed, and whose BODY is appended as standing steps when it RUNS —
+                        "open a draft pull request against your base". hkb itself tells a worker
+                        only what the machinery makes true afterwards (commit on your branch,
+                        rebase onto your base, push that branch and nothing else), so anything past
+                        that is a step's content and lives here. Composed at claim time rather than
+                        stored, so \`hkb queue <id> "…"\` cannot drop it and editing the file
+                        changes the next attempt. A Job filed with \`--from\` ignores it — that
+                        workflow governs — and so do \`--propose\` and \`--no-isolate\`, which
+                        have no branch for the steps to be about. Null appends nothing.
 
   hkb migrate               apply this build's pending migrations to the board, deliberately
   hkb version               what this build is
@@ -905,7 +909,7 @@ export async function main(argv: string[]): Promise<number> {
       // and the board may not exist yet — filing the first Job in a repository creates it, and a
       // board that does not exist has no default to apply.
       let dflt: Template | null = null;
-      if (!tpl && !values.propose) {
+      if (!tpl && !values.propose && !values['no-isolate']) {
         const known = await db.board.findUnique({ where: { slug }, select: { defaultWorkflow: true } });
         const wanted = known?.defaultWorkflow?.trim();
         if (wanted) {
@@ -1041,11 +1045,16 @@ export async function main(argv: string[]): Promise<number> {
       // rather than remembering it keeps the run path with one rule: everything in `inputs` is
       // rendered, and nothing is rendered twice.
       inputs = inputs.filter((i) => !rendered.used.has(i.name));
-      // The standing steps, after the brief and after the interpolation: the brief says WHAT to do
-      // and this says what doing it ends in, so it reads last and it is not a template for anything.
-      // Composed into the stored brief rather than remembered as a reference, on this file's own
-      // rule — what the board stores is what the run is given (`src/templates.ts`).
-      const briefText = dflt ? withStandingSteps(rendered.text, dflt.name, dflt.brief) : rendered.text;
+      // The standing steps are NOT composed here, and that is the correction ADR-017's review forced.
+      // What the board's default workflow contributes at file time is its FRONTMATTER — the spec
+      // fields filled above — and nothing else. Its body reaches the worker at claim time, from the
+      // board as it is then (`src/controller.ts`), for three reasons this verb cannot fix on its
+      // own: `hkb queue <id> "…"` replaces a brief wholesale and would drop steps baked into it,
+      // a `--no-isolate` Job has no branch for them to talk about, and they belong AFTER the sandbox
+      // contract rather than before it. The refusals above still run here, where the operator is
+      // standing: a board pointing at a workflow that is not in the repository is worth catching
+      // before the Job exists, not on the pass that would have run it.
+      const briefText = rendered.text;
       // A repo-relative path, checked at file time like every other declaration and for the same
       // reason as an input's: it names a file the BOARD will read with the operator's authority and
       // put in front of a model, so a path that was never legal must not become state. Undefined
@@ -1283,10 +1292,16 @@ export async function main(argv: string[]): Promise<number> {
       // object `hkb new --json` prints, so the two verbs cannot disagree about the command that
       // will judge this Job. See `jsonCheck`. Every other raw column is left as it is: they are
       // traced under `spec` alongside, and this is the one that was answering two ways.
-      // Where the standing steps came from, if this Job has any — read back out of the brief that
-      // carries them (`standingStepsFrom`), which is the only record there is: a workflow is
-      // expanded at file time and a column would be a second, staler copy of the same fact.
-      const steps = standingStepsFrom(job.brief);
+      // Where this Job's standing steps will come from — the BOARD's default workflow, read now,
+      // because that is when the controller reads it too. It used to be recovered from the stored
+      // brief, which was a record of what the board's default was on the day the Job was filed; the
+      // steps are composed at claim time now (`src/controller.ts`), so the honest answer to "what
+      // will this Job be told" is the board's answer today.
+      //
+      // Null for a proposing Job and for a `--no-isolate` one, which are the two populations the
+      // controller does not compose them for: printing a workflow name beside a Job that will never
+      // see it is the kind of quiet disagreement this line exists to prevent.
+      const steps = job.proposes || job.isolate === false ? null : (job.board?.defaultWorkflow?.trim() || null);
       emit(out, { ...job, check: jsonCheck(spec.check, job.proposes), spec, standingSteps: steps }, () => {
         console.log(`#${job.id} ${job.name}`);
         // One board per machine, one Board per repository: a Job you did not expect is usually a
@@ -1387,7 +1402,7 @@ export async function main(argv: string[]): Promise<number> {
         // The part of the brief nobody typed. Named like every other resolved field's source, and
         // for the same reason: a worker is told these steps, and an operator reading this screen to
         // find out why it opened a pull request should not have to read the whole brief to see it.
-        if (steps) console.log(`  steps    standing steps from workflow ${steps}, appended when it was filed`);
+        if (steps) console.log(`  steps    standing steps from workflow ${steps}, appended when it runs`);
         if (!job.attempts.length) console.log('  attempts (none yet)');
         for (const a of job.attempts) {
           // Spent, against the cap this attempt was frozen at. The frozen number and not today's
@@ -1895,7 +1910,7 @@ export async function main(argv: string[]): Promise<number> {
           else {
             // Refuses a name that could never be a workflow, and normalises the `.md` an operator
             // who tab-completed the file will have typed.
-            workflowPath(raw);
+            workflowPath(raw, '--workflow');
             data.defaultWorkflow = raw.trim().replace(/\.md$/, '');
           }
         }

@@ -1,151 +1,139 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync, spawnSync } from 'node:child_process';
 
-import { checkPush, scan } from '../src/push.ts';
+import { checkHookEscape, installPushHook, parsePrePush, policyFile, refusePush } from '../src/push.ts';
 import { admissionCallback } from '../src/admission.ts';
 
 /**
- * The push refusal, from the refusing side.
+ * The push refusal, from the refusing side — and at the layer that can actually refuse.
  *
- * `docs/workflow-study.md` §4 puts prompt text at layer 6 — *"guarantees nothing; measured
- * guaranteeing nothing twice"* — so "never push to the default branch" was a sentence and nothing
- * else until this module. CLAUDE.md's rule for a new guard is the shape of this file: **every denied
- * form gets a test that makes it refuse**, and the two allowed forms get one that makes it admit,
- * because a gate that only ever proves what it lets through is how this project shipped three checks
- * that did nothing.
+ * The first version of this file tested a parser that read the `Bash` command as text, and it
+ * passed. Then the same forms were run against a real remote and ten of them got through: `-f
+ * --force-with-lease`, `-fu`, `>/dev/null` before a trailing `main`, `:kb-7-1`, `-c
+ * remote.origin.push=…`, `git -c alias.p=push p origin main`, `/usr/bin/git`, `"gi"t`, `sh -c`. A
+ * test suite that proves a guard refuses the forms its author thought of is not evidence about the
+ * guard; it is evidence about the author.
+ *
+ * So the last test in this file is the one that matters, and it is not a unit test: it makes a real
+ * repository with a real remote, installs the hook the controller installs, and pushes. Every form
+ * above reaches `git push` differently and reaches the HOOK identically, which is the whole reason
+ * the decision moved there — and this is how that claim is checked rather than asserted.
  */
 
 const P = { branch: 'kb-7-1', defaultBranch: 'main' };
-const denies = (command: string) => {
-  const why = checkPush(command, P);
-  assert.ok(why, `\`${command}\` was ADMITTED, and it must not be`);
+const ZERO = '0000000000000000000000000000000000000000';
+const SHA = 'a'.repeat(40);
+
+const denies = (lines: string) => {
+  const why = refusePush(parsePrePush(lines), P);
+  assert.ok(why, `${JSON.stringify(lines)} was ADMITTED, and it must not be`);
   return why as string;
 };
-const admits = (command: string) =>
-  assert.equal(checkPush(command, P), null, `\`${command}\` was refused, and it is the form the gate tells a worker to use`);
+const admits = (lines: string) =>
+  assert.equal(refusePush(parsePrePush(lines), P), null, `${JSON.stringify(lines)} was refused`);
 
-// ---------------------------------------------------------------- the refusals
+// ---------------------------------------------------------------- the decision
 
-test('the default branch is refused, however it is spelled', () => {
-  for (const command of [
-    'git push origin main',
-    'git push origin HEAD:main',
-    'git push origin kb-7-1:main',
-    'git push origin main:main',
-    'git push -u origin refs/heads/main',
-    'git push --force-with-lease origin HEAD:main',
-  ]) {
-    assert.match(denies(command), /default branch/, command);
-  }
+test('the default branch is refused, and the refusal says which branch it was', () => {
+  const why = denies(`refs/heads/kb-7-1 ${SHA} refs/heads/main ${ZERO}`);
+  assert.match(why, /default branch/);
+  assert.match(why, /`main`/);
 });
 
 test('another branch is refused too — the attempt owns exactly one', () => {
-  const why = denies('git push origin kb-9-2');
-  assert.match(why, /kb-7-1/, 'and the refusal names the one it may push');
-  denies('git push origin HEAD:someone-elses-branch');
-  denies('git push origin kb-7-1:kb-7-2');
+  for (const remote of ['refs/heads/kb-9-1', 'refs/heads/develop', 'refs/heads/kb-7-2']) {
+    assert.match(denies(`refs/heads/kb-7-1 ${SHA} ${remote} ${ZERO}`), /owns/, remote);
+  }
 });
 
-test('a plain force is refused even to its own branch', () => {
-  // The rule the operator settled on 2026-09-08: the worker owns its attempt branch, so forcing it
-  // is legal work — but `--force-with-lease` is the same operation with the guarantee that nothing
-  // arrived since you last looked, and there is no case that wants the version without it.
+test('a ref that is not a branch is refused — a tag is not this worker\'s to write', () => {
+  assert.match(denies(`refs/tags/v1 ${SHA} refs/tags/v1 ${ZERO}`), /owns/);
+});
+
+test('a delete is refused, in both of git\'s spellings for it', () => {
+  assert.match(denies(`(delete) ${ZERO} refs/heads/kb-7-1 ${SHA}`), /DELETES/);
+  assert.match(denies(`refs/heads/kb-7-1 ${ZERO} refs/heads/kb-7-1 ${SHA}`), /DELETES/);
+});
+
+test('a delete of its OWN branch is still refused — the rule is about unpublishing', () => {
+  assert.match(denies(`(delete) ${ZERO} refs/heads/kb-7-1 ${SHA}`), /DELETES/);
+});
+
+test('one bad ref in a push of several refuses the whole push', () => {
+  const why = denies(
+    `refs/heads/kb-7-1 ${SHA} refs/heads/kb-7-1 ${ZERO}\n`
+    + `refs/heads/kb-7-1 ${SHA} refs/heads/main ${ZERO}`,
+  );
+  assert.match(why, /default branch/);
+});
+
+test('a line it cannot read is refused rather than skipped', () => {
+  assert.ok(refusePush(parsePrePush('garbage'), P));
+});
+
+test('every refusal names the form that works', () => {
+  for (const lines of [
+    `refs/heads/kb-7-1 ${SHA} refs/heads/main ${ZERO}`,
+    `refs/heads/kb-7-1 ${SHA} refs/heads/kb-9-1 ${ZERO}`,
+    `(delete) ${ZERO} refs/heads/kb-7-1 ${SHA}`,
+  ]) {
+    assert.match(denies(lines), /git push -u origin kb-7-1/, lines);
+  }
+});
+
+test('its own branch is admitted, new or updated', () => {
+  admits(`refs/heads/kb-7-1 ${SHA} refs/heads/kb-7-1 ${ZERO}`);
+  admits(`refs/heads/kb-7-1 ${SHA} refs/heads/kb-7-1 ${'b'.repeat(40)}`);
+  // HEAD:kb-7-1 — the local side may be anything; only where it lands is this rule's business.
+  admits(`HEAD ${SHA} refs/heads/kb-7-1 ${ZERO}`);
+});
+
+test('a push that updates nothing is admitted — git runs the hook for a no-op too', () => {
+  admits('');
+  admits('\n  \n');
+});
+
+test('a suffixed collision branch is the branch, when that is what the policy says', () => {
+  assert.equal(refusePush(parsePrePush(`refs/heads/kb-7-1-2 ${SHA} refs/heads/kb-7-1-2 ${ZERO}`),
+    { branch: 'kb-7-1-2', defaultBranch: 'main' }), null);
+});
+
+// ---------------------------------------------------------------- what the gate still reads
+
+test('the gate refuses --no-verify, which is how a push skips the hook', () => {
+  assert.match(checkHookEscape('git push --no-verify origin main') as string, /--no-verify/);
+  assert.match(checkHookEscape('git push -u --no-verify origin kb-7-1') as string, /--no-verify/);
+});
+
+test('the gate refuses moving core.hooksPath, in every form of the move', () => {
   for (const command of [
+    'git -c core.hooksPath=/tmp/x push origin main',
+    'git config core.hooksPath /tmp/x',
+    'git config --worktree --unset core.hooksPath',
+    'git config --unset core.hooksPath',
+  ]) {
+    assert.match(checkHookEscape(command) as string, /core\.hooksPath/, command);
+  }
+});
+
+test('the gate is not a push parser any more, and the commit form it used to refuse is admitted', () => {
+  // Refused by the old parser for mentioning the word `push` inside a heredoc — the commit form
+  // Claude Code itself teaches.
+  assert.equal(checkHookEscape("git commit -m \"$(cat <<'EOF'\nWork\n\npush it later\nEOF\n)\""), null);
+  for (const command of [
+    'git push origin main',
     'git push --force origin kb-7-1',
-    'git push -f origin kb-7-1',
-    'git push origin +kb-7-1',
+    'git stash push',
+    'git grep push',
+    'npm test',
   ]) {
-    assert.match(denies(command), /force-with-lease/, command);
+    assert.equal(checkHookEscape(command), null, command);
   }
 });
-
-test('a push that names no branch is refused, because it pushes whatever this checkout is on', () => {
-  assert.match(denies('git push'), /Name it/);
-  denies('git push origin');
-  denies('git push -u origin');
-});
-
-test('the broad forms are refused by name', () => {
-  for (const command of ['git push --all origin', 'git push --mirror origin', 'git push --tags origin']) {
-    assert.match(denies(command), /more than your own branch/, command);
-  }
-});
-
-test('a delete is refused — a worker does not unpublish', () => {
-  assert.match(denies('git push origin --delete kb-7-1'), /does not delete branches/);
-  denies('git push origin :main');
-});
-
-test('a push it cannot read is refused, not admitted', () => {
-  for (const command of [
-    'sh -c "git push origin main"',
-    'eval "$PUSH_CMD"; git push origin main',
-    'git push origin $BRANCH',
-    'git push origin `echo main`',
-    'gitpush() { git push origin main; }; gitpush',
-  ]) {
-    assert.ok(checkPush(command, P), `\`${command}\` must not be admitted — it cannot be read`);
-  }
-  assert.match(checkPush('git push origin $BRANCH', P) as string, /cannot tell/);
-});
-
-test('every refusal names a form that works', () => {
-  for (const command of [
-    'git push origin main', 'git push --force origin kb-7-1', 'git push', 'git push --all origin',
-    'git push origin --delete kb-7-1', 'git push origin $BRANCH', 'git push origin kb-9-2',
-  ]) {
-    assert.match(denies(command), /git push -u origin kb-7-1/, `${command} — a refusal with no next move is a dead end`);
-  }
-});
-
-// ---------------------------------------------------------------- what it must NOT break
-
-test('the two allowed forms are admitted', () => {
-  admits('git push -u origin kb-7-1');
-  admits('git push --force-with-lease origin kb-7-1');
-  admits('git push --force-with-lease=kb-7-1 origin kb-7-1');
-  admits('git push origin kb-7-1:kb-7-1');
-  admits('git push -u origin HEAD:kb-7-1');
-});
-
-test('a push that is one step of a compound command is judged on its own', () => {
-  admits('git add -A && git commit -m "work" && git push -u origin kb-7-1');
-  assert.ok(checkPush('git commit -m x && git push origin main', P), 'and so is a bad one');
-  admits('git push -u origin kb-7-1 > /dev/null 2>&1');
-});
-
-test('a command with no push in it is not this gate\'s business', () => {
-  for (const command of [
-    'npm test', 'git commit -m "fix"', 'git log --oneline -5', 'git fetch origin main && git rebase origin/main',
-    'gh pr create --draft --head kb-7-1', 'echo "$(date)"',
-  ]) {
-    admits(command);
-  }
-});
-
-test('the answer does not depend on the shape of the quoting', () => {
-  admits("git push -u 'origin' \"kb-7-1\"");
-  assert.ok(checkPush('git push "origin" \'main\'', P), 'quoting a branch does not hide it');
-});
-
-// ---------------------------------------------------------------- the scanner it rests on
-
-test('scan refuses to read what a shell would expand', () => {
-  assert.equal(scan('git push origin $B'), null);
-  assert.equal(scan('git push origin `b`'), null);
-  assert.equal(scan('git push origin "$(b)"'), null);
-  assert.equal(scan("git push origin 'unclosed"), null);
-});
-
-test('scan splits on the operators that start a new command', () => {
-  assert.deepEqual(scan('a && b; c | d'), [['a'], ['b'], ['c'], ['d']]);
-  assert.deepEqual(scan('git push -u origin kb-7-1'), [['git', 'push', '-u', 'origin', 'kb-7-1']]);
-  // A redirection is not a new command, but what follows it is a filename rather than a refspec —
-  // including the file descriptor in front of it, or a bare `2` reads as something to push.
-  assert.deepEqual(scan('git push origin kb-7-1 2>/dev/null'), [['git', 'push', 'origin', 'kb-7-1'], ['/dev/null']]);
-});
-
-// ---------------------------------------------------------------- through the gate itself
 
 /** The `PreToolUse` shape the SDK hands the hook. */
 const bash = (command: string) => ({
@@ -161,24 +149,123 @@ const bash = (command: string) => ({
 const decision = (r: Awaited<ReturnType<ReturnType<typeof admissionCallback>>>) =>
   (r as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } }).hookSpecificOutput;
 
-test('the gate denies the push, and says so on the decision log', async () => {
+test('the gate denies the escape, and says so on the decision log', async () => {
   const log: string[] = [];
-  const gate = admissionCallback({ push: P, onDecision: (d) => log.push(d) });
-  const out = decision(await gate(bash('git push origin main') as never));
+  const gate = admissionCallback({ sandboxed: true, onDecision: (d) => log.push(d) });
+  const out = decision(await gate(bash('git push --no-verify -u origin kb-7-1') as never));
   assert.equal(out?.permissionDecision, 'deny');
-  assert.match(out?.permissionDecisionReason ?? '', /default branch/);
+  assert.match(out?.permissionDecisionReason ?? '', /--no-verify/);
   assert.equal(log.length, 1, 'a refusal is news — it is counted and printed');
   assert.equal(decision(await gate(bash('git push -u origin kb-7-1') as never))?.permissionDecision, 'allow');
 });
 
-test('a workload with no branch of its own has no push rule to break', async () => {
-  // `--no-isolate` runs in the operator's checkout, where "your own branch" names nothing. It is not
-  // given the sandbox contract either, so the prose and the guard cover the same population.
-  const gate = admissionCallback({});
+test('the gate leaves the branch rule to the hook — it admits a push it cannot judge', async () => {
+  // The old gate refused this by reading the string, and was measured bypassable ten ways. The hook
+  // refuses it at git instead, which is what the last test in this file proves.
+  const gate = admissionCallback({ sandboxed: true });
   assert.equal(decision(await gate(bash('git push origin main') as never))?.permissionDecision, 'allow');
 });
 
+test('a workload with no sandbox has no hook to protect', async () => {
+  // `--no-isolate` runs in the operator's checkout: no worktree, no `core.hooksPath`, nothing for
+  // these two refusals to be about. It is not given the sandbox contract either, so the prose and
+  // the guard cover the same population.
+  const gate = admissionCallback({});
+  assert.equal(decision(await gate(bash('git push --no-verify origin main') as never))?.permissionDecision, 'allow');
+});
+
 test('the gate still refuses a tool that is off the surface, push or no push', async () => {
-  const gate = admissionCallback({ push: P, allow: ['Read'] });
+  const gate = admissionCallback({ sandboxed: true, allow: ['Read'] });
   assert.equal(decision(await gate(bash('git push -u origin kb-7-1') as never))?.permissionDecision, 'deny');
+});
+
+// ---------------------------------------------------------------- against a real git
+
+/**
+ * The test the parser could not have passed.
+ *
+ * A bare remote, a worktree with the hook installed on it, and every bypass that beat the parser —
+ * run for real. The point is not that these particular spellings are refused; it is that the hook
+ * never sees a spelling at all. `git -c alias.p=push p origin main` and `git push origin main`
+ * arrive at it as the same four fields.
+ */
+test('the hook refuses at git, whatever the command line looked like', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-push-'));
+  const was = process.env.HKB_DATABASE_URL;
+  // `hooksHome()` is `boardDir()`, so pointing the board at this directory puts the hook in it —
+  // the same isolation every other test in this repository gets for free. Restored on the way out
+  // so a failure here does not take the rest of the suite with it.
+  process.env.HKB_DATABASE_URL = `file:${path.join(home, 'board.db')}`;
+  t.after(() => {
+    if (was === undefined) delete process.env.HKB_DATABASE_URL;
+    else process.env.HKB_DATABASE_URL = was;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  const run = (cwd: string, args: string[]) =>
+    execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const root = path.join(home, 'repo');
+  const remote = path.join(home, 'remote.git');
+  fs.mkdirSync(root);
+  execFileSync('git', ['init', '--bare', '-b', 'main', remote], { stdio: 'ignore' });
+  run(root, ['init', '-b', 'main']);
+  run(root, ['config', 'user.email', 't@example.com']);
+  run(root, ['config', 'user.name', 'T']);
+  fs.writeFileSync(path.join(root, 'a.txt'), 'a\n');
+  run(root, ['add', '-A']);
+  run(root, ['commit', '-m', 'first']);
+  run(root, ['remote', 'add', 'origin', remote]);
+  run(root, ['push', '-u', 'origin', 'main']);
+  // Local `main` is left AHEAD of the remote, so every attempt below to push the trunk is a real
+  // update rather than an "Everything up-to-date" that proves nothing. The hook judges effects, not
+  // spellings: a push that would move nothing is admitted because it moves nothing.
+  fs.writeFileSync(path.join(root, 'a.txt'), 'a2\n');
+  run(root, ['commit', '-am', 'trunk moves on']);
+
+  const wt = path.join(root, '.hkb', 'worktrees', 'kb-7-1');
+  run(root, ['worktree', 'add', '-b', 'kb-7-1', wt, 'main']);
+  assert.equal(installPushHook(root, wt, P), null, 'the hook did not install');
+  assert.ok(fs.existsSync(policyFile(wt)), 'no policy was pinned to the worktree');
+
+  fs.writeFileSync(path.join(wt, 'b.txt'), 'b\n');
+  run(wt, ['add', '-A']);
+  run(wt, ['commit', '-m', 'work']);
+
+  const push = (args: string[]) => spawnSync('git', args, { cwd: wt, encoding: 'utf8' });
+  const refused = (args: string[]) => {
+    const r = push(args);
+    assert.notEqual(r.status, 0, `\`git ${args.join(' ')}\` SUCCEEDED, and it must not`);
+    assert.match(`${r.stdout}${r.stderr}`, /hkb:/, `\`git ${args.join(' ')}\` failed for some other reason`);
+  };
+
+  // Each of these beat the string parser. None of them beats git.
+  refused(['push', 'origin', 'main']);
+  refused(['push', 'origin', 'HEAD:main']);
+  refused(['push', '-f', '--force-with-lease', 'origin', 'HEAD:main']);
+  refused(['push', '-fu', 'origin', 'HEAD:main']);
+  refused(['push', '--all']);
+  refused(['push', 'origin', '--delete', 'main']);
+  refused(['-c', 'alias.p=push', 'p', 'origin', 'main']);
+  refused(['-c', 'remote.origin.push=refs/heads/kb-7-1:refs/heads/main', 'push', 'origin']);
+  refused(['push', 'origin', 'kb-7-1:kb-9-1']);
+  refused(['push', 'origin', 'HEAD:refs/heads/main']);
+
+  // The form the worker is told to use goes through, which is the half that has to keep working.
+  const ok = push(['push', '-u', 'origin', 'kb-7-1']);
+  assert.equal(ok.status, 0, `the allowed push was refused: ${ok.stdout}${ok.stderr}`);
+  assert.match(run(root, ['ls-remote', '--heads', remote]), /refs\/heads\/kb-7-1/);
+  // The trunk is where the remote had it: nothing above moved it, and local `main` is ahead.
+  assert.notEqual(run(root, ['rev-parse', 'main']).trim(), run(root, ['ls-remote', remote, 'refs/heads/main']).split(/\s+/)[0]);
+
+  // Unpublishing, in both spellings — and only reachable now that there is something to delete.
+  refused(['push', 'origin', ':kb-7-1']);
+  refused(['push', 'origin', '--delete', 'kb-7-1']);
+
+  // The controller's own rebase push is on this same path, and it must not be refused.
+  const lease = spawnSync('git', ['push', '--force-with-lease', 'origin', 'kb-7-1'], { cwd: wt, encoding: 'utf8' });
+  assert.equal(lease.status, 0, `the controller's lease push was refused: ${lease.stdout}${lease.stderr}`);
+
+  // The operator's own checkout is governed by nothing: no policy file, no refusal, their own hooks.
+  const fromRoot = spawnSync('git', ['push', 'origin', 'main'], { cwd: root, encoding: 'utf8' });
+  assert.equal(fromRoot.status, 0, `the main checkout was caught by the hook: ${fromRoot.stdout}${fromRoot.stderr}`);
 });

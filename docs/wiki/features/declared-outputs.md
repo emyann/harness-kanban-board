@@ -11,18 +11,18 @@ covers:
   - path: src/artifacts.ts
     sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
   - path: src/worktree.ts
-    sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
+    sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
   - path: src/controller.ts
-    sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
+    sha: 3673f449a7ebf15f9b21900915183b3bec63b6e5
   - path: src/brief.ts
-    sha: 97737608be17c28aeca4bf859902c9c5b6ec4d89
+    sha: a56db1e2f49d60c695034ecd14f73c5c258cce85
   - path: src/hkb.ts
-    sha: 7b95039ab59dbcf5234373c716a5db86a15db8fb
+    sha: 306d4fa2d8af038fbfd904dbb17161850a65e942
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: prisma/schema.prisma
     sha: 4e4b7aa6863fad5e660435982912460565ebabf3
-generated_at_commit: f063b7a
+generated_at_commit: 32ea87c
 last_refreshed: 2026-09-09
 related: [decisions/adr-008-declared-outputs, decisions/adr-011-proposals-not-board-access, features/proposals, features/worktree-includes, architecture/job-kind, architecture/the-board]
 ---
@@ -247,12 +247,17 @@ isolated Job whose entire deliverable was a `--result` or an `--artifact` was to
 work it did not have, on top of a contract telling it to write somewhere outside the
 checkout.
 
-ADR-017 decision 5 closed it from the other end, and by removal rather than by a switch:
-the core now appends only the **sandbox contract** (`withSandbox`, `src/brief.ts`), which
-asks for a commit and says nothing about a push, a forge or a review. Those steps come from
-a board's default workflow — content a person wrote for the Jobs it fits
-(*features/workflow-templates*). A result-only Job filed on a board with no default
-workflow now reads a prompt that describes exactly what it was declared to produce.
+ADR-017 decision 5 closed most of it from the other end, and by removal rather than by a
+switch: the core now appends only the **sandbox contract** (`withSandbox`, `src/brief.ts`),
+which asks for a commit and a push of the worker's own branch and says nothing about a
+forge, a pull request or a review. Those steps come from a board's default workflow —
+content a person wrote for the Jobs it fits (*features/workflow-templates*).
+
+The push stayed in the core deliberately, and the first attempt at this change took it out
+one card too early: the core *reads pushed state*. `pushedRef` decides whether a rebase is
+legal, and `sweepWorktrees` keeps a checkout for ever when its work "has never been pushed
+anywhere" — so a worker never told to push leaves a Job recorded `succeeded — produced
+nothing` and a worktree nothing will ever reclaim. The line leaves when those reads do.
 
 What remains is smaller and is a *content* question rather than a machinery one: a board
 whose default workflow says "open a pull request" appends that to a result-only Job filed on
