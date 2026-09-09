@@ -22,6 +22,15 @@ workflow refuses to publish when they disagree — a tag that says `v1.4.0` over
 
 If you tag by hand, the two must match: tag `v1.4.0` ⇄ `"version": "1.4.0"`.
 
+## After upgrading a machine: restart the daemon
+
+`hkb migrate` applies the new build's migrations to `~/.hkb/board.db`, and a daemon still running the
+**older** build then talks to a schema it does not know. A migration that adds an enum value is the sharp
+case: after ADR-016's `check_failed` lands, the moment the new build records that outcome the old daemon
+throws `Value 'check_failed' not found in enum 'Outcome'` on every pass — the whole reconcile aborts, not
+one Job. `hkb down && hkb up` after the migration; the board is a file and the daemon is a process, and
+only one of them is upgraded by installing a package.
+
 ## What the workflow does
 
 | step | why it is there |

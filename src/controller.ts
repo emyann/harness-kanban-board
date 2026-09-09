@@ -4,12 +4,15 @@ import {
   newestWorktree, lockWorktree, onRemote, pushedRef, removeWorktree, resolves, unlockWorktree,
   type Worktree,
 } from './worktree.ts';
-import { rebaseNote, rebaseOntoBase, rebaseShortfall } from './rebase.ts';
+import { rebaseNote, rebaseOntoBase, rebaseShortfall, type RebaseResult } from './rebase.ts';
 import { prForBranch } from './pulls.ts';
 import {
-  approvedPrompt, withArtifacts, withGuide, withInputs, withProposal, withProtocol, withResults,
-  withStandingRules, withWorktree,
+  approvedPrompt, withArtifacts, withCheck, withCheckFailure, withGuide, withInputs, withProposal,
+  withProtocol, withResults, withStandingRules, withWorktree,
 } from './brief.ts';
+import {
+  checkShortfall, describeCheck, runCheck, storedCheck, type CheckRecord,
+} from './check.ts';
 import { resolvePlugins } from './plugins.ts';
 import { readGuide, missingGuide } from './guide.ts';
 import {
@@ -165,7 +168,7 @@ const LEASE_GRACE_MS = 5 * 60_000;
  */
 export type Decision = {
   phase: 'succeeded' | 'failed' | 'pending' | 'suspended';
-  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped' | 'no_output' | 'no_input' | 'conflicted';
+  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped' | 'no_output' | 'no_input' | 'conflicted' | 'check_failed';
   resumable: boolean;
   /**
    * What to write on the Job's `lastError`, when the reason it stopped is something a *human* has
@@ -217,7 +220,33 @@ export function nextPhase(
   maxRetries: number,
   /** The cap this attempt ran under — which is precisely the cap a retry would get. */
   maxBudgetUsd?: number,
+  /**
+   * The Job's own completion check, when it ran and refused (ADR-016 §3, `src/check.ts`).
+   *
+   * Passed in rather than read here, because this function is pure and a check is a subprocess.
+   * The controller runs it after the rebase and calls back in with what it said.
+   */
+  failedCheck?: CheckRecord | null,
 ): Decision {
+  // First, and it outranks `completed` — which is exactly the point. A check only ever runs after a
+  // session that ended cleanly and produced everything it declared, so `outcome.status` here is
+  // always `completed`; taking that as the answer is what having no exit code MEANS, and this is
+  // the reconstruction of one. `resumable` is true and not negotiable: the session that wrote the
+  // code the check refused is precisely the session worth continuing, and the checkout it wrote it
+  // in is kept for it (`decision.resumable && phase === 'pending'` below).
+  if (failedCheck) {
+    const worthRetrying = attempt <= maxRetries;
+    return {
+      phase: worthRetrying ? 'pending' : 'failed',
+      outcome: 'check_failed',
+      resumable: true,
+      // Written whether it is retrying or not, and it is one of only two outcomes that carries its
+      // own line. ADR-016 §4: a failed check is a missing output, not a crash — it burns a retry
+      // and spends nothing more — and there is no runtime error to fall back on, because as far as
+      // the runtime is concerned this attempt succeeded.
+      lastError: checkShortfall(failedCheck, worthRetrying),
+    };
+  }
   if (outcome?.status === 'completed') {
     return { phase: 'succeeded', outcome: 'completed', resumable: false, lastError: null };
   }
@@ -306,6 +335,137 @@ async function reclaimExpired(db: ReturnType<typeof openBoard>, at: Date, report
     report.reclaimed.push(l.jobId);
     log?.(`#${l.jobId} reclaimed (the lease from ${l.holder} expired)`);
   }
+
+  // ---- and the state no lease describes: `running` with no Lease row at all.
+  //
+  // The claim writes the lease before the phase and the release comes after the outcome, so this
+  // is never a Job in flight — it is one whose holder released the lease and then could not write
+  // the Job row (a `SQLITE_BUSY` past the busy timeout in the `catch`, a process killed between
+  // the two). Nothing else can act on it: the lease scan above never sees it, no pass claims a
+  // Job that is not `pending`, and `hkb retry` refuses it while pointing here. So here takes it,
+  // on the strength of the row alone — which is what level-triggered means.
+  const stranded = await db.job.findMany({
+    where: { phase: 'running', lease: { is: null }, ...(board ? { board: { slug: board } } : {}) },
+    select: { id: true, maxRetries: true, board: { select: { defaultMaxRetries: true } } },
+  });
+  for (const j of stranded) {
+    const open = await db.attempt.findFirst({ where: { jobId: j.id, endedAt: null }, orderBy: { k: 'desc' } });
+    // The same proof the lease scan wants. An open attempt whose holder cannot be shown dead — a
+    // process on another machine, or one still running here — is somebody's, and a Job in that
+    // state is left exactly as it is; with no lease there is no deadline to fall back on, so the
+    // conservative answer is to wait for a row that says more.
+    if (open && holderLiveness(open.host, open.startedAt ?? at) !== 'dead') continue;
+    if (open) {
+      await db.attempt.update({
+        where: { jobId_k: { jobId: j.id, k: open.k } },
+        data: { endedAt: at, outcome: 'lost', reason: 'running with no lease — the holder is gone' },
+      });
+    }
+    const maxRetries = resolveSpec(j, j.board).maxRetries.value;
+    const spent = await db.attempt.count({ where: { jobId: j.id, endedAt: { not: null }, outcome: { not: 'stopped' } } });
+    // Fenced on the phase: a claim that landed between the read above and this write is not ours to undo.
+    const fixed = await db.job.updateMany({
+      where: { id: j.id, phase: 'running', lease: { is: null } },
+      data: { phase: spent < maxRetries + 1 ? 'pending' : 'failed', lastError: 'running with no lease — the holder is gone' },
+    });
+    if (fixed.count === 0) continue;
+    await db.event.create({ data: { kind: 'reclaimed', jobId: j.id, actor: 'nobody' } });
+    report.reclaimed.push(j.id);
+    log?.(`#${j.id} reclaimed (running with no lease — the holder is gone)`);
+  }
+}
+
+/**
+ * The outcomes an attempt can end on that **cannot have answered a check**.
+ *
+ * Each ends the attempt at, before, or beside the runtime call without a verdict: `stopped` is
+ * `hkb down` landing mid-run, `lost` is the reclaim closing a row whose holder died, `crashed` is a
+ * run that never came back, and `timed_out` and `max_turns` are the two caps a run can hit with the
+ * work — and the refusal — still outstanding. None of them writes `Attempt.check`, so an earlier
+ * refusal one of these sits on top of is still unanswered, and the next attempt is still the one
+ * that has to answer it. They are walked past rather than treated as answers.
+ *
+ * What is NOT in this set is the point of it: `completed` (the check ran and passed, or the Job has
+ * none) and `no_output`, `conflicted`, `refused`, `max_budget` — all of which end the walk because
+ * the attempt has a cause of its own that the next one should be reading instead.
+ *
+ * Membership is not the whole test, and it deliberately cannot be — see `lastRefusedCheck`, where
+ * the session the refusal belongs to is checked as well. `crashed` is exactly why: a *runtime-error*
+ * crash nulls `Job.lastSessionId` and its worktree is swept, so the next attempt starts cold in a
+ * fresh checkout, and briefing it about a refusal in a session that no longer exists tells it to
+ * continue work it cannot see.
+ */
+/**
+ * The attempt's `reason` when a stop landed while its check was running. A marker rather than a
+ * column: the run completed and its outcome says so, and the one thing the next attempt needs to
+ * know is that the check never answered — read back by `checkWasInterrupted` below.
+ */
+const CHECK_INTERRUPTED = 'check interrupted by a stop — the run stands, the check runs again';
+
+/**
+ * Did the last attempt that could have answered the check finish with the check cut short?
+ *
+ * Walks back past `CHECKLESS_OUTCOMES` the way `lastRefusedCheck` does — a `stopped`, `lost` or
+ * pre-run `crashed` attempt in between ran no check and says nothing about it — and only while the
+ * session is still the one that finished: a nulled session starts cold and owes nothing to a
+ * checkout it never saw. Looking at `k - 1` alone lost the notice across exactly those rows.
+ */
+async function checkWasInterrupted(db: ReturnType<typeof openBoard>, jobId: number, sessionId: string | null): Promise<boolean> {
+  if (!sessionId) return false;
+  const ended = await db.attempt.findMany({
+    where: { jobId, endedAt: { not: null } },
+    orderBy: { k: 'desc' },
+    select: { outcome: true, reason: true, sessionId: true },
+  });
+  for (const a of ended) {
+    if (a.outcome && CHECKLESS_OUTCOMES.has(a.outcome)) continue;
+    return a.outcome === 'completed' && a.reason === CHECK_INTERRUPTED && a.sessionId === sessionId;
+  }
+  return false;
+}
+
+const CHECKLESS_OUTCOMES: ReadonlySet<string> = new Set(['stopped', 'lost', 'crashed', 'timed_out', 'max_turns', 'max_budget']);
+
+/**
+ * The most recent check refusal that nothing has answered yet, **in the session it refused**.
+ *
+ * Walks back from `k - 1` past attempts that could not have answered a check, and stops at the first
+ * one that could: if that one ended `check_failed` its record is what the next attempt is briefed
+ * with, and if it ended any other way the check was either satisfied or beside the point. The same
+ * shape as `newestWorktree`, which walks back for the checkout because the numbering has exactly
+ * this hole in it.
+ *
+ * **And the session has to still be the one.** `withCheckFailure` says "the work is still there:
+ * the same session, and normally the same checkout" and it suppresses the plain `withCheck` line on
+ * the strength of that — so a refusal briefed to an attempt that starts COLD is an instruction to
+ * fix something the worker has no access to, in place of the one line that would have told it what
+ * it has to pass. The walk was written on the premise that nothing it steps over clears the session;
+ * that premise is false for a runtime-error `crashed`, which nulls `lastSessionId` and removes the
+ * worktree. Rather than special-casing the outcome, the fact is checked directly: the refusal counts
+ * only while the attempt that earned it is the attempt whose session the next one will resume.
+ */
+async function lastRefusedCheck(
+  db: ReturnType<typeof openBoard>,
+  jobId: number,
+  k: number,
+  /** `Job.lastSessionId` — the session the next attempt will resume, or null for a cold start. */
+  lastSessionId: string | null,
+): Promise<CheckRecord | null> {
+  // One query, ordered, rather than one per step back: the walk is bounded by the retry count, but
+  // a per-`k` read would be a board read per attempt for a fact three rows can settle.
+  const before = await db.attempt.findMany({
+    where: { jobId, k: { lt: k } },
+    orderBy: { k: 'desc' },
+    select: { outcome: true, check: true, sessionId: true },
+  });
+  for (const a of before) {
+    if (a.outcome && CHECKLESS_OUTCOMES.has(a.outcome)) continue;
+    if (a.outcome !== 'check_failed') return null;
+    // Both present and equal. A null on either side is a cold start, and a cold worker briefed
+    // about "the same session" is being told about work it cannot reach.
+    return a.sessionId && a.sessionId === lastSessionId ? storedCheck(a.check) : null;
+  }
+  return null;
 }
 
 /**
@@ -841,576 +1001,960 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     }, renewEvery);
     if (typeof renewer.unref === 'function') renewer.unref();
 
-    // ---- an approval this attempt is acting on, if any. Read from the Event stream rather than a
-    // column cleared on use: durable, never consumed, and legible afterwards — `hkb log` shows who
-    // approved what and in whose words. Only the most recent one matters; an earlier approval was
-    // already acted on by the attempt that followed it.
-    const approval = job.gate
-      ? await db.event.findFirst({
-        where: { jobId: job.id, kind: 'approved' }, orderBy: { id: 'desc' },
-      })
-      : null;
-    const approvalPrompt = approval ? approvedPrompt(approval.actor, (approval.payload as { note?: string } | null)?.note) : null;
+    /**
+     * The runtime's own report, hoisted so the `catch` at the foot can read it whether the run
+     * happened or not. Null until it has, and null if it never does.
+     */
+    let outcome: WorkerOutcome | null = null;
+    /** Set the moment the Job row carries the outcome. A failure after that rewrites nothing. */
+    let recorded = false;
+    /** A stop landed while the check was running: the run stands, the check has not answered. */
+    let checkInterrupted = false;
+    // Everything from here to the release is under one `try`. The renewer above is what makes
+    // that non-negotiable: it is a timer that keeps the lease alive, and the `finally` is the only
+    // thing that stops it. A `try` that began after the pre-run reads left every throw in them —
+    // a SQLITE_BUSY on the approval read, a file where the results directory should be — with a
+    // renewer ticking for the daemon's lifetime and a Job `running` that no verb could cancel.
+    try {
+      // ---- an approval this attempt is acting on, if any. Read from the Event stream rather than a
+      // column cleared on use: durable, never consumed, and legible afterwards — `hkb log` shows who
+      // approved what and in whose words. Only the most recent one matters; an earlier approval was
+      // already acted on by the attempt that followed it.
+      const approval = job.gate
+        ? await db.event.findFirst({
+          where: { jobId: job.id, kind: 'approved' }, orderBy: { id: 'desc' },
+        })
+        : null;
+      const approvalPrompt = approval ? approvedPrompt(approval.actor, (approval.payload as { note?: string } | null)?.note) : null;
 
-    // ---- the results this attempt is asked for, and the directory it writes them to. Created
-    // before the run because the paths go into the prompt; outside every checkout, so writing one
-    // cannot land in the worker's diff (`src/results.ts`).
-    const wantedNames = declaredResults(job.results);
-    const wantedResults = wantedNames.length ? resultPaths(job.id, k, wantedNames) : {};
-    // Always made, even when nothing is declared: a run may volunteer a value nobody asked for, and
-    // it needs somewhere to put it. The brief only names paths for the DECLARED ones — a volunteered
-    // value is the worker's own idea, and telling it where the directory is would make it an
-    // invitation, which is a different feature.
-    ensureResultsDir(job.id, k);
-
-    // ---- the artifacts this attempt is asked for. Same two rules as results — declared names get
-    // a path in the prompt, and the directory is made either way so a run may volunteer — and one
-    // difference that is the point of the channel: nothing here is capped, and nothing here is
-    // removed (ADR-011, `src/artifacts.ts`).
-    //
-    // A PROPOSING Job rides the same channel under a name the controller fixes rather than the Job
-    // (`proposal.json`), and it is deliberately NOT added to the declared list: `withProposal` names
-    // that path itself with the schema beside it, and the validator's own refusal covers the missing
-    // file, so declaring it too would mean two code paths saying the same no.
-    const wantedArtifactNames = declaredArtifacts(job.artifacts);
-    const wantedArtifacts = wantedArtifactNames.length ? artifactPaths(job.id, k, wantedArtifactNames) : {};
-    const proposalPath = job.proposes ? artifactPaths(job.id, k, [PROPOSAL_ARTIFACT])[PROPOSAL_ARTIFACT] : null;
-    ensureArtifactsDir(job.id, k);
-
-    // ---- the plugin grants: the directories whose skills this worker may see. A directory that
-    // has gone is dropped rather than fatal — a board outlives the directories it names, and a Job
-    // that cannot run because a skill directory was deleted is a worse failure than one that runs
-    // without it. Said out loud, because a worker silently missing what it was granted is the same
-    // class of bug as a silently inert guard.
-    const granted = resolvePlugins(cwd, spec.pluginPaths.value);
-    const grantedPlugins = granted.paths.length ? granted.paths : undefined;
-    if (granted.dropped.length) say(`granted plugin path${granted.dropped.length === 1 ? '' : 's'} not found: ${granted.dropped.join(', ')}`);
-    // ---- the declared INPUTS, resolved before anything is spent. ADR-008 said what a Job produces
-    // and left what it consumes as one static string; this is the other half
-    // (`src/inputs.ts`, `docs/workflow-study.md` §7).
-    //
-    // Against `cwd` — the board's repository — and never the worktree, for the same reason a plugin
-    // grant is: the worktree carries this Job's own edits on a resumed attempt, and a Job that fed
-    // itself its own output would be reading a different document each time it woke up.
-    const wantedInputs = declaredInputs(job.inputs);
-    const readInputs: ResolvedInput[] = [];
-    const unread: { name: string; source: string; why: string }[] = [];
-    for (const want of wantedInputs) {
-      const source = describeSource(want);
-      // A literal, supplied at file time. Nothing to fetch and nothing that can fail. One that was
-      // interpolated into the brief is not here at all — `hkb new` drops it once consumed.
-      if ('value' in want) { readInputs.push({ name: want.name, source, text: want.value }); continue; }
-      const vf = want.valueFrom;
-
-      // The downward API. `fieldRef` lets a Pod read its own metadata; this lets a Job read its own,
-      // and `slot` is the field that earns it: the only fact answering "which of the concurrent
-      // workers am I", which is what a run picking a port or a database name needs.
-      if ('jobRef' in vf) {
-        const self: Record<string, string | null> = {
-          id: String(job.id),
-          name: job.name,
-          board: boardSlug,
-          attempt: String(k),
-          slot: String(slot),
-          branch: wt?.branch ?? null,
-          worktree: wt?.path ?? null,
-          repo: cwd,
-        };
-        const got = self[vf.jobRef.field];
-        // Null is a real answer for `branch` and `worktree` on an un-isolated Job, and a Job that
-        // declared one has asked for something that does not exist here. Refused rather than
-        // rendered empty, which is the same rule every other declaration follows.
-        if (got == null) {
-          unread.push({ name: want.name, source, why: `this Job has no \`${vf.jobRef.field}\`${vf.jobRef.field === 'branch' || vf.jobRef.field === 'worktree' ? ' — it is running without a worktree (`--no-isolate`)' : ''}` });
-        } else {
-          readInputs.push({ name: want.name, source, text: got });
-        }
-        continue;
-      }
-
-      if ('board' in vf) {
-        // One board read, no model, and the projection `hkb ls` already computes — ADR-010 decision
-        // 5's "board arithmetic". Every OTHER Job on this board, so a Job reasoning about the board
-        // is not confused by finding itself listed as `running`.
-        const others = await db.job.findMany({
-          where: { boardId: job.boardId, id: { not: job.id } },
-          orderBy: { id: 'asc' },
-          select: {
-            id: true, name: true, phase: true, exports: true, results: true, artifacts: true,
-            _count: { select: { attempts: true } },
-            attempts: { select: { prUrl: true, outcome: true }, orderBy: { k: 'desc' }, take: 1 },
-          },
-        });
-        const rows: BoardRow[] = others.map((o) => ({
-          id: o.id,
-          name: o.name,
-          phase: o.phase,
-          attempts: o._count.attempts,
-          lastOutcome: o.attempts[0]?.outcome ?? null,
-          producedNothing: o.phase === 'succeeded' && !o.attempts[0]?.prUrl
-            && !declaredExports(o.exports).length && !declaredExports(o.results).length
-            && !declaredExports(o.artifacts).length,
-        }));
-        readInputs.push({ name: want.name, source, text: renderBoard(rows) });
-        continue;
-      }
-
-      const got = readFileInput(cwd, vf.file.path);
-      if ('why' in got) unread.push({ name: want.name, source, why: got.why });
-      else readInputs.push({ name: want.name, source, text: got.text });
-    }
-    // ---- the contributor guide, if the operator granted one (ADR-013). Read from the board's
-    // repository like an input and for the same reasons — the worktree carries this Job's own edits,
-    // and a worker that could write the guide its next attempt obeys would be steering itself.
-    //
-    // A guide that cannot be read fails the attempt in the same breath as an input that cannot,
-    // because the failure is the same shape: a Job told to follow rules it was never given runs
-    // without them, and that is worse than not running.
-    let guide: { text: string; files: string[] } | null = null;
-    let guideShortfall: string | null = null;
-    if (spec.guide.value) {
-      const got = readGuide(cwd, spec.guide.value);
-      if ('why' in got) guideShortfall = missingGuide(job.id, got.why);
-      else {
-        guide = got;
-        say(`guided by ${got.files.join(' + ')} (${Buffer.byteLength(got.text)} bytes)`);
-      }
-    }
-
-    // One shortfall, and the first cause found is the one reported — the same precedence rule the
-    // declared outputs use, for the same reason: two concatenated reasons read worse than one and
-    // send the operator to the same place.
-    const inputShortfall = missingInputs(job.id, unread) ?? guideShortfall;
-    if (inputShortfall) deps.onEvent?.(`  ${inputShortfall}`);
-
-    // ---- run. A resumable stop leaves a session id; the next attempt continues it rather than
-    // starting cold, which is the whole reason that column exists.
-    // What the worker is told about its base, and every clause of it is load-bearing.
-    //
-    // `rebaseOnto` — omitted for a RESUMED attempt, which lands in a checkout whose branch is
-    // already on the remote: rebasing there makes its next push non-fast-forward, and the
-    // protocol's own next rule forbids the force that would fix it. The step would have no legal
-    // ending, and a worker in that position reports a failed push and often skips the pull request.
-    // The controller rebases that case itself after the run instead.
-    //
-    // `fetch` — false when the base is an attempt branch, because a worktree shares its parent's
-    // ref store and `git fetch origin kb-33-1` there updates `refs/remotes/origin/kb-33-1`, which
-    // is the ref `--force-with-lease` compares against for Job 33's own push. `fetchBase` refuses
-    // that fetch; a prompt that asks the worker to make it hands the protection straight back, and
-    // that is the third time this exact hole has been opened from a different direction.
-    //
-    // `prBase` — whenever the Job named a base at all. A pull request opened with no `--base`
-    // targets the repository's default branch, so a chain step's diff would carry its parent's
-    // commits and merging it would merge the parent's unreviewed work into the trunk. The rebase
-    // keeps the branch on the right base; only this keeps the review on it.
-    const baseBranch = wt ? wt.baseLabel.replace(/^origin\//, '') : null;
-    const baseAdvice = wt
-      ? {
-        rebaseOnto: pushedRef(cwd, wt.branch) ? undefined : wt.baseLabel,
-        fetch: !(baseBranch && isAttemptBranch(baseBranch)),
-        prBase: spec.base.value && baseBranch ? baseBranch : undefined,
-      }
-      : undefined;
-    // The pull-request protocol, or the sandbox note, or neither. A PROPOSING Job produces no
-    // commit, so telling it to open a draft pull request contradicts the contract appended below —
-    // one prompt saying both "push what you have" and "write the file and stop" is not an
-    // instruction. It still needs to know it is standing in a worktree, which is what `withWorktree`
-    // says and all it says.
-    const opening = approvalPrompt
-      ?? (wt ? (job.proposes ? withWorktree(job.brief, wt.branch) : withProtocol(job.brief, wt.branch, baseAdvice)) : job.brief);
-    // The guide goes in FRONT of all of it, including an approval prompt: an approver's instruction
-    // is the most recent word on what to do, and the repository's rules are the standing word on how
-    // anything here is done. Neither replaces the other.
-    // The three rules every worker gets (ADR-014), between the task and the output contracts. Not
-    // conditional on anything: a rule that reaches only some Jobs is one nothing can rely on, and
-    // that includes a resumed attempt carrying an approver's instruction.
-    const ruled = withStandingRules(opening);
-    const guided = guide ? withGuide(ruled, guide.text, spec.guide.value as string) : ruled;
-    const asked = withInputs(
-      withArtifacts(withResults(guided, wantedResults), wantedArtifacts),
-      readInputs,
-    );
-    const prompt = proposalPath && !approvalPrompt
-      ? withProposal(asked, proposalPath, spec.maxBudgetUsd.value ?? null)
-      : asked;
-
-    const outcome = inputShortfall ? null : await deps.runtime
-      .run({
-        taskId: job.id,
-        attempt: k,
-        cwd: wt ? wt.path : cwd,
-        // Derived from the checkout we actually made, not from `job.isolate`, so it cannot
-        // disagree with `cwd` above. The runtime turns it into the subagent isolation policy: a
-        // Job running in the operator's tree has no worktree to bring a subagent's work back to.
-        isolated: wt !== null,
-        // `withProtocol` is the PULL REQUEST protocol and needs a branch, so it is for an isolated
-        // Job only. Results are the opposite case — they matter most to a Job that produces no
-        // commit — so they are appended either way.
-        // What this attempt is asked to do. Normally the brief; after an approval, the approver's
-        // own instruction — which is the whole of ADR-010 decision 4. A resumed attempt otherwise
-        // re-sends the same brief, so an approved Job would propose again instead of applying.
-        //
-        // A PROPOSING Job gets the proposal contract on top, last, so it is the final thing the
-        // worker reads — and never over an approval prompt: an approved proposal is applied by the
-        // controller, so a worker asked to propose again would be proposing on top of rows that
-        // already exist.
-        prompt,
-        // All four from the resolved spec: a Job that named none of them still has to run on
-        // something, and the board is now allowed to be the one that says what.
-        model: spec.model.value ?? undefined,
-        effort: spec.effort.value ?? undefined,
-        maxTurns: spec.maxTurns.value,
-        maxBudgetUsd: spec.maxBudgetUsd.value,
-        // The tool surface, resolved like everything else. Undefined — not null — when nobody
-        // named one, because `WorkerSpec.allowedTools` is optional and the runtime's own default
-        // is what an absent value means. The admission gate is built from this same list
-        // (`src/runtime/claude.ts`), so narrowing it here is what actually refuses.
-        allowedTools: spec.allowedTools.value ?? undefined,
-        // Resolved against the BOARD'S REPOSITORY (`cwd` above), never the worktree — ADR-012,
-        // `src/plugins.ts`. A worker writes in its worktree, so a grant that resolved there would
-        // let a Job write a hook its own next attempt executes. Against the repository, a merge is
-        // the only way to change what a grant loads.
-        plugins: grantedPlugins,
-        timeoutMs: job.timeoutMs,
-        resume: job.lastSessionId ?? undefined,
-        signal: deps.signal,
-      }, deps.onRuntimeEvent)
-      .catch((): null => null);
-
-    clearInterval(renewer);
-
-    // ---- release, fenced. `delete({ where: { jobId } })` deleted whoever's lease was there, so a
-    // stale holder finishing late removed the NEW holder's claim and then overwrote its outcome.
-    // The token was written at claim and never read; now it is the fence. Released BEFORE the
-    // Job row is touched, because the count is what says whether we may touch it at all.
-    const released = await db.lease.deleteMany({ where: { jobId: job.id, token } });
-    if (released.count === 0) heldToTheEnd = false;
-
-    // The operator's intent outranks whatever the runtime made of being cut off. A stopped run
-    // reports `timeout` or `error` depending on where the abort landed, and recording either would
-    // be a lie about why it ended AND would spend a retry on it.
-    const ran: Decision = inputShortfall
-      // Terminal, and not retried, for the reason a missing declared OUTPUT is not: the same read
-      // fails identically next time. `hkb retry` is the deliberate second go, once a human has read
-      // which input is missing and decided whose mistake it was.
-      ? { phase: 'failed', outcome: 'no_input', resumable: false, lastError: inputShortfall }
-      : deps.signal?.aborted
-      ? { phase: 'pending', outcome: 'stopped', resumable: true, lastError: null }
-      // Both from the resolved spec, so the budget advice names the cap this attempt actually ran
-      // under — which may be the board's. Quoting the raw column would print `$0.00` and send the
-      // operator to raise a limit that was never the one they hit.
-      : nextPhase(outcome, charged, spec.maxRetries.value, spec.maxBudgetUsd.value);
-
-    // ---- the declared outputs, out of the sandbox BEFORE it is torn down. The order is the whole
-    // design: a worktree is the pod filesystem and dies with the run, so an artifact still inside it
-    // when the checkout goes was never produced. ADR-008, and Bazel's rule verbatim — move the known
-    // outputs to the execroot, then delete the sandbox.
-    //
-    // Only after a run that otherwise succeeded. A crashed or capped attempt has not finished the
-    // work, so half its outputs being absent is a description of the stop it already reported, not a
-    // second finding; and copying what it did leave would overwrite the repository from a run
-    // nobody is going to accept.
-    const declared = declaredExports(job.exports);
-    let exported: string[] | null = null;
-    let shortfall: string | null = null;
-    // `heldToTheEnd` gates it for the same reason it gates the Job row: the repository is contended
-    // state too, and a holder that lost its lease mid-run must not write into a checkout the new
-    // holder is working in. Its worktree is kept below, so the artifact is not destroyed either.
-    if (declared.length && ran.phase === 'succeeded' && heldToTheEnd) {
-      try {
-        const got = exportOutputs(wt ? wt.path : cwd, cwd, declared);
-        exported = got.exported;
-        if (got.missing.length) shortfall = missingOutputs(job.id, got.missing);
-        else if (exported.length) deps.onEvent?.(`  exported ${exported.length} path${exported.length === 1 ? '' : 's'} into ${cwd}`);
-      } catch (e) {
-        // An illegal declaration — escaping, absolute, or a symlink out of the checkout. It is a
-        // fault in the Job's spec rather than in the run, and it stops the copy dead: nothing is
-        // written outside the repository on the strength of a path we refused.
-        shortfall = (e as Error).message;
-      }
-      if (shortfall) deps.onEvent?.(`  ${shortfall}`);
-    }
-    // ---- the declared RESULTS, read back before the collection directory goes. Same rule, same
-    // gate, different medium: `exports` are files the repository keeps, results are values the
-    // board keeps. A Job with no branch and no commit produces its work here or nowhere.
-    let produced: Record<string, string> | null = null;
-    if (ran.phase === 'succeeded' && heldToTheEnd) {
-      const got = collectResults(job.id, k, wantedNames);
-      // Null, not `{}`: a run that wrote nothing has no fact to record, and the column already
-      // distinguishes those two the way `exported` does.
-      produced = Object.keys(got.produced).length ? got.produced : null;
-      const owed = missingResults(job.id, got.missing, got.oversize);
-      // The export shortfall keeps precedence — it was found first, and reporting one cause is
-      // more use than concatenating two.
-      if (owed && !shortfall) shortfall = owed;
-      if (owed) deps.onEvent?.(`  ${owed}`);
-      else if (Object.keys(got.produced).length) {
-        // Volunteered names are named as such: an operator reading the log should be able to tell
-        // what the board required from what the run decided to add.
-        const extra = got.volunteered.length ? ` (${got.volunteered.length} volunteered)` : '';
-        deps.onEvent?.(`  produced ${Object.keys(got.produced).map((n) => `\`${n}\``).join(', ')}${extra}`);
-      }
-    }
-    // Removed whatever happened: the values are durable because they are on the Attempt row, not
-    // because the file survives, and a directory kept after a failure is litter nobody reads.
-    clearResults(job.id, k);
-
-    // ---- the declared ARTIFACTS. Same rule and same gate again; the differences are that nothing
-    // is read (a catalogue goes onto the row, the file stays where the worker put it) and that the
-    // directory SURVIVES — for a failed attempt too, because a partial output is usually the most
-    // informative thing a failure leaves, and it is the only copy (ADR-011, `src/artifacts.ts`).
-    let artifacts: { name: string; kind: string; bytes: number }[] | null = null;
-    if (ran.phase === 'succeeded' && heldToTheEnd) {
-      const got = collectArtifacts(job.id, k, wantedArtifactNames);
-      artifacts = got.produced.length ? got.produced : null;
-      const owed = missingArtifacts(job.id, got.missing);
-      // Same precedence rule as results: the first cause found is the one reported, because two
-      // concatenated shortfalls read worse than one and mean the same thing.
-      if (owed && !shortfall) shortfall = owed;
-      if (owed) deps.onEvent?.(`  ${owed}`);
-      else if (got.produced.length) {
-        const extra = got.volunteered.length ? ` (${got.volunteered.length} volunteered)` : '';
-        deps.onEvent?.(`  kept ${got.produced.map((a) => `\`${a.name}\` ${bytes(a.bytes)}`).join(', ')}${extra}`);
-      }
-    }
-    // Only when it is empty, which is the common case: every attempt gets a directory because the
-    // path goes into the prompt, and a Job that declared nothing and volunteered nothing must not
-    // leave one behind per attempt for ever.
-    clearEmptyArtifacts(job.id, k);
-
-    // ---- the PROPOSAL, if this Job makes one. Read and refused here, applied nowhere near here:
-    // what the controller does now is decide whether the file is something a person could approve,
-    // and store it if it is (ADR-011, `src/proposals.ts`).
-    //
-    // A refusal fails the attempt the same way a missing declared output does, and for the same
-    // reason — the Job promised something and what arrived was not it. The message is the parser's
-    // own, naming the offending path, because the next reader is either a human deciding whose
-    // mistake it was or a retried run that can act on it.
-    let proposal: Proposal | null = null;
-    if (job.proposes && ran.phase === 'succeeded' && heldToTheEnd && !shortfall) {
-      const checked = readProposal(job.id, k, spec.maxBudgetUsd.value ?? null);
-      if ('why' in checked) {
-        shortfall = `#${job.id} proposed something the board refused: ${checked.why}`;
-        deps.onEvent?.(`  ${shortfall}`);
-      } else {
-        proposal = checked;
-        say(`proposes ${checked.jobs.length} Job${checked.jobs.length === 1 ? '' : 's'}`);
-        // Said out loud rather than recorded quietly: a number that was quietly reduced is a number
-        // the approver would otherwise read as the one that was asked for.
-        for (const c2 of checked.clamped) say(`  ${c2}`);
-      }
-    }
-
-    // ---- what landed on the forge. One read, by head branch: the board and the forge are two
-    // systems and this is the only thing that joins them.
-    // Fenced on the JOB, not on this attempt. A pull request that existed before the Job did
-    // cannot be its output — that is the stale-branch case, where a name this database invented
-    // was already taken on the remote. But one opened by an EARLIER ATTEMPT of this Job is very
-    // much its output: a resumed attempt continues onto the same branch, which is the whole point
-    // of resuming, and dating the fence from the attempt made a Job lose the pull request it had
-    // already opened. Measured: #12 opened PR 366 at 12:41 on attempt 1 and recorded null at 13:39
-    // on attempt 2.
-    const pr = wt && deps.readPr !== false ? prForBranch(cwd, wt.branch, job.createdAt) : null;
-    if (pr) say(`${pr.isDraft ? 'draft ' : ''}PR #${pr.number} ${pr.url}`);
-    // Said out loud. A run that committed and pushed but opened no pull request has produced
-    // something a human still has to find, and silence here is what let job #4 look finished.
-    else if (wt && deps.readPr !== false) say(`no pull request on ${wt.branch}`);
-
-    // ---- the base moved under it. The cheap half of `docs/rebuild-plan.md` item 10: replay the
-    // attempt's branch onto the base as it is NOW, and push if the worker already pushed
-    // (`src/rebase.ts`). In the common case the brief has already had the worker do it and this is
-    // one `merge-base` that reports `current`.
-    //
-    // Placed AFTER the collection blocks on purpose. A conflict is a fact about the branch, not
-    // about the work: the results and artifacts an attempt produced are a durable record of what
-    // happened and are worth keeping whether or not its diff still applies. It is placed BEFORE the
-    // gate for the opposite reason — nobody should be asked to approve a diff that no longer sits
-    // on what they would merge it into — and after the forge read, which is what says whether a
-    // person is already looking at this branch.
-    //
-    // Gated on `heldToTheEnd` like every other write outside our own attempt row: the branch and
-    // the remote are contended state too, and a holder that lost its lease mid-run must not rewrite
-    // history the new holder's worker is committing onto.
-    let conflicted: string | null = null;
-    if (wt && ran.phase === 'succeeded' && heldToTheEnd && !shortfall) {
-      // A pull request somebody has taken out of draft is a diff a person is reading, and the
-      // whole safety argument for rewriting an attempt branch was that nobody was. It is checked
-      // rather than asserted now: ADR-010's gate suspends an attempt *precisely* so a human
-      // reviews, and the approved attempt would otherwise have force-pushed out from under their
-      // comments. No pull request read (`--json` tests, no forge) means nothing says otherwise.
-      const r = rebaseOntoBase(cwd, wt, { mayRewrite: !pr || pr.isDraft });
-      const owed = rebaseShortfall(job.id, wt, r);
-      const note = rebaseNote(job.id, wt, r);
-      if (note) say(`  ${note}`);
-      if (owed) {
-        conflicted = owed;
-        shortfall = owed;
-        say(`  ${owed}`);
-      } else if (r.kind === 'rebased') {
-        // `wt.base` moved with it, inside `rebaseOntoBase` — the sweep below counts from it.
-        say(`  rebased onto ${r.label} ${r.onto.slice(0, 7)}${r.pushed ? ' and force-pushed (lease held)' : ''}`);
-      }
-    }
-
-    // A declared output that is not there fails the attempt, and that rule is what makes the
-    // declaration worth writing down: without it `succeeded` still means only that a session ended.
-    // Not retried — the session's own account is that it finished, so a resumed attempt wakes up
-    // done and a cold one re-buys the same run. `hkb retry <id>` is the deliberate second go, once a
-    // human has read which path is missing and decided whose mistake it was.
-    // ---- the gate. A gated Job that succeeded AND produced everything it declared does not go
-    // terminal: it suspends, and waits for a human, a delegated agent, or an auto-approve policy
-    // (ADR-010). ORDER MATTERS — the ADR-008 shortfall is evaluated first and outranks it, because
-    // a run that did not produce what it promised has nothing worth approving.
-    //
-    // One-shot, and read off the Event stream rather than a flag cleared on use. A re-entrant gate
-    // would delete the Job's completion condition (`prisma/schema.prisma`, `Job.gate`), and a flag
-    // consumed on a transition is wrong after a restart in a controller that is level-triggered.
-    const approved = job.gate && ran.phase === 'succeeded' && !shortfall
-      ? await db.event.count({ where: { jobId: job.id, kind: 'approved' } })
-      : 0;
-    const decision: Decision = shortfall
-      // `conflicted` rather than `no_output` when the branch is the problem, because the two send an
-      // operator to different places: `no_output` is a fault in the work and the answer is another
-      // run, a conflict is the base having moved and the answer is a hand rebase in a checkout that
-      // is still on disk. Not resumable for the same reason a missing output is not — a resumed
-      // worker may not force-push, so it has no move here that a human does not have to make first.
-      ? { phase: 'failed', outcome: conflicted ? 'conflicted' : 'no_output', resumable: false, lastError: shortfall }
-      : job.gate && ran.phase === 'succeeded' && approved === 0
-        ? { phase: 'suspended', outcome: 'completed', resumable: true, lastError: null }
-        : ran;
-
-    await db.attempt.update({
-      where: { jobId_k: { jobId: job.id, k } },
-      data: {
-        endedAt: now(),
-        outcome: decision.outcome,
-        sessionId: outcome?.sessionId ?? null,
-        summary: outcome?.text?.slice(0, 2000) ?? null,
-        // The shortfall wins: when a declared output is missing, that is why this attempt ended as
-        // it did, and the runtime has no error of its own to report — it thinks it succeeded.
-        reason: (shortfall ?? outcome?.error)?.slice(0, 300) ?? null,
-        costUsd: outcome?.costUsd ?? null,
-        // Measured by the runtime, not reported by the agent. An attempt that never reached the
-        // runtime has no measurement rather than a measurement of zero, hence `?? null`.
-        turns: outcome?.turns ?? null,
-        denials: outcome?.denials ?? null,
-        branch: wt?.branch ?? null,
-        prNumber: pr?.number ?? null,
-        prUrl: pr?.url ?? null,
-        // Omitted rather than nulled: a Job that declared nothing has no fact to record here, and
-        // Prisma's Json null needs a sentinel to say which of the two nulls it means.
-        ...(exported ? { exported } : {}),
-        ...(produced ? { results: produced } : {}),
-        ...(artifacts ? { artifacts } : {}),
-        // The catalogue, never the content — that is in the prompt and in the transcript the
-        // session id points at. It is what makes "declared inputs reduce input tokens" a thing this
-        // board can check rather than a thing read in a paper.
-        ...(readInputs.length
-          ? { inputs: readInputs.map((i) => ({ name: i.name, source: i.source, bytes: Buffer.byteLength(i.text) })) }
-          : {}),
-        // What was proposed, as the validator accepted it — beside what was produced, not instead of
-        // it. The raw `proposal.json` stays in the artifact directory, so a reader can line up what
-        // was asked for, what was accepted and (once applied) what was created. A tool call leaves
-        // no such record, which is ADR-011's audit argument in one column.
-        ...(proposal ? { proposal } : {}),
-      },
-    });
-
-    // The attempt row is ours whatever happened — it is keyed (jobId, k) and no other holder uses
-    // our k. The JOB row is the contended one, so only a holder that kept its lease may write it.
-    if (!heldToTheEnd) {
-      say('lease was taken mid-run — recording the attempt, leaving the Job alone');
-      await db.event.create({
-        data: { kind: 'lease_lost', jobId: job.id, boardId: job.boardId, actor: host, payload: { k } },
-      });
-      report.skipped.push(job.id);
-      if (wt) removeWorktree(cwd, wt);
-      return;
-    }
-
-    await db.job.update({
-      where: { id: job.id },
-      data: {
-        phase: decision.phase,
-        // Why it is waiting, in the operator's own words — not derivable from any runtime, which is
-        // why the column exists. Cleared on any other transition so a resumed Job does not keep
-        // claiming to be waiting for something that already happened.
-        // A proposing Job says how much it is asking for, because that is the question. The
-        // operator's own `--gate` text stays the fallback, and is all there is until a proposal
-        // has actually been validated.
-        suspendedFor: decision.phase === 'suspended' ? (proposal ? proposalGate(proposal.jobs.length) : job.gate) : null,
-        // Keep the session only while continuing it would help; a cold retry must start clean.
-        // A gate fires on SUCCESS, and `nextPhase` calls a completed run not-resumable — so the
-        // suspended decision sets `resumable: true` itself, which is what keeps the session the
-        // approver's instruction is meant to continue. Without that the session would be discarded
-        // at the exact moment the Job suspends waiting for it.
-        lastSessionId: decision.resumable ? (outcome?.sessionId ?? null) : null,
-        // The decision's own line wins where it has one: for a stop only a human can undo, "what
-        // to change" is worth more than whatever the runtime called it.
-        // Null for a Job that is waiting as well as one that finished. The gate fires only on a
-        // success that produced everything it declared, so there is no error to carry — and the
-        // fallback to `decision.outcome` put the word `completed` in the error column of every
-        // suspended Job, which `hkb show` printed as `error completed`.
-        lastError: decision.phase === 'succeeded' || decision.phase === 'suspended'
-          ? null
-          : (decision.lastError ?? outcome?.error ?? decision.outcome),
-        // Neither pending nor suspended is finished. A suspended Job is waiting on a person, which
-        // is the one state that can last days — stamping it finished would make every "how long did
-        // this take" answer include the time somebody spent deciding.
-        finishedAt: decision.phase === 'pending' || decision.phase === 'suspended' ? null : now(),
-      },
-    });
-
-    await db.event.create({
-      data: { kind: decision.outcome, jobId: job.id, boardId: job.boardId, actor: host, payload: { k, phase: decision.phase } },
-    });
-
-    // ---- tidy. Never forced: a worktree that still holds work is the only copy of it if the
-    // push failed, so it stays and the operator is told where.
-    //
-    // This is not the reclaim path, and it cannot be: a run that just pushed a pull request is at
-    // the one moment its checkout is definitionally still needed. It removes the checkouts that
-    // never held anything; the daemon's sweep removes the rest, once their branches land. A
-    // resumable stop keeps its checkout unconditionally — the next attempt continues *in* it, and
-    // cutting a fresh worktree would reset the branch to base and strand what was already pushed.
-    if (wt) {
-      // A suspended Job keeps its checkout for the same reason a resumable one does: the approved
-      // attempt continues *in* it, and cutting a fresh worktree would reset the branch to base and
-      // strand whatever the propose half already pushed.
+      // ---- what the attempt before this one failed its check on, if that is why there is another
+      // one. Read off the previous attempts' rows rather than remembered across the transition, like
+      // everything else here: a controller that is level-triggered cannot depend on having seen the
+      // failure happen, and a flag consumed on a transition is wrong after a restart.
       //
-      // A PROPOSING Job is the exception, and it is the exception because of what approval does to
-      // it: the controller files the rows and nothing ever wakes up in that checkout. Keeping it
-      // costs a whole repository on disk to hold work no session will return to, and the message
-      // said "attempt 2 resumes in it" about an attempt that cannot happen. `removeWorktree` still
-      // refuses to take unpushed commits, so a proposer that committed anyway keeps its tree.
-      const resumesHere = (decision.resumable && decision.phase === 'pending')
-        || (decision.phase === 'suspended' && !job.proposes);
-      if (resumesHere) {
-        unlockWorktree(cwd, wt);
-        say(`kept ${wt.path} — attempt ${k + 1} resumes in it`);
-      } else if (conflicted) {
-        // The checkout IS the fix, and it would otherwise be swept: a branch that conflicts has
-        // normally been pushed, so nothing is unpushed and nothing is dirty, and `removeWorktree`
-        // would take it and the local branch with it. Finding the conflict early is only worth
-        // anything if the tree to resolve it in is still there when the operator reads the message.
-        unlockWorktree(cwd, wt);
-        say(`kept ${wt.path} — rebase it there`);
-      } else {
-        // Everything this Job said it would produce is now in the repository, so whatever is left
-        // in the checkout is undeclared — litter, in ADR-008's sense, and the one case where a
-        // dirty tree is not evidence of work worth keeping. `removeWorktree` still refuses to take
-        // unpushed commits; see the note there for what this waives and what it does not.
-        const gone = removeWorktree(cwd, wt, { exported: !!exported && !shortfall });
-        if (!gone.removed) say(`kept ${wt.path} — ${gone.why}`);
-      }
-    }
+      // **Walked back**, the way `newestWorktree` walks back for the checkout — and for the same
+      // reason, because it is the same gap. `k` counts every ended attempt, so reading only `k - 1`
+      // meant one `stopped` (`hkb down`), `lost` (a reclaim) or pre-run `crashed` attempt in between
+      // silently dropped the briefing: none of those runs a check, none of them writes the column,
+      // and none of them clears `lastSessionId` — so the next attempt resumed the very session the
+      // check refused, with no word of the refusal. It wakes up believing it finished and produces
+      // the same tree, which is the failure mode this briefing exists to prevent.
+      //
+      // The walk stops at the first attempt that had something to say: anything OTHER than those
+      // three either answered the check (a `completed` attempt in between did) or failed for a
+      // reason of its own, and quoting an older failure past it would brief this run against a tree
+      // that no longer exists.
+      //
+      // Null once the Job no longer HAS a check: an operator who cleared it is not asking anybody to
+      // satisfy it, and briefing a worker about a command that will not run again is noise it would
+      // have to act on.
+      /**
+       * Whether this Job has a completion check at all — asked once, and `job.proposes` is half of it.
+       *
+       * A PROPOSING Job changes nothing in the tree. Its output is `proposal.json`, read by the
+       * controller and applied only after a person approves it (ADR-011), so there is no behaviour for
+       * a command to judge and nothing in the checkout for it to judge. Running one anyway did
+       * measurable harm rather than none: a check over an unchanged tree fails, and `nextPhase` puts
+       * `check_failed` AHEAD of the gate — so the Job never suspended for approval, went round the
+       * retry loop instead, and stored the same proposal three times for three paid sessions and zero
+       * Jobs filed. `hkb new --propose --check` is refused by name (`src/hkb.ts`); this is the same
+       * rule for a check the BOARD supplied, which nobody typed on that Job at all.
+       */
+      const runsCheck = !!spec.check.value && !job.proposes;
+      // A previous attempt that finished and whose check a stop cut short: the resumed session is
+      // told so, and told that its declared results are per attempt — the ones it wrote last time
+      // were read and are on that attempt; this attempt owes its own.
+      const interruptedBefore = k > 1 && runsCheck ? await checkWasInterrupted(db, job.id, job.lastSessionId) : false;
+      const priorCheck = k > 1 && runsCheck
+        ? await lastRefusedCheck(db, job.id, k, job.lastSessionId)
+        : null;
 
-    if (decision.phase === 'succeeded') report.succeeded.push(job.id);
-    else if (decision.phase === 'failed') report.failed.push(job.id);
-    else if (decision.phase === 'suspended') report.suspended.push(job.id);
-    else if (decision.outcome === 'stopped') report.stopped.push(job.id);
-    else report.retrying.push(job.id);
-    say(`${decision.phase.padEnd(9)} ${decision.outcome}${decision.resumable ? ' (resumable)' : ''}`);
+      // ---- the results this attempt is asked for, and the directory it writes them to. Created
+      // before the run because the paths go into the prompt; outside every checkout, so writing one
+      // cannot land in the worker's diff (`src/results.ts`).
+      const wantedNames = declaredResults(job.results);
+      const wantedResults = wantedNames.length ? resultPaths(job.id, k, wantedNames) : {};
+      // Always made, even when nothing is declared: a run may volunteer a value nobody asked for, and
+      // it needs somewhere to put it. The brief only names paths for the DECLARED ones — a volunteered
+      // value is the worker's own idea, and telling it where the directory is would make it an
+      // invitation, which is a different feature.
+      ensureResultsDir(job.id, k);
+
+      // ---- the artifacts this attempt is asked for. Same two rules as results — declared names get
+      // a path in the prompt, and the directory is made either way so a run may volunteer — and one
+      // difference that is the point of the channel: nothing here is capped, and nothing here is
+      // removed (ADR-011, `src/artifacts.ts`).
+      //
+      // A PROPOSING Job rides the same channel under a name the controller fixes rather than the Job
+      // (`proposal.json`), and it is deliberately NOT added to the declared list: `withProposal` names
+      // that path itself with the schema beside it, and the validator's own refusal covers the missing
+      // file, so declaring it too would mean two code paths saying the same no.
+      const wantedArtifactNames = declaredArtifacts(job.artifacts);
+      const wantedArtifacts = wantedArtifactNames.length ? artifactPaths(job.id, k, wantedArtifactNames) : {};
+      const proposalPath = job.proposes ? artifactPaths(job.id, k, [PROPOSAL_ARTIFACT])[PROPOSAL_ARTIFACT] : null;
+      ensureArtifactsDir(job.id, k);
+
+      // ---- the plugin grants: the directories whose skills this worker may see. A directory that
+      // has gone is dropped rather than fatal — a board outlives the directories it names, and a Job
+      // that cannot run because a skill directory was deleted is a worse failure than one that runs
+      // without it. Said out loud, because a worker silently missing what it was granted is the same
+      // class of bug as a silently inert guard.
+      const granted = resolvePlugins(cwd, spec.pluginPaths.value);
+      const grantedPlugins = granted.paths.length ? granted.paths : undefined;
+      if (granted.dropped.length) say(`granted plugin path${granted.dropped.length === 1 ? '' : 's'} not found: ${granted.dropped.join(', ')}`);
+      // ---- the declared INPUTS, resolved before anything is spent. ADR-008 said what a Job produces
+      // and left what it consumes as one static string; this is the other half
+      // (`src/inputs.ts`, `docs/workflow-study.md` §7).
+      //
+      // Against `cwd` — the board's repository — and never the worktree, for the same reason a plugin
+      // grant is: the worktree carries this Job's own edits on a resumed attempt, and a Job that fed
+      // itself its own output would be reading a different document each time it woke up.
+      const wantedInputs = declaredInputs(job.inputs);
+      const readInputs: ResolvedInput[] = [];
+      const unread: { name: string; source: string; why: string }[] = [];
+      for (const want of wantedInputs) {
+        const source = describeSource(want);
+        // A literal, supplied at file time. Nothing to fetch and nothing that can fail. One that was
+        // interpolated into the brief is not here at all — `hkb new` drops it once consumed.
+        if ('value' in want) { readInputs.push({ name: want.name, source, text: want.value }); continue; }
+        const vf = want.valueFrom;
+
+        // The downward API. `fieldRef` lets a Pod read its own metadata; this lets a Job read its own,
+        // and `slot` is the field that earns it: the only fact answering "which of the concurrent
+        // workers am I", which is what a run picking a port or a database name needs.
+        if ('jobRef' in vf) {
+          const self: Record<string, string | null> = {
+            id: String(job.id),
+            name: job.name,
+            board: boardSlug,
+            attempt: String(k),
+            slot: String(slot),
+            branch: wt?.branch ?? null,
+            worktree: wt?.path ?? null,
+            repo: cwd,
+          };
+          const got = self[vf.jobRef.field];
+          // Null is a real answer for `branch` and `worktree` on an un-isolated Job, and a Job that
+          // declared one has asked for something that does not exist here. Refused rather than
+          // rendered empty, which is the same rule every other declaration follows.
+          if (got == null) {
+            unread.push({ name: want.name, source, why: `this Job has no \`${vf.jobRef.field}\`${vf.jobRef.field === 'branch' || vf.jobRef.field === 'worktree' ? ' — it is running without a worktree (`--no-isolate`)' : ''}` });
+          } else {
+            readInputs.push({ name: want.name, source, text: got });
+          }
+          continue;
+        }
+
+        if ('board' in vf) {
+          // One board read, no model, and the projection `hkb ls` already computes — ADR-010 decision
+          // 5's "board arithmetic". Every OTHER Job on this board, so a Job reasoning about the board
+          // is not confused by finding itself listed as `running`.
+          const others = await db.job.findMany({
+            where: { boardId: job.boardId, id: { not: job.id } },
+            orderBy: { id: 'asc' },
+            select: {
+              id: true, name: true, phase: true, exports: true, results: true, artifacts: true,
+              _count: { select: { attempts: true } },
+              attempts: { select: { prUrl: true, outcome: true }, orderBy: { k: 'desc' }, take: 1 },
+            },
+          });
+          const rows: BoardRow[] = others.map((o) => ({
+            id: o.id,
+            name: o.name,
+            phase: o.phase,
+            attempts: o._count.attempts,
+            lastOutcome: o.attempts[0]?.outcome ?? null,
+            producedNothing: o.phase === 'succeeded' && !o.attempts[0]?.prUrl
+              && !declaredExports(o.exports).length && !declaredExports(o.results).length
+              && !declaredExports(o.artifacts).length,
+          }));
+          readInputs.push({ name: want.name, source, text: renderBoard(rows) });
+          continue;
+        }
+
+        const got = readFileInput(cwd, vf.file.path);
+        if ('why' in got) unread.push({ name: want.name, source, why: got.why });
+        else readInputs.push({ name: want.name, source, text: got.text });
+      }
+      // ---- the contributor guide, if the operator granted one (ADR-013). Read from the board's
+      // repository like an input and for the same reasons — the worktree carries this Job's own edits,
+      // and a worker that could write the guide its next attempt obeys would be steering itself.
+      //
+      // A guide that cannot be read fails the attempt in the same breath as an input that cannot,
+      // because the failure is the same shape: a Job told to follow rules it was never given runs
+      // without them, and that is worse than not running.
+      let guide: { text: string; files: string[] } | null = null;
+      let guideShortfall: string | null = null;
+      if (spec.guide.value) {
+        const got = readGuide(cwd, spec.guide.value);
+        if ('why' in got) guideShortfall = missingGuide(job.id, got.why);
+        else {
+          guide = got;
+          say(`guided by ${got.files.join(' + ')} (${Buffer.byteLength(got.text)} bytes)`);
+        }
+      }
+
+      // One shortfall, and the first cause found is the one reported — the same precedence rule the
+      // declared outputs use, for the same reason: two concatenated reasons read worse than one and
+      // send the operator to the same place.
+      const inputShortfall = missingInputs(job.id, unread) ?? guideShortfall;
+      if (inputShortfall) deps.onEvent?.(`  ${inputShortfall}`);
+
+      // ---- run. A resumable stop leaves a session id; the next attempt continues it rather than
+      // starting cold, which is the whole reason that column exists.
+      // What the worker is told about its base, and every clause of it is load-bearing.
+      //
+      // `rebaseOnto` — omitted for a RESUMED attempt, which lands in a checkout whose branch is
+      // already on the remote: rebasing there makes its next push non-fast-forward, and the
+      // protocol's own next rule forbids the force that would fix it. The step would have no legal
+      // ending, and a worker in that position reports a failed push and often skips the pull request.
+      // The controller rebases that case itself after the run instead.
+      //
+      // `fetch` — false when the base is an attempt branch, because a worktree shares its parent's
+      // ref store and `git fetch origin kb-33-1` there updates `refs/remotes/origin/kb-33-1`, which
+      // is the ref `--force-with-lease` compares against for Job 33's own push. `fetchBase` refuses
+      // that fetch; a prompt that asks the worker to make it hands the protection straight back, and
+      // that is the third time this exact hole has been opened from a different direction.
+      //
+      // `prBase` — whenever the Job named a base at all. A pull request opened with no `--base`
+      // targets the repository's default branch, so a chain step's diff would carry its parent's
+      // commits and merging it would merge the parent's unreviewed work into the trunk. The rebase
+      // keeps the branch on the right base; only this keeps the review on it.
+      const baseBranch = wt ? wt.baseLabel.replace(/^origin\//, '') : null;
+      const baseAdvice = wt
+        ? {
+          rebaseOnto: pushedRef(cwd, wt.branch) ? undefined : wt.baseLabel,
+          fetch: !(baseBranch && isAttemptBranch(baseBranch)),
+          prBase: spec.base.value && baseBranch ? baseBranch : undefined,
+        }
+        : undefined;
+      // The pull-request protocol, or the sandbox note, or neither. A PROPOSING Job produces no
+      // commit, so telling it to open a draft pull request contradicts the contract appended below —
+      // one prompt saying both "push what you have" and "write the file and stop" is not an
+      // instruction. It still needs to know it is standing in a worktree, which is what `withWorktree`
+      // says and all it says.
+      const opening = approvalPrompt
+        ?? (wt ? (job.proposes ? withWorktree(job.brief, wt.branch) : withProtocol(job.brief, wt.branch, baseAdvice)) : job.brief);
+      // What the last attempt's check refused, on top of whatever this attempt was going to be told.
+      // ADR-016 §3 makes the check part of the completion condition, so a resumed attempt that is not
+      // told about it is one that wakes up believing it finished — the retry-that-does-not-know-why
+      // this project has already measured (`docs/rebuild-plan.md`). Composed rather than substituted,
+      // unlike `approvedPrompt`: the work has not changed, only what is now known about it.
+      //
+      // The command it names is `spec.check.value` — what will judge THIS attempt — and not the one
+      // on the record, which is what judged the last one. `hkb job set --check 'npm run lint'` then
+      // `hkb retry` briefed the worker to make `npm test` exit 0 while `npm run lint` decided; when
+      // the two differ `withCheckFailure` says so rather than silently substituting, because the tail
+      // below it is still the old command's output and a worker reading them as one thing would be
+      // debugging the wrong failure.
+      const briefed = priorCheck
+        ? withCheckFailure(opening, priorCheck, spec.check.value as string)
+        : opening;
+      // The guide goes in FRONT of all of it, including an approval prompt: an approver's instruction
+      // is the most recent word on what to do, and the repository's rules are the standing word on how
+      // anything here is done. Neither replaces the other.
+      // The three rules every worker gets (ADR-014), between the task and the output contracts. Not
+      // conditional on anything: a rule that reaches only some Jobs is one nothing can rely on, and
+      // that includes a resumed attempt carrying an approver's instruction.
+      const ruled = withStandingRules(briefed);
+      const guided = guide ? withGuide(ruled, guide.text, spec.guide.value as string) : ruled;
+      // The completion condition the worker is going to be judged against, told to it BEFORE it is
+      // judged. `spec.check.value` used to reach a prompt only through `withCheckFailure` — that is,
+      // only after an attempt had already failed on it — so the ordinary shape of a checked Job was:
+      // the worker runs `npm test`, pushes, ends green, the check fails on the lint half, and a whole
+      // paid session goes on a one-line fix it would have made for free. It sits with the declared
+      // outputs because it IS one, in ADR-016 §3's sense.
+      //
+      // Not a hole in the fence. The fence is about who AUTHORS the command — the row, never the
+      // worktree (`src/check.ts`) — and telling a worker the string changes nothing about that: the
+      // retry prompt has always disclosed it verbatim, and a worker cannot edit the row it comes from.
+      // Skipped when `withCheckFailure` already carries it, which says the same thing at more length.
+      const contracted = withArtifacts(withResults(guided, wantedResults), wantedArtifacts);
+      // And not to a PROPOSING Job, which none of this applies to: no check runs for one (see the
+      // check block below), so a line telling it that a command must exit 0 in its checkout would be
+      // asking for work it is not going to do and nothing is going to judge.
+      const told = runsCheck && !priorCheck
+        ? withCheck(contracted, spec.check.value as string, interruptedBefore)
+        : contracted;
+      const asked = withInputs(told, readInputs);
+      const prompt = proposalPath && !approvalPrompt
+        ? withProposal(asked, proposalPath, spec.maxBudgetUsd.value ?? null)
+        : asked;
+
+      outcome = inputShortfall ? null : await deps.runtime
+        .run({
+          taskId: job.id,
+          attempt: k,
+          cwd: wt ? wt.path : cwd,
+          // Derived from the checkout we actually made, not from `job.isolate`, so it cannot
+          // disagree with `cwd` above. The runtime turns it into the subagent isolation policy: a
+          // Job running in the operator's tree has no worktree to bring a subagent's work back to.
+          isolated: wt !== null,
+          // `withProtocol` is the PULL REQUEST protocol and needs a branch, so it is for an isolated
+          // Job only. Results are the opposite case — they matter most to a Job that produces no
+          // commit — so they are appended either way.
+          // What this attempt is asked to do. Normally the brief; after an approval, the approver's
+          // own instruction — which is the whole of ADR-010 decision 4. A resumed attempt otherwise
+          // re-sends the same brief, so an approved Job would propose again instead of applying.
+          //
+          // A PROPOSING Job gets the proposal contract on top, last, so it is the final thing the
+          // worker reads — and never over an approval prompt: an approved proposal is applied by the
+          // controller, so a worker asked to propose again would be proposing on top of rows that
+          // already exist.
+          prompt,
+          // All four from the resolved spec: a Job that named none of them still has to run on
+          // something, and the board is now allowed to be the one that says what.
+          model: spec.model.value ?? undefined,
+          effort: spec.effort.value ?? undefined,
+          maxTurns: spec.maxTurns.value,
+          maxBudgetUsd: spec.maxBudgetUsd.value,
+          // The tool surface, resolved like everything else. Undefined — not null — when nobody
+          // named one, because `WorkerSpec.allowedTools` is optional and the runtime's own default
+          // is what an absent value means. The admission gate is built from this same list
+          // (`src/runtime/claude.ts`), so narrowing it here is what actually refuses.
+          allowedTools: spec.allowedTools.value ?? undefined,
+          // Resolved against the BOARD'S REPOSITORY (`cwd` above), never the worktree — ADR-012,
+          // `src/plugins.ts`. A worker writes in its worktree, so a grant that resolved there would
+          // let a Job write a hook its own next attempt executes. Against the repository, a merge is
+          // the only way to change what a grant loads.
+          plugins: grantedPlugins,
+          timeoutMs: job.timeoutMs,
+          resume: job.lastSessionId ?? undefined,
+          signal: deps.signal,
+        }, deps.onRuntimeEvent)
+        .catch((): null => null);
+
+      // ---- EVERYTHING FROM HERE IS UNDER `finally`, and the reason is the renewer above it.
+      //
+      // The `clearInterval` and the fenced release used to be the last two statements of a section
+      // about three hundred lines long, reached only on the way through — so any throw between the
+      // runtime call and them (a `SQLITE_BUSY` on the fence read, an fs error in `collectResults`, a
+      // `runCheck` that rejected before it was made not to) left the renewer ticking for the rest of
+      // the daemon's life, pushing a Lease row forward every leaseMs/3 for a run that had ended. The
+      // Job stayed `running`, `reclaimExpired` never saw an expired lease to take, `whileUnleased`
+      // refused `hkb cancel` and `hkb rm` because a Lease row existed, and nothing on the machine
+      // could end it short of deleting the row by hand. Measured: a three-second lease still
+      // advancing minutes after the pass had thrown.
+      //
+      // A lease is a claim with a deadline, and a claim whose holder has stopped must lapse. That is
+      // a property of the release, not of the happy path reaching it — so the release IS the finally,
+      // and the catch closes the attempt with what went wrong rather than leaving a row open.
+      // ---- still ours? A cheap fenced READ, before anything CONTENDED is touched.
+      //
+      // The lease used to be deleted at this point; it is now held to the end and released after the
+      // outcome is recorded — see the release for why. This read is the early half of that: the
+      // renewer only notices a lost lease on its own timer (a third of the lease), and the blocks
+      // below write to the repository, the remote and the checkout. One `findUnique` buys them the
+      // answer now rather than up to twelve minutes from now.
+      const held = await db.lease.findUnique({ where: { jobId: job.id }, select: { token: true } });
+      if (held?.token !== token) heldToTheEnd = false;
+
+      // The operator's intent outranks whatever the runtime made of being cut off. A stopped run
+      // reports `timeout` or `error` depending on where the abort landed, and recording either would
+      // be a lie about why it ended AND would spend a retry on it.
+      // `let`, because one thing may still change it after the fact: a stop that lands while the
+      // completion check is in flight. See the check block below.
+      let ran: Decision = inputShortfall
+        // Terminal, and not retried, for the reason a missing declared OUTPUT is not: the same read
+        // fails identically next time. `hkb retry` is the deliberate second go, once a human has read
+        // which input is missing and decided whose mistake it was.
+        ? { phase: 'failed', outcome: 'no_input', resumable: false, lastError: inputShortfall }
+        : deps.signal?.aborted
+        ? { phase: 'pending', outcome: 'stopped', resumable: true, lastError: null }
+        // Both from the resolved spec, so the budget advice names the cap this attempt actually ran
+        // under — which may be the board's. Quoting the raw column would print `$0.00` and send the
+        // operator to raise a limit that was never the one they hit.
+        : nextPhase(outcome, charged, spec.maxRetries.value, spec.maxBudgetUsd.value);
+
+      // ---- the declared outputs, out of the sandbox BEFORE it is torn down. The order is the whole
+      // design: a worktree is the pod filesystem and dies with the run, so an artifact still inside it
+      // when the checkout goes was never produced. ADR-008, and Bazel's rule verbatim — move the known
+      // outputs to the execroot, then delete the sandbox.
+      //
+      // Only after a run that otherwise succeeded. A crashed or capped attempt has not finished the
+      // work, so half its outputs being absent is a description of the stop it already reported, not a
+      // second finding; and copying what it did leave would overwrite the repository from a run
+      // nobody is going to accept.
+      const declared = declaredExports(job.exports);
+      let exported: string[] | null = null;
+      let shortfall: string | null = null;
+      // `heldToTheEnd` gates it for the same reason it gates the Job row: the repository is contended
+      // state too, and a holder that lost its lease mid-run must not write into a checkout the new
+      // holder is working in. Its worktree is kept below, so the artifact is not destroyed either.
+      //
+      // **Two halves, and the split is the point.** Asking whether the declared paths are there is a
+      // question about the run and it is asked HERE, where its answer still outranks everything after
+      // it — a missing declared output is the cheaper cause and it must keep winning over a check
+      // that would take ten minutes to report a second one. COPYING them into `Board.repoPath` is a
+      // write into the operator's repository, and that waits until the attempt is known to have
+      // passed: it ran ~150 lines above the check, so an attempt the check went on to REFUSE had
+      // already put its files in the operator's tree, which is exactly what this block's own rule
+      // forbids. The copy is below the check.
+      let exportPlan: string[] | null = null;
+      if (declared.length && ran.phase === 'succeeded' && heldToTheEnd) {
+        // `[]` from here, and the copy below replaces it with what actually landed. A Job that
+        // declared outputs and handed none over records the empty list rather than null — "produces
+        // no file" and "produced none of the files it promised" are different facts, and that stays
+        // true of an attempt the check refused as much as of one that never wrote them.
+        exported = [];
+        try {
+          const got = exportOutputs(wt ? wt.path : cwd, cwd, declared, { copy: false });
+          exportPlan = got.exported;
+          if (got.missing.length) shortfall = missingOutputs(job.id, got.missing);
+        } catch (e) {
+          // An illegal declaration — escaping, absolute, or a symlink out of the checkout. It is a
+          // fault in the Job's spec rather than in the run, and it stops the copy dead: nothing is
+          // written outside the repository on the strength of a path we refused.
+          shortfall = (e as Error).message;
+        }
+        if (shortfall) deps.onEvent?.(`  ${shortfall}`);
+      }
+      // ---- the declared RESULTS, read back before the collection directory goes. Same rule, same
+      // gate, different medium: `exports` are files the repository keeps, results are values the
+      // board keeps. A Job with no branch and no commit produces its work here or nowhere.
+      let produced: Record<string, string> | null = null;
+      if (ran.phase === 'succeeded' && heldToTheEnd) {
+        const got = collectResults(job.id, k, wantedNames);
+        // Null, not `{}`: a run that wrote nothing has no fact to record, and the column already
+        // distinguishes those two the way `exported` does.
+        produced = Object.keys(got.produced).length ? got.produced : null;
+        const owed = missingResults(job.id, got.missing, got.oversize);
+        // The export shortfall keeps precedence — it was found first, and reporting one cause is
+        // more use than concatenating two.
+        if (owed && !shortfall) shortfall = owed;
+        if (owed) deps.onEvent?.(`  ${owed}`);
+        else if (Object.keys(got.produced).length) {
+          // Volunteered names are named as such: an operator reading the log should be able to tell
+          // what the board required from what the run decided to add.
+          const extra = got.volunteered.length ? ` (${got.volunteered.length} volunteered)` : '';
+          deps.onEvent?.(`  produced ${Object.keys(got.produced).map((n) => `\`${n}\``).join(', ')}${extra}`);
+        }
+      }
+      // Removed whatever happened: the values are durable because they are on the Attempt row, not
+      // because the file survives, and a directory kept after a failure is litter nobody reads.
+      clearResults(job.id, k);
+
+      // ---- the declared ARTIFACTS. Same rule and same gate again; the differences are that nothing
+      // is read (a catalogue goes onto the row, the file stays where the worker put it) and that the
+      // directory SURVIVES — for a failed attempt too, because a partial output is usually the most
+      // informative thing a failure leaves, and it is the only copy (ADR-011, `src/artifacts.ts`).
+      let artifacts: { name: string; kind: string; bytes: number }[] | null = null;
+      if (ran.phase === 'succeeded' && heldToTheEnd) {
+        const got = collectArtifacts(job.id, k, wantedArtifactNames);
+        artifacts = got.produced.length ? got.produced : null;
+        const owed = missingArtifacts(job.id, got.missing);
+        // Same precedence rule as results: the first cause found is the one reported, because two
+        // concatenated shortfalls read worse than one and mean the same thing.
+        if (owed && !shortfall) shortfall = owed;
+        if (owed) deps.onEvent?.(`  ${owed}`);
+        else if (got.produced.length) {
+          const extra = got.volunteered.length ? ` (${got.volunteered.length} volunteered)` : '';
+          deps.onEvent?.(`  kept ${got.produced.map((a) => `\`${a.name}\` ${bytes(a.bytes)}`).join(', ')}${extra}`);
+        }
+      }
+      // Only when it is empty, which is the common case: every attempt gets a directory because the
+      // path goes into the prompt, and a Job that declared nothing and volunteered nothing must not
+      // leave one behind per attempt for ever.
+      clearEmptyArtifacts(job.id, k);
+
+      // ---- the PROPOSAL, if this Job makes one. Read and refused here, applied nowhere near here:
+      // what the controller does now is decide whether the file is something a person could approve,
+      // and store it if it is (ADR-011, `src/proposals.ts`).
+      //
+      // A refusal fails the attempt the same way a missing declared output does, and for the same
+      // reason — the Job promised something and what arrived was not it. The message is the parser's
+      // own, naming the offending path, because the next reader is either a human deciding whose
+      // mistake it was or a retried run that can act on it.
+      let proposal: Proposal | null = null;
+      if (job.proposes && ran.phase === 'succeeded' && heldToTheEnd && !shortfall) {
+        const checked = readProposal(job.id, k, spec.maxBudgetUsd.value ?? null);
+        if ('why' in checked) {
+          shortfall = `#${job.id} proposed something the board refused: ${checked.why}`;
+          deps.onEvent?.(`  ${shortfall}`);
+        } else {
+          proposal = checked;
+          say(`proposes ${checked.jobs.length} Job${checked.jobs.length === 1 ? '' : 's'}`);
+          // Said out loud rather than recorded quietly: a number that was quietly reduced is a number
+          // the approver would otherwise read as the one that was asked for.
+          for (const c2 of checked.clamped) say(`  ${c2}`);
+        }
+      }
+
+      // ---- what landed on the forge. One read, by head branch: the board and the forge are two
+      // systems and this is the only thing that joins them.
+      // Fenced on the JOB, not on this attempt. A pull request that existed before the Job did
+      // cannot be its output — that is the stale-branch case, where a name this database invented
+      // was already taken on the remote. But one opened by an EARLIER ATTEMPT of this Job is very
+      // much its output: a resumed attempt continues onto the same branch, which is the whole point
+      // of resuming, and dating the fence from the attempt made a Job lose the pull request it had
+      // already opened. Measured: #12 opened PR 366 at 12:41 on attempt 1 and recorded null at 13:39
+      // on attempt 2.
+      const pr = wt && deps.readPr !== false ? prForBranch(cwd, wt.branch, job.createdAt) : null;
+      if (pr) say(`${pr.isDraft ? 'draft ' : ''}PR #${pr.number} ${pr.url}`);
+      // Said out loud. A run that committed and pushed but opened no pull request has produced
+      // something a human still has to find, and silence here is what let job #4 look finished.
+      else if (wt && deps.readPr !== false) say(`no pull request on ${wt.branch}`);
+
+      // ---- the base moved under it. The cheap half of `docs/rebuild-plan.md` item 10: replay the
+      // attempt's branch onto the base as it is NOW, and push if the worker already pushed
+      // (`src/rebase.ts`). In the common case the brief has already had the worker do it and this is
+      // one `merge-base` that reports `current`.
+      //
+      // Placed AFTER the collection blocks on purpose. A conflict is a fact about the branch, not
+      // about the work: the results and artifacts an attempt produced are a durable record of what
+      // happened and are worth keeping whether or not its diff still applies. It is placed BEFORE the
+      // gate for the opposite reason — nobody should be asked to approve a diff that no longer sits
+      // on what they would merge it into — and after the forge read, which is what says whether a
+      // person is already looking at this branch.
+      //
+      // Gated on `heldToTheEnd` like every other write outside our own attempt row: the branch and
+      // the remote are contended state too, and a holder that lost its lease mid-run must not rewrite
+      // history the new holder's worker is committing onto.
+      let conflicted: string | null = null;
+      /** Kept for the check below: what it is allowed to claim depends on whether this replayed. */
+      let rebased: RebaseResult | null = null;
+      if (wt && ran.phase === 'succeeded' && heldToTheEnd && !shortfall) {
+        // A pull request somebody has taken out of draft is a diff a person is reading, and the
+        // whole safety argument for rewriting an attempt branch was that nobody was. It is checked
+        // rather than asserted now: ADR-010's gate suspends an attempt *precisely* so a human
+        // reviews, and the approved attempt would otherwise have force-pushed out from under their
+        // comments. No pull request read (`--json` tests, no forge) means nothing says otherwise.
+        const r = rebaseOntoBase(cwd, wt, { mayRewrite: !pr || pr.isDraft });
+        // A base that could not be REFRESHED is not a base to make claims about: the tree may contain
+        // `origin/main` as this clone last saw it and still not contain what would merge. So the
+        // honest answer for the check below is the conjunction, not `r.onBase` alone.
+        rebased = { ...r, onBase: r.onBase && !r.staleBase };
+        const owed = rebaseShortfall(job.id, wt, r);
+        const note = rebaseNote(job.id, wt, r);
+        if (note) say(`  ${note}`);
+        if (owed) {
+          conflicted = owed;
+          shortfall = owed;
+          say(`  ${owed}`);
+        } else if (r.kind === 'rebased') {
+          // `wt.base` moved with it, inside `rebaseOntoBase` — the sweep below counts from it.
+          say(`  rebased onto ${r.label} ${r.onto.slice(0, 7)}${r.pushed ? ' and force-pushed (lease held)' : ''}`);
+        }
+      }
+
+      // ---- the completion CHECK: the exit code hkb does not have (ADR-016 §3, `src/check.ts`).
+      //
+      // Nothing runs at the shipped defaults — `BUILT_IN.check` is null, so this whole block is a
+      // null test on a board nobody has configured, which is the property the tests hold.
+      //
+      // **After the rebase, and after its push.** Two reasons, and both of them are about agreement:
+      // it must test what would actually MERGE rather than what the branch was cut from, and the tree
+      // it runs in has to agree with what is on the remote — `src/rebase.ts` explains why a tree ahead
+      // of its branch strands the next attempt, and a check that ran before the replay would be
+      // reporting on a tree the resumed attempt never sees. It runs in the worktree, or in the
+      // repository itself for a `--no-isolate` Job, which is the same "where the work happened" either
+      // way.
+      //
+      // Gated exactly like the rebase above it: only a run that otherwise succeeded, only while we
+      // still hold the lease (this executes a command in a checkout, and a checkout a new holder is
+      // working in is not ours to touch), and only when nothing has already failed the attempt —
+      // running a suite over a tree that is missing a declared output would spend ten minutes to
+      // report a second cause for a failure that already has one.
+      //
+      // **The lease is HELD while this runs**, and it is `heldToTheEnd` that says so honestly now: the
+      // renewer is still ticking, the Lease row is still ours, and the release is at the far end of
+      // this function after the outcome is on the row. A ten-minute command with the claim already
+      // dropped is a ten-minute hole in which the Job is `running` with no lease — see the release.
+      //
+      // And it is awaited rather than blocking: `runCheck` is an async `spawn` that kills its process
+      // GROUP on the timeout and honours `deps.signal`, so `hkb down` interrupts it, sibling workers
+      // keep running, and a suite that outlives its shell does not outlive the check.
+      //
+      // Not for a PROPOSING Job — see `runsCheck`, which is where that is argued.
+      let failedCheck: CheckRecord | null = null;
+      /**
+       * Whether the RUN produced everything it promised, decided before the check could change `ran`.
+       *
+       * The blocks below need "did the work succeed" and not "is `ran` still `succeeded`", because a
+       * stop landing mid-check moves `ran` back to `pending` and that is a fact about the *stop*, not
+       * about the run. Without it, an attempt whose declared exports were all present recorded
+       * `exported: []` — the probe said they were there and the copy was skipped by a phase the stop
+       * had already changed.
+       */
+      const runSucceeded = ran.phase === 'succeeded';
+      if (runsCheck && ran.phase === 'succeeded' && heldToTheEnd && !shortfall) {
+        // Which base the tree was on, recorded rather than assumed. The rebase legitimately declines
+        // (a pull request out of draft) or runs against a base it could not refresh, and the check
+        // then judges a tree that is NOT what would merge — true, harmless, and not something to be
+        // quiet about. `undefined` for a Job with no worktree: nothing was replayed, so there is no
+        // claim to qualify.
+        const on = wt && rebased ? { onBase: rebased.onBase, base: wt.baseLabel } : undefined;
+        say(`  check ${spec.check.value}${on && !on.onBase ? ` — on the tree as it stands, NOT replayed onto ${on.base}` : ''}`);
+        const r = await runCheck(wt ? wt.path : cwd, spec.check.value as string, { signal: deps.signal });
+        // A stop that landed mid-check is the operator's intent, and it outranks a verdict the
+        // command never got to give: `runCheck` killed it, so what came back describes our own
+        // interruption. Recording `check_failed` for it would burn a retry on `hkb down`.
+        //
+        // **And it relabels nothing about the RUN.** This used to write `stopped` over `ran`, which
+        // is a claim about a session that had already finished, produced everything it declared and
+        // had its results read back and their collection directory deleted — so the resumed attempt
+        // could not re-produce them, ended `no_output`, and went terminal. The Job was destroyed by
+        // pressing Ctrl-C during its test suite.
+        //
+        // What is true is narrower and is all that is recorded: the run COMPLETED, the check was
+        // interrupted, and the check has not been answered. So the outcome stays what the run earned,
+        // the phase goes back to `pending` so the check is run again, the session is kept, and no
+        // retry is burnt — `nextPhase` is not consulted at all, because there is no failure here for
+        // it to decide about.
+        // From the RECORD, not from `deps.signal.aborted`: the verdict is frozen at `exit`, so an
+        // abort landing in the drain window leaves a real exit status behind it, and that status
+        // — not the stop — is the answer. Asking the signal re-ran a session whose check had passed.
+        if (r.interrupted) {
+          say('  check interrupted by the stop — the run stands, and the check runs again');
+          checkInterrupted = true;
+          ran = { phase: 'pending', outcome: ran.outcome, resumable: true, lastError: null };
+        } else if (!r.ok) {
+          failedCheck = { ...r.record, ...on };
+          say(`  ${describeCheck(failedCheck)}`);
+        }
+      }
+
+      // ---- the declared outputs, COPIED — the second half of the block above, and the last thing
+      // that happens before the outcome is decided.
+      //
+      // Re-planned rather than trusting the probe: the check ran in this tree between the two, and a
+      // command that deletes what the run produced has changed the answer. That is a shortfall like
+      // any other and it is found here rather than reported as a successful export of nothing.
+      //
+      // **Gated on the CHECK, and on nothing else that failed.** Moving the copy down here to sit
+      // after the check quietly took the shortfall with it, which changed the shipped-default rule:
+      // an export that IS present stopped being delivered because a *different* declared output was
+      // missing, or because the rebase conflicted — and in the conflict case the attempt is not
+      // resumable, so nothing ever delivers it. The rebase block one screen up already states the
+      // principle it broke: what an attempt produced "is a durable record of what happened and is
+      // worth keeping whether or not its diff still applies". The check is the one exception, and it
+      // is the only reason this block moved: an attempt a check went on to REFUSE must not have
+      // already written into the operator's repository.
+      //
+      // A stop that landed mid-check copies too, and `runSucceeded` is what says so: the run finished
+      // and produced what it promised, the check gave no verdict either way, and the alternative is
+      // recording `exported: []` about files the probe had just seen. The resumed attempt re-runs the
+      // check and copies again, which is a no-op over identical bytes.
+      // ... and a check that was INTERRUPTED withholds it too: nothing verified this tree, and a
+      // copy made now is one the next attempt's check may refuse with no way to take it back.
+      if (exportPlan && runSucceeded && heldToTheEnd && !failedCheck && !checkInterrupted) {
+        let owed: string | null = null;
+        try {
+          const got = exportOutputs(wt ? wt.path : cwd, cwd, declared);
+          exported = got.exported;
+          if (got.missing.length) owed = missingOutputs(job.id, got.missing);
+          else if (exported.length) deps.onEvent?.(`  exported ${exported.length} path${exported.length === 1 ? '' : 's'} into ${cwd}`);
+        } catch (e) {
+          owed = (e as Error).message;
+        }
+        // Reported once, and only when it is news: the probe above found the same missing paths a
+        // moment ago and already said so, and the first cause found keeps precedence over this one
+        // exactly as results and artifacts do.
+        if (owed && !shortfall) {
+          shortfall = owed;
+          deps.onEvent?.(`  ${owed}`);
+        }
+      }
+
+      // ---- the run is over and nothing else will touch the checkout, so the renewer stops — one
+      // line before the claim is verified, so the value it was maintaining is not moving under the
+      // read that follows.
+      //
+      // **Verify, write, delete.** The lease used to be deleted as soon as the runtime returned,
+      // which left the Job `running` with no Lease row and an attempt still open for as long as the
+      // rebase, the check and these writes took — up to ten minutes with a check in the middle. Every
+      // verb that looks into that window got a wrong answer: `hkb cancel` was accepted (`whileUnleased`
+      // refuses only when a Lease row EXISTS) and then silently undone by the outcome written below;
+      // `hkb rm` cascaded the rows away and turned the `attempt.update` into a P2025 that aborted the
+      // whole pass; and a daemon killed in there stranded the Job for ever, because `reclaimExpired`
+      // scans Lease rows and there was none to find.
+      //
+      // The argument that put a fence here is unchanged and still right — a stale holder finishing
+      // late must not remove the NEW holder's claim, and the token is what tells the two apart. Only
+      // its shape moves: the token is READ here and the row is deleted at the far end, once the
+      // outcome is recorded. The count of that delete used to be what said whether we might write;
+      // this read says it instead, and says it while the claim is still live.
+      clearInterval(renewer);
+      const stillHeld = await db.lease.findUnique({ where: { jobId: job.id }, select: { token: true } });
+      if (stillHeld?.token !== token) heldToTheEnd = false;
+
+      // A declared output that is not there fails the attempt, and that rule is what makes the
+      // declaration worth writing down: without it `succeeded` still means only that a session ended.
+      // Not retried — the session's own account is that it finished, so a resumed attempt wakes up
+      // done and a cold one re-buys the same run. `hkb retry <id>` is the deliberate second go, once a
+      // human has read which path is missing and decided whose mistake it was.
+      // ---- the gate. A gated Job that succeeded AND produced everything it declared does not go
+      // terminal: it suspends, and waits for a human, a delegated agent, or an auto-approve policy
+      // (ADR-010). ORDER MATTERS — the ADR-008 shortfall is evaluated first and outranks it, because
+      // a run that did not produce what it promised has nothing worth approving.
+      //
+      // One-shot, and read off the Event stream rather than a flag cleared on use. A re-entrant gate
+      // would delete the Job's completion condition (`prisma/schema.prisma`, `Job.gate`), and a flag
+      // consumed on a transition is wrong after a restart in a controller that is level-triggered.
+      const approved = job.gate && ran.phase === 'succeeded' && !shortfall
+        ? await db.event.count({ where: { jobId: job.id, kind: 'approved' } })
+        : 0;
+      const decision: Decision = failedCheck
+        // Before the gate and before the success, and it cannot collide with the shortfall branch
+        // below because the check only runs when there is no shortfall. A gated Job whose check
+        // failed does not suspend: nobody should be asked to approve a diff the board already knows
+        // does not work, and the answer to it is another attempt rather than a person.
+        ? nextPhase(outcome, charged, spec.maxRetries.value, spec.maxBudgetUsd.value, failedCheck)
+        : shortfall
+        // `conflicted` rather than `no_output` when the branch is the problem, because the two send an
+        // operator to different places: `no_output` is a fault in the work and the answer is another
+        // run, a conflict is the base having moved and the answer is a hand rebase in a checkout that
+        // is still on disk. Not resumable for the same reason a missing output is not — a resumed
+        // worker may not force-push, so it has no move here that a human does not have to make first.
+        ? { phase: 'failed', outcome: conflicted ? 'conflicted' : 'no_output', resumable: false, lastError: shortfall }
+        : job.gate && ran.phase === 'succeeded' && approved === 0
+          ? { phase: 'suspended', outcome: 'completed', resumable: true, lastError: null }
+          : ran;
+
+      await db.attempt.update({
+        where: { jobId_k: { jobId: job.id, k } },
+        data: {
+          endedAt: now(),
+          outcome: decision.outcome,
+          sessionId: outcome?.sessionId ?? null,
+          summary: outcome?.text?.slice(0, 2000) ?? null,
+          // The shortfall wins: when a declared output is missing, that is why this attempt ended as
+          // it did, and the runtime has no error of its own to report — it thinks it succeeded. A
+          // refused check is the same kind of fact and reads the same way in `hkb show`; the tail it
+          // captured is on `check` below rather than crammed into 300 characters of prose.
+          reason: (shortfall ?? (failedCheck ? describeCheck(failedCheck) : null)
+            ?? (checkInterrupted ? CHECK_INTERRUPTED : null) ?? outcome?.error)?.slice(0, 300) ?? null,
+          costUsd: outcome?.costUsd ?? null,
+          // Measured by the runtime, not reported by the agent. An attempt that never reached the
+          // runtime has no measurement rather than a measurement of zero, hence `?? null`.
+          turns: outcome?.turns ?? null,
+          denials: outcome?.denials ?? null,
+          branch: wt?.branch ?? null,
+          prNumber: pr?.number ?? null,
+          prUrl: pr?.url ?? null,
+          // Omitted rather than nulled: a Job that declared nothing has no fact to record here, and
+          // Prisma's Json null needs a sentinel to say which of the two nulls it means.
+          ...(exported ? { exported } : {}),
+          ...(produced ? { results: produced } : {}),
+          ...(artifacts ? { artifacts } : {}),
+          // The catalogue, never the content — that is in the prompt and in the transcript the
+          // session id points at. It is what makes "declared inputs reduce input tokens" a thing this
+          // board can check rather than a thing read in a paper.
+          ...(readInputs.length
+            ? { inputs: readInputs.map((i) => ({ name: i.name, source: i.source, bytes: Buffer.byteLength(i.text) })) }
+            : {}),
+          // What was proposed, as the validator accepted it — beside what was produced, not instead of
+          // it. The raw `proposal.json` stays in the artifact directory, so a reader can line up what
+          // was asked for, what was accepted and (once applied) what was created. A tool call leaves
+          // no such record, which is ADR-011's audit argument in one column.
+          ...(proposal ? { proposal } : {}),
+          // What the check said, when it refused. Nothing for a check that passed and nothing for an
+          // attempt that ran none: a passing check is the absence of a finding, and a row per success
+          // would be a log rather than a record. It is read back by the NEXT attempt, which is the
+          // whole reason it is a column and not a sentence (`prisma/schema.prisma`, `Attempt.check`).
+          ...(failedCheck ? { check: failedCheck } : {}),
+        },
+      });
+
+      // The attempt row is ours whatever happened — it is keyed (jobId, k) and no other holder uses
+      // our k. The JOB row is the contended one, so only a holder that kept its lease may write it.
+      if (!heldToTheEnd) {
+        say('lease was taken mid-run — recording the attempt, leaving the Job alone');
+        await db.event.create({
+          data: { kind: 'lease_lost', jobId: job.id, boardId: job.boardId, actor: host, payload: { k } },
+        });
+        report.skipped.push(job.id);
+        if (wt) removeWorktree(cwd, wt);
+        return;
+      }
+
+      await db.job.update({
+        where: { id: job.id },
+        data: {
+          phase: decision.phase,
+          // Why it is waiting, in the operator's own words — not derivable from any runtime, which is
+          // why the column exists. Cleared on any other transition so a resumed Job does not keep
+          // claiming to be waiting for something that already happened.
+          // A proposing Job says how much it is asking for, because that is the question. The
+          // operator's own `--gate` text stays the fallback, and is all there is until a proposal
+          // has actually been validated.
+          suspendedFor: decision.phase === 'suspended' ? (proposal ? proposalGate(proposal.jobs.length) : job.gate) : null,
+          // Keep the session only while continuing it would help; a cold retry must start clean.
+          // A gate fires on SUCCESS, and `nextPhase` calls a completed run not-resumable — so the
+          // suspended decision sets `resumable: true` itself, which is what keeps the session the
+          // approver's instruction is meant to continue. Without that the session would be discarded
+          // at the exact moment the Job suspends waiting for it.
+          lastSessionId: decision.resumable ? (outcome?.sessionId ?? null) : null,
+          // The decision's own line wins where it has one: for a stop only a human can undo, "what
+          // to change" is worth more than whatever the runtime called it.
+          // Null for a Job that is waiting as well as one that finished. The gate fires only on a
+          // success that produced everything it declared, so there is no error to carry — and the
+          // fallback to `decision.outcome` put the word `completed` in the error column of every
+          // suspended Job, which `hkb show` printed as `error completed`.
+          //
+          // And never the word `completed` for a run that did complete but is `pending` again because
+          // its check was interrupted — there is nothing for a human to change there either.
+          lastError: decision.phase === 'succeeded' || decision.phase === 'suspended' || decision.outcome === 'completed'
+            ? null
+            : (decision.lastError ?? outcome?.error ?? decision.outcome),
+          // Neither pending nor suspended is finished. A suspended Job is waiting on a person, which
+          // is the one state that can last days — stamping it finished would make every "how long did
+          // this take" answer include the time somebody spent deciding.
+          finishedAt: decision.phase === 'pending' || decision.phase === 'suspended' ? null : now(),
+        },
+      });
+
+      // The Job row carries the outcome from here on. A failure past this line — the event write, a
+      // closed log pipe — must not be answered by rewriting rows that are already right.
+      recorded = true;
+
+      await db.event.create({
+        data: {
+          kind: decision.outcome, jobId: job.id, boardId: job.boardId, actor: host,
+          payload: { k, phase: decision.phase, ...(checkInterrupted ? { checkInterrupted: true } : {}) },
+        },
+      });
+
+      // ---- release, LAST, and fenced on the token — in the `finally` at the foot of this
+      // function, which is where it is written and why.
+      //
+      // Last because the Lease row is what tells every other verb that this Job is being worked on:
+      // `whileUnleased` refuses `hkb cancel` and `hkb rm` while it is there, and `reclaimExpired`
+      // finds a dead holder by it. Dropping it before the outcome was written opened a window in
+      // which the Job was `running`, unleased, with an attempt still open — and every one of the
+      // three verbs that looked into that window got a wrong answer. The outcome is now on the row,
+      // so the window is closed, and the release happens on the way out however this ends.
+
+      // ---- tidy. Never forced: a worktree that still holds work is the only copy of it if the
+      // push failed, so it stays and the operator is told where.
+      //
+      // This is not the reclaim path, and it cannot be: a run that just pushed a pull request is at
+      // the one moment its checkout is definitionally still needed. It removes the checkouts that
+      // never held anything; the daemon's sweep removes the rest, once their branches land. A
+      // resumable stop keeps its checkout unconditionally — the next attempt continues *in* it, and
+      // cutting a fresh worktree would reset the branch to base and strand what was already pushed.
+      if (wt) {
+        // A suspended Job keeps its checkout for the same reason a resumable one does: the approved
+        // attempt continues *in* it, and cutting a fresh worktree would reset the branch to base and
+        // strand whatever the propose half already pushed.
+        //
+        // A PROPOSING Job is the exception, and it is the exception because of what approval does to
+        // it: the controller files the rows and nothing ever wakes up in that checkout. Keeping it
+        // costs a whole repository on disk to hold work no session will return to, and the message
+        // said "attempt 2 resumes in it" about an attempt that cannot happen. `removeWorktree` still
+        // refuses to take unpushed commits, so a proposer that committed anyway keeps its tree.
+        const resumesHere = (decision.resumable && decision.phase === 'pending')
+          || (decision.phase === 'suspended' && !job.proposes);
+        if (resumesHere) {
+          unlockWorktree(cwd, wt);
+          say(`kept ${wt.path} — attempt ${k + 1} resumes in it`);
+        } else if (conflicted) {
+          // The checkout IS the fix, and it would otherwise be swept: a branch that conflicts has
+          // normally been pushed, so nothing is unpushed and nothing is dirty, and `removeWorktree`
+          // would take it and the local branch with it. Finding the conflict early is only worth
+          // anything if the tree to resolve it in is still there when the operator reads the message.
+          unlockWorktree(cwd, wt);
+          say(`kept ${wt.path} — rebase it there`);
+        } else if (failedCheck) {
+          // Out of retries with a check that refused: the same argument as the conflict above, one
+          // question over. The tree is where the command can be run again, and the operator's first
+          // move is to run it — sweeping the checkout would make them recreate it to do that.
+          unlockWorktree(cwd, wt);
+          say(`kept ${wt.path} — run \`${failedCheck.command}\` there`);
+        } else {
+          // Everything this Job said it would produce is now in the repository, so whatever is left
+          // in the checkout is undeclared — litter, in ADR-008's sense, and the one case where a
+          // dirty tree is not evidence of work worth keeping. `removeWorktree` still refuses to take
+          // unpushed commits; see the note there for what this waives and what it does not.
+          const gone = removeWorktree(cwd, wt, { exported: !!exported && !shortfall });
+          if (!gone.removed) say(`kept ${wt.path} — ${gone.why}`);
+        }
+      }
+
+      if (decision.phase === 'succeeded') report.succeeded.push(job.id);
+      else if (decision.phase === 'failed') report.failed.push(job.id);
+      else if (decision.phase === 'suspended') report.suspended.push(job.id);
+      else if (decision.outcome === 'stopped' || checkInterrupted) report.stopped.push(job.id);
+      else report.retrying.push(job.id);
+      say(`${decision.phase.padEnd(9)} ${decision.outcome}${decision.resumable ? ' (resumable)' : ''}`);
+    } catch (e) {
+      // Our own plumbing, not the work: the run itself already returns its failures as a
+      // `WorkerOutcome` and never throws (`.catch(() => null)` above). What lands here is a board
+      // write that lost a race, a filesystem that refused, a git invocation that died. The attempt
+      // is closed anyway, because an attempt row left open is a Job that reads as `running` for
+      // ever, and `crashed` is precisely the outcome for "the run did not come back".
+      const why = `#${job.id} the pass failed after the run: ${(e as Error)?.message ?? String(e)}`;
+      // `say` goes through `deps.onEvent`, which is one of the things that can have thrown here —
+      // a log on a closed pipe is `hkb run | head`. A handler that fails while reporting a failure
+      // reports neither.
+      try { say(`  ${why}`); } catch { /* the log is gone; the row below is the durable record */ }
+      // Past the record, the rows are right and the failure is in the reporting of them — a closed
+      // pipe, an event write that lost a race. Rewriting a `completed` attempt as `crashed` and a
+      // `succeeded` Job back to `pending` here bought a second paid session for work already
+      // delivered. Raise it; touch nothing.
+      if (recorded) throw e;
+      report.failed.push(job.id);
+      // Best effort, and each one on its own: `hkb rm` may have cascaded these rows away while the
+      // run was in flight, which is one of the ways to get here in the first place. A throw out of
+      // the handler for a throw would take the whole reconcile pass down with it — which is the
+      // failure being fixed, one level up.
+      const anyway = (p: Promise<unknown>) => p.then(() => {}, () => {});
+      await anyway(db.attempt.update({
+        where: { jobId_k: { jobId: job.id, k } },
+        data: {
+          endedAt: now(),
+          outcome: 'crashed',
+          sessionId: outcome?.sessionId ?? null,
+          reason: why.slice(0, 300),
+        },
+      }));
+      // And the Job comes out of `running`. Level-triggered: the next pass has to be able to pick
+      // this up or leave it alone on the strength of the row alone, and `running` with no live
+      // holder is the one state nothing can act on. Retried if it has retries — the fault was ours
+      // and the same brief may well go through next time — and the session is kept, because it
+      // finished: what failed was the recording of it.
+      //
+      // Only by the holder. The body's own rule — the Job row is the contended one, and a lease
+      // taken mid-run means another holder is writing it now — does not lapse because the path
+      // here is an exception; a stale holder that crashed still has no claim on that row.
+      if (heldToTheEnd) {
+        const retry = charged <= spec.maxRetries.value;
+        await anyway(db.job.update({
+          where: { id: job.id },
+          data: {
+            phase: retry ? 'pending' : 'failed',
+            lastError: why,
+            // What the run reported, or — when the failure was before the run — what was there:
+            // a resumed attempt that crashed reading its inputs has not lost its session.
+            lastSessionId: outcome?.sessionId ?? job.lastSessionId ?? null,
+            finishedAt: retry ? null : now(),
+          },
+        }));
+        await anyway(db.event.create({
+          data: { kind: 'crashed', jobId: job.id, boardId: job.boardId, actor: host, payload: { k, phase: retry ? 'pending' : 'failed' } },
+        }));
+      }
+      // Re-thrown, unchanged: `reconcile` already collects the first failure of a pass and raises it
+      // once every in-flight run has recorded its own attempt, and an operator whose pass failed
+      // should be told so rather than reading it off a row later. The `finally` below still runs —
+      // that is what a `finally` is — so the claim is released on the way past.
+      throw e;
+    } finally {
+      // Unconditionally, both of them, whatever happened above.
+      //
+      // `clearInterval` is idempotent and is deliberately also called in the body, one line before
+      // the fenced read, so the value that read looks at is not moving under it. This is the copy
+      // that runs when the body never got there.
+      clearInterval(renewer);
+      // `deleteMany ... where token` and not `delete ... where jobId`: a holder whose lease was
+      // taken from it mid-run must remove ITS claim or nothing, never the new holder's. That is
+      // also what makes this safe to run on every path — including the `!heldToTheEnd` return,
+      // where the token no longer matches and this deletes nothing.
+      await db.lease.deleteMany({ where: { jobId: job.id, token } }).catch(() => {
+        // A release that could not be written is not worth a second failure: the lease has a
+        // deadline and the renewer has stopped, so `reclaimExpired` takes it within `leaseMs`.
+      });
+    }
   }
 }
 

@@ -173,6 +173,17 @@ export type RebaseResult = (
    * thing that must not be silent, and it usually predicts the push failing too.
    */
   staleBase?: string;
+  /**
+   * Whether the checkout now CONTAINS the base — after the replay, where one happened.
+   *
+   * Two of the six outcomes leave the branch legitimately off its base with nothing to report:
+   * `current` when the plan declined to rewrite a branch somebody is reviewing, and any of them
+   * when `staleBase` says the base itself could not be refreshed. Neither fails the attempt. But
+   * `src/controller.ts` runs the completion check on this tree and the whole argument for running
+   * it *after* the rebase is that it tests what would merge — a claim that is only true when this
+   * is true. Returned rather than inferred, because the caller cannot see the plan.
+   */
+  onBase: boolean;
 };
 
 /**
@@ -215,7 +226,7 @@ export function rebaseOntoBase(
   const pushed = !!pushedRef(root, wt.branch);
 
   const plan = rebasePlan({ label, ahead, onBase, pushed, mayRewrite: opts.mayRewrite !== false });
-  if (plan.act === 'nothing') return { kind: 'current', why: plan.why, staleBase };
+  if (plan.act === 'nothing') return { kind: 'current', why: plan.why, staleBase, onBase };
 
   const r = git(wt.path, ['-c', 'rebase.autoStash=true', 'rebase', base]);
   const said = `${r.stdout}\n${r.stderr}`;
@@ -223,7 +234,7 @@ export function rebaseOntoBase(
     // Status ignored: a rebase that never started has nothing to abort, and saying so would be
     // reporting our own cleanup instead of git's reason.
     git(wt.path, ['rebase', '--abort']);
-    return { kind: 'conflict', label, why: conflictReason(said), staleBase };
+    return { kind: 'conflict', label, why: conflictReason(said), staleBase, onBase };
   }
   // Nothing is pushed on this path. The commits are replayed and correct, but the tree they sit in
   // has conflict markers in it and a stash entry to reconcile — one place for a person to stand
@@ -236,6 +247,8 @@ export function rebaseOntoBase(
       label,
       why: `the commits replayed and the uncommitted work did not come back: ${named}`,
       staleBase,
+      // The replay itself happened — it is the working tree that did not come back with it.
+      onBase: true,
     };
   }
 
@@ -249,17 +262,17 @@ export function rebaseOntoBase(
   // Only a branch the worker actually pushed needs the remote told. One that never left the
   // checkout is rebased and finished — and force-pushing it here would create a pull request's
   // worth of remote state for work that deliberately has none.
-  if (!pushed) return { kind: 'rebased', label, onto: base, pushed: false, staleBase };
+  if (!pushed) return { kind: 'rebased', label, onto: base, pushed: false, staleBase, onBase: true };
 
   const p = gitNet(wt.path, ['push', '--force-with-lease', 'origin', wt.branch]);
   if (p.status !== 0) {
     const why = short(p.stderr) || 'git push --force-with-lease failed';
     const out = `${p.stdout}\n${p.stderr}`;
     return pushRefused(out)
-      ? { kind: 'rejected', label, why, staleBase }
-      : { kind: 'unpushed', label, why, staleBase };
+      ? { kind: 'rejected', label, why, staleBase, onBase: true }
+      : { kind: 'unpushed', label, why, staleBase, onBase: true };
   }
-  return { kind: 'rebased', label, onto: base, pushed: true, staleBase };
+  return { kind: 'rebased', label, onto: base, pushed: true, staleBase, onBase: true };
 }
 
 /**

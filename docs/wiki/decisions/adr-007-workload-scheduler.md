@@ -11,19 +11,19 @@ supersedes: decisions/adr-006-local-store
 superseded_by: ~
 covers:
   - path: prisma/schema.prisma
-    sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
+    sha: 34921e6803578d6831938ada63d477d55a95eb6a
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
   - path: src/controller.ts
-    sha: 41c7fbd41f65c61a80c6fcfa9ec56236d0811a7f
+    sha: 67e1a217f67ec6731ebcc0cd491d5f55d712be81
   - path: src/admission.ts
     sha: aab84ccd1178b085cea79d2c4566149145027b9e
   - path: src/runtime/index.ts
     sha: 55007f26fe6b9e4ec107997eef5aba74ec4643e6
   - path: package.json
-    sha: 02ee69e9b3b3113a1826ffc0798b80a91a2c02ba
-generated_at_commit: 9ce6588
-last_refreshed: 2026-09-07
+    sha: 0ba34d2cf5ae7e5fc2107bc0ebd9dea0d337ca3d
+generated_at_commit: 6d4142a
+last_refreshed: 2026-09-09
 related: [decisions/adr-006-local-store, architecture/job-kind, architecture/runtime-layer, concepts/admission-control, architecture/store-seam]
 ---
 

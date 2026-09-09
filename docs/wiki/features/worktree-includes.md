@@ -7,10 +7,10 @@ audience: [dev, ops]
 read_when: "a worker fails on a repository whose tests pass locally, or you are touching the copy step or the board guard in src/worktree.ts"
 covers:
   - path: src/worktree.ts
-    sha: c0875d3a1d3f1d0cbee2737ab8d5d48bd073f3b0
+    sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
 related: [architecture/job-kind, concepts/admission-control]
-generated_at_commit: 9ce6588
-last_refreshed: 2026-09-07
+generated_at_commit: 6075a95
+last_refreshed: 2026-09-08
 ---
 
 # Carrying gitignored files into a worktree (`.worktreeinclude`)

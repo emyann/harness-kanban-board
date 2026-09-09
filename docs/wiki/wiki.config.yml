@@ -116,6 +116,9 @@ pages:
   - slug: features/workflow-templates
     summary: "Work that recurs is a file, not a command you retype: frontmatter is the spec, the body is the brief, and the keys are the CLI flags so one vocabulary documents both. Expanded once at file time, fenced to the board's repository, and hkb's own workflow comes through the same door."
     status: seeded
+  - slug: features/check
+    summary: "A shell command run in the attempt's checkout after the run and after the rebase, whose non-zero exit fails the attempt. Why it sits beside the declared outputs rather than in a hooks list, why the command may never come from the worktree, and why a failed check is transient, resumable, and briefed to the next attempt."
+    status: seeded
   - slug: decisions/adr-004-roles-and-adoption
     summary: "The canonical seat taxonomy (operator/supervisor/dispatcher/worker) and the adoption ladder. SUPERSEDED by ADR-009: the dispatcher seat is gone."
     status: seeded

@@ -33,6 +33,7 @@ export const Outcome = {
   no_output: 'no_output',
   no_input: 'no_input',
   conflicted: 'conflicted',
+  check_failed: 'check_failed',
   lost: 'lost',
   stopped: 'stopped'
 } as const

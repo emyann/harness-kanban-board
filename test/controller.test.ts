@@ -19,6 +19,8 @@ const { reconcile, reconcileToRest, nextPhase } = await import('../src/controlle
 const { fakeRuntime } = await import('../src/runtime/fake.ts');
 const { admissionCallback } = await import('../src/admission.ts');
 const { artifactsDir } = await import('../src/artifacts.ts');
+const { concludeJob } = await import('../src/transitions.ts');
+const { fenceSafe, withCheckFailure } = await import('../src/brief.ts');
 
 const db = openBoard();
 const board = await db.board.upsert({ where: { slug: 'test' }, update: {}, create: { slug: 'test' } });
@@ -116,6 +118,54 @@ test('nextPhase: a refusal never retries — the same brief gets the same answer
   const d = nextPhase({ status: 'refused' } as never, 1, 5);
   assert.equal(d.phase, 'failed');
   assert.equal(d.resumable, false);
+});
+
+// The completion check, decided (ADR-016 §3). The runtime cannot report this outcome — as far as it
+// is concerned the session completed — so the whole of it is here, and it is the branch that must
+// outrank `completed` or the feature does nothing at all.
+const RED = { command: 'npm test', exitCode: 1, stdout: '1 failing', stderr: '', ms: 900 };
+
+test('nextPhase: a failed check outranks a COMPLETED run — that is what having no exit code means', () => {
+  const d = nextPhase({ status: 'completed' } as never, 1, DEFAULT_RETRIES, DEFAULT_BUDGET, RED);
+  assert.equal(d.outcome, 'check_failed', 'the session ended cleanly and the work still does not behave');
+  assert.notEqual(d.phase, 'succeeded');
+});
+
+test('nextPhase: a failed check is TRANSIENT — it goes round again while retries remain', () => {
+  assert.equal(nextPhase({ status: 'completed' } as never, 1, 2, 1, RED).phase, 'pending');
+  assert.equal(nextPhase({ status: 'completed' } as never, 2, 2, 1, RED).phase, 'pending');
+  assert.equal(nextPhase({ status: 'completed' } as never, 3, 2, 1, RED).phase, 'failed', 'out of retries');
+  // `maxRetries: 0` is "one attempt, do not retry", and it must not be read as a truthy/falsy
+  // question here any more than it is in `src/spec.ts`.
+  assert.equal(nextPhase({ status: 'completed' } as never, 1, 0, 1, RED).phase, 'failed');
+});
+
+test('nextPhase: a failed check is always RESUMABLE, out of retries or not', () => {
+  // The session that wrote the code the check refused is precisely the session worth continuing,
+  // and `resumable` is what keeps `lastSessionId` for it — a cold retry would re-buy the work.
+  for (const attempt of [1, 2, 3, 9]) {
+    assert.equal(nextPhase({ status: 'completed' } as never, attempt, 2, 1, RED).resumable, true);
+  }
+});
+
+test('nextPhase: a failed check carries its own line, because the runtime has no error to lend', () => {
+  const retrying = nextPhase({ status: 'completed' } as never, 1, 2, 1, RED);
+  assert.match(retrying.lastError ?? '', /`npm test`/, 'the command');
+  assert.match(retrying.lastError ?? '', /exited 1/, 'and what it did');
+  const done = nextPhase({ status: 'completed' } as never, 3, 2, 1, RED);
+  assert.match(done.lastError ?? '', /No retries are left/, 'and what is left to do about it');
+});
+
+test('nextPhase: no check means the check decides nothing — every other outcome is unchanged', () => {
+  // The shipped default reaches this function as `undefined`, and the test that matters is that the
+  // parameter is inert then: adding a branch above `completed` is exactly how a feature nobody
+  // enabled starts failing everybody's Jobs.
+  for (const status of ['completed', 'max_turns', 'max_budget', 'timeout', 'refused', 'error']) {
+    const without = nextPhase({ status } as never, 1, DEFAULT_RETRIES, DEFAULT_BUDGET);
+    const withNull = nextPhase({ status } as never, 1, DEFAULT_RETRIES, DEFAULT_BUDGET, null);
+    assert.deepEqual(withNull, without, status);
+    assert.notEqual(without.outcome, 'check_failed');
+  }
 });
 
 test('nextPhase: a runtime that threw is a crash, not a success', () => {
@@ -1874,4 +1924,904 @@ test('an approved proposal cannot be applied to a Job in triage either', async (
   assert.deepEqual(report.filed, [], 'nothing filed');
   assert.equal(await db.job.findFirst({ where: { name: 'must not be filed' } }), null);
   assert.equal((await db.job.findUniqueOrThrow({ where: { id: job.id } })).phase, 'triage');
+});
+
+// ---------------------------------------------------------------- the completion check (ADR-016 §3)
+//
+// hkb has no exit code: its container is an agent session, and a session always finishes
+// successfully. `exports`/`results`/`artifacts` reconstruct one for FILES; `check` reconstructs one
+// for BEHAVIOUR. The tests that matter are the ones where it REFUSES — and the first of them is
+// that at the shipped defaults it refuses to exist at all.
+
+// A board per case, because a check leaves a Job PENDING while retries remain — so a board shared
+// between two tests would re-run the previous test's Job inside this one's pass, and every
+// assertion about "what ran" would be about both.
+const checkBoard = (slug: string) =>
+  db.board.upsert({ where: { slug }, update: {}, create: { slug } });
+const runChecks = (slug: string, r: Runtime = fakeRuntime()) =>
+  reconcile({ runtime: r, cwd, board: slug, readPr: false });
+
+/** A runtime that leaves files in the worktree it was given, the way a worker does. */
+const plants = (files: Record<string, string>, extra: (cwd: string, attempt: number) => void = () => {}): Runtime => ({
+  name: 'plants',
+  async run(spec) {
+    for (const [name, body] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(spec.cwd, name)), { recursive: true });
+      fs.writeFileSync(path.join(spec.cwd, name), body);
+    }
+    extra(spec.cwd, spec.attempt);
+    return {
+      status: 'completed', ok: true, sessionId: `s-${spec.taskId}-${spec.attempt}`, text: 'did it',
+      costUsd: 0, turns: 1, durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+    };
+  },
+});
+
+/** A runtime that records the prompt it was handed and does nothing else. */
+const spyOn = (into: string[]): Runtime => ({
+  name: 'spy',
+  async run(spec) {
+    into.push(spec.prompt);
+    return {
+      status: 'completed', ok: true, sessionId: `s-${spec.taskId}-${spec.attempt}`, text: '',
+      costUsd: 0, turns: 1, durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+    };
+  },
+});
+
+test('at the shipped defaults NOTHING runs: no check on the Job, none on the board, no command', async () => {
+  // The refusing case first, and it is the one an operator gets by default. A `check` that ran
+  // something anybody had not written would be hkb executing a guess with a shell in it.
+  const b = await checkBoard('check-none');
+  const marker = path.join(dir, 'must-not-exist');
+  const job = await db.job.create({ data: { boardId: b.id, name: 'unchecked', brief: 'x' } });
+
+  // The worker plants exactly what a convention-based implementation would look for. Nothing reads
+  // it, because the command comes from the row and there is no row saying anything.
+  await runChecks('check-none', plants({ '.hkb/check': `touch ${marker}\n`, 'check.sh': `touch ${marker}\n` }));
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'succeeded');
+  assert.equal(after.attempts[0].outcome, 'completed');
+  assert.equal(after.attempts[0].check, null, 'nothing ran, so there is nothing to record');
+  assert.equal(fs.existsSync(marker), false, 'and no command was executed at all');
+});
+
+test('a check planted IN THE WORKTREE is ignored: the command comes from the row', async () => {
+  // The fence, stated as a refusal. A worker able to author what judges its own next attempt would
+  // be marking its own work — the same reason a guide and a plugin grant resolve against the
+  // repository (`src/plugins.ts`). Here the worker writes a passing check into its own checkout and
+  // the failing one the operator filed is still the one that runs.
+  const b = await checkBoard('check-fence');
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'fenced', brief: 'x', check: 'exit 1', maxRetries: 0 },
+  });
+  await runChecks('check-fence', plants({ '.hkb/check': 'exit 0\n', 'check.sh': 'exit 0\n' }));
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.attempts[0].outcome, 'check_failed', 'the operator\'s command decided it, not the worker\'s');
+  assert.equal(after.phase, 'failed');
+});
+
+test('a check that exits non-zero fails the attempt, keeps the session, and re-queues it', async () => {
+  const b = await checkBoard('check-red');
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'red-suite', brief: 'write the feature',
+      check: 'echo "1) the parser drops a comma" >&2; exit 1',
+    },
+  });
+  await runChecks('check-red');
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.attempts[0].outcome, 'check_failed');
+  assert.equal(after.phase, 'pending', 'transient: two retries remain, so it goes round again');
+  assert.ok(after.lastSessionId, 'resumable: the session that wrote the code is the one worth continuing');
+  assert.match(after.lastError ?? '', /the parser drops a comma|check `echo/, 'and the operator is told which command');
+  const rec = after.attempts[0].check as { command: string; exitCode: number; stdout: string; stderr: string };
+  assert.equal(rec.exitCode, 1);
+  assert.match(rec.stderr, /1\) the parser drops a comma/, 'the tail is kept on the attempt, per stream');
+});
+
+test('the resumed attempt is TOLD what the check said — command, code and tail', async () => {
+  // `docs/rebuild-plan.md`: "the practice that has actually worked is briefing: tell the second
+  // attempt what the first collided with". A retry that does not know why it is retrying wakes up
+  // believing it finished and produces the same tree.
+  const b = await checkBoard('check-briefed');
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'briefed-retry', brief: 'write the feature', check: 'echo "2 failing: totals" >&2; exit 2' },
+  });
+  await runChecks('check-briefed');
+
+  const seen: string[] = [];
+  const spy: Runtime = {
+    name: 'spy',
+    async run(spec) {
+      seen.push(spec.prompt);
+      return {
+        status: 'completed', ok: true, sessionId: 'again', text: '', costUsd: 0, turns: 1,
+        durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+      };
+    },
+  };
+  await runChecks('check-briefed', spy);
+
+  assert.equal(seen.length, 1, 'the Job ran again');
+  assert.match(seen[0], /exited 2/, 'the exit code');
+  assert.match(seen[0], /echo "2 failing: totals"/, 'the command');
+  assert.match(seen[0], /2 failing: totals/, 'and the tail of what it printed');
+  assert.match(seen[0], /write the feature/, 'on top of the work, not instead of it');
+});
+
+test('a check that passes on the resume ends the Job — and only the LAST failure is quoted', async () => {
+  const b = await checkBoard('check-fixed');
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'fixed-on-retry', brief: 'fix it', check: 'test -f fixed' },
+  });
+  // Attempt 1 writes nothing, so `test -f fixed` exits 1. Attempt 2 writes the file in the same
+  // checkout it resumed into, so the same command passes.
+  await runChecks('check-fixed', plants({}));
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: job.id } })).phase, 'pending');
+
+  await runChecks('check-fixed', plants({ fixed: 'yes\n' }));
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: { orderBy: { k: 'asc' } } } });
+  assert.equal(after.phase, 'succeeded');
+  assert.equal(after.attempts[1].outcome, 'completed');
+  assert.equal(after.attempts[1].check, null, 'a passing check records nothing');
+  assert.equal(after.lastError, null, 'and the Job stops claiming to be broken');
+
+  // A third attempt would not be briefed about the FIRST one's failure: only `k - 1` is read, and
+  // an older failure was already answered by the attempt in between.
+  assert.ok(after.attempts[0].check, 'the record of the first failure is still on its own attempt');
+});
+
+test('a check that keeps failing gives up when the retries are gone', async () => {
+  const b = await checkBoard('check-exhausted');
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'always-red', brief: 'x', check: 'exit 1', maxRetries: 1 },
+  });
+  await runChecks('check-exhausted');
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: job.id } })).phase, 'pending', 'one retry left');
+  await runChecks('check-exhausted');
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'failed', 'and then it is out of them');
+  assert.equal(after.attempts.length, 2, 'maxRetries 1 means two attempts, exactly as a crash would');
+  assert.match(after.lastError ?? '', /No retries are left/);
+});
+
+test('the board can say what every Job on it must pass, and a Job overrides it', async () => {
+  const b = await db.board.upsert({
+    where: { slug: 'checked-board' },
+    update: { defaultCheck: 'exit 1' },
+    create: { slug: 'checked-board', defaultCheck: 'exit 1' },
+  });
+  const inherits = await db.job.create({ data: { boardId: b.id, name: 'inherits', brief: 'x', maxRetries: 0 } });
+  const overrides = await db.job.create({ data: { boardId: b.id, name: 'overrides', brief: 'x', check: 'exit 0', maxRetries: 0 } });
+  await reconcile({ runtime: fakeRuntime(), cwd, board: 'checked-board', readPr: false });
+
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: inherits.id } })).phase, 'failed');
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: overrides.id } })).phase, 'succeeded',
+    'the Job\'s own value wins, the way it does for every other spec field');
+});
+
+test('a check runs in the operator\'s checkout for a --no-isolate Job', async () => {
+  const b = await checkBoard('check-unisolated');
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'unisolated-check', brief: 'x', isolate: false, check: 'test -f README.md', maxRetries: 0 },
+  });
+  await runChecks('check-unisolated');
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: job.id } })).phase, 'succeeded',
+    'the scratch repo has a README — so the check ran THERE, which is where the work happened');
+});
+
+// ---------------------------------------------------------------- the lease, the check, the order
+//
+// `runCheck` was a synchronous ten-minute spawn called AFTER the lease was deleted. For up to ten
+// minutes the Job was `running` with no Lease row and an attempt still open, and every verb that
+// looks into that window got a wrong answer: `hkb cancel` was accepted and then silently undone by
+// the outcome written on the way out, `hkb rm` cascaded the rows away and turned the
+// `attempt.update` into a P2025 that aborted the whole pass, and a daemon killed mid-check stranded
+// the Job for ever because `reclaimExpired` scans Lease rows. The fix is the ordering below:
+// verify, write, delete.
+
+/** Wait for a condition, or give up — a poll rather than a sleep, so it is fast when it can be. */
+const until = async (ok: () => boolean | Promise<boolean>, what: string, ms = 10_000) => {
+  const stop = Date.now() + ms;
+  while (Date.now() < stop) {
+    if (await ok()) return;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+};
+
+test('the lease is HELD while the check runs, so nothing else may take the Job', async () => {
+  const b = await checkBoard('check-leased');
+  const gate = path.join(dir, 'release-the-check');
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'slow-check', brief: 'x', maxRetries: 0,
+      check: `while [ ! -f ${gate} ]; do sleep 0.05; done`,
+    },
+  });
+
+  const said: string[] = [];
+  const pass = reconcile({
+    runtime: fakeRuntime(), cwd, board: 'check-leased', readPr: false,
+    onEvent: (l: string) => said.push(l),
+  });
+  // The gate is opened in a `finally`, and that is not tidiness: the check spins on it with the
+  // shipped ten-minute `CHECK_TIMEOUT_MS`, so the first failing assertion below used to leave
+  // `await pass` waiting out the whole of it — a suite that took ten minutes to tell you which
+  // line was wrong. A failure has to fail fast or nobody runs the suite.
+  try {
+    await until(() => said.some((l) => l.includes('check while')), 'the check to start');
+
+    // The Lease row is what refuses everybody else, and it is there for the whole command.
+    const lease = await db.lease.findUniqueOrThrow({ where: { jobId: job.id } });
+    assert.equal(lease.token.length > 0, true);
+    await assert.rejects(
+      () => db.lease.create({
+        data: { jobId: job.id, holder: 'another-daemon', token: 'theirs', slot: 99, expiresAt: new Date(Date.now() + 60_000) },
+      }),
+      'a second claimant is refused by the live lease, not by luck',
+    );
+    // And the verb the operator would reach for is refused too, rather than accepted and then undone.
+    await assert.rejects(
+      () => concludeJob(db, job.id, { phase: 'cancelled', reason: 'changed my mind', by: 'ada' }),
+      (e: Error) => /is leased by/.test(e.message),
+    );
+  } finally {
+    fs.writeFileSync(gate, '');
+  }
+  await pass;
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+  assert.equal(after.phase, 'succeeded', 'and the check passed once it was let go');
+  assert.equal(await db.lease.findUnique({ where: { jobId: job.id } }), null,
+    'released at the very end, after the outcome was recorded — not before the check');
+});
+
+test('a check does not freeze the pass: the event loop keeps running under it', async () => {
+  // The synchronous spawn blocked timers, the SDK stream, the in-process admission hook and every
+  // signal handler for the whole check. A timer that fires under this one is the cheap proof.
+  const b = await checkBoard('check-async');
+  const gate = path.join(dir, 'release-the-async-check');
+  await db.job.create({
+    data: {
+      boardId: b.id, name: 'not-blocking', brief: 'x', maxRetries: 0,
+      check: `while [ ! -f ${gate} ]; do sleep 0.05; done`,
+    },
+  });
+  let ticked = false;
+  const t = setTimeout(() => { ticked = true; fs.writeFileSync(gate, ''); }, 200);
+  await runChecks('check-async');
+  clearTimeout(t);
+  assert.equal(ticked, true, 'a timer ran while the check was in flight — the loop was never blocked');
+});
+
+test('a REFUSED attempt exports nothing into the operator\'s repository', async () => {
+  // The copy ran ~150 lines before the check, so an attempt the check went on to refuse had already
+  // written its declared outputs into `Board.repoPath` — contradicting the export block\'s own rule
+  // that nothing leaves the sandbox until every declaration holds and nothing can still refuse.
+  const b = await checkBoard('check-exports');
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'red-but-productive', brief: 'x', exports: ['docs/api.md'], check: 'exit 1', maxRetries: 0 },
+  });
+  await runChecks('check-exports', plants({ 'docs/api.md': '# the API\n' }));
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.attempts[0].outcome, 'check_failed');
+  assert.equal(fs.existsSync(path.join(cwd, 'docs', 'api.md')), false,
+    'the check refused it, so nothing of it is in the operator\'s tree');
+  assert.deepEqual(after.attempts[0].exported, [], 'it declared and handed nothing over, which is not null');
+  // And the file itself is not lost: the checkout is kept for exactly this.
+  assert.equal(fs.existsSync(path.join(checkoutOf(job.id), 'docs', 'api.md')), true,
+    'it is still where the run wrote it, in the checkout the operator is told to look in');
+});
+
+test('a PASSING check still exports, so the split did not switch the feature off', async () => {
+  const b = await checkBoard('check-exports-green');
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'green-and-productive', brief: 'x', exports: ['docs/ok.md'], check: 'test -f docs/ok.md', maxRetries: 0 },
+  });
+  await runChecks('check-exports-green', plants({ 'docs/ok.md': '# fine\n' }));
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'succeeded');
+  assert.equal(fs.existsSync(path.join(cwd, 'docs', 'ok.md')), true);
+  assert.deepEqual(after.attempts[0].exported, ['docs/ok.md']);
+});
+
+test('the record says which base the tree was on, because the verdict is only worth that', async () => {
+  // README and the comment both say the check tests "what would actually merge". That is true when
+  // the rebase replayed and NOT true when it legitimately declined — a pushed branch whose pull
+  // request is out of draft, or a base that could not be fetched. Neither fails the attempt and
+  // neither should; being quiet about it is what made the claim wrong rather than qualified.
+  const b = await checkBoard('check-onbase');
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'says-its-base', brief: 'x', check: 'exit 1', maxRetries: 0 },
+  });
+  await runChecks('check-onbase');
+
+  const rec = (await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 1 } } })).check as
+    { onBase: boolean; base: string };
+  assert.equal(typeof rec.onBase, 'boolean', 'recorded, not assumed');
+  assert.equal(typeof rec.base, 'string', 'and named — `onBase` alone says nothing anybody can act on');
+  assert.match(
+    (await db.job.findUniqueOrThrow({ where: { id: job.id } })).lastError ?? '',
+    /exited 1/,
+  );
+});
+
+test('an un-isolated Job makes no claim about a base it does not have', async () => {
+  const b = await checkBoard('check-onbase-none');
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'no-branch', brief: 'x', isolate: false, check: 'exit 1', maxRetries: 0 },
+  });
+  await runChecks('check-onbase-none');
+  const rec = (await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 1 } } })).check as
+    Record<string, unknown>;
+  assert.equal(rec.onBase, undefined, 'nothing was replayed, so there is no claim to qualify');
+});
+
+// ---------------------------------------------------------------- what the worker is told, and when
+
+test('the FIRST attempt is told the command it will be judged by', async () => {
+  // It used to reach a prompt only through `withCheckFailure` — that is, only after an attempt had
+  // already failed on it. The worker runs `npm test`, pushes, ends green, the check fails on the
+  // lint half, and a whole paid retry goes on a one-line fix.
+  const b = await checkBoard('check-told');
+  await db.job.create({
+    data: { boardId: b.id, name: 'told-up-front', brief: 'write the feature', check: 'npm run lint && npm test', maxRetries: 0 },
+  });
+  const seen: string[] = [];
+  await runChecks('check-told', spyOn(seen));
+  assert.equal(seen.length, 1);
+  assert.match(seen[0], /must exit 0 in your checkout when you finish/);
+  assert.match(seen[0], /npm run lint && npm test/, 'verbatim, as the retry prompt has always quoted it');
+});
+
+test('an unchecked Job is told nothing about a check, at the shipped defaults', async () => {
+  const b = await checkBoard('check-untold');
+  await db.job.create({ data: { boardId: b.id, name: 'untold', brief: 'x', maxRetries: 0 } });
+  const seen: string[] = [];
+  await runChecks('check-untold', spyOn(seen));
+  assert.doesNotMatch(seen[0], /must exit 0/);
+});
+
+test('the briefing survives a `stopped` attempt in between — k-1 is not the whole history', async () => {
+  // `k` counts every ended attempt, and `stopped`, `lost` and a pre-run `crashed` write no check
+  // and clear no session. Reading only `k - 1` meant one of them in between dropped the briefing
+  // silently: the next attempt resumed the very session the check refused, knowing nothing.
+  const b = await checkBoard('check-walkback');
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'interrupted', brief: 'write the feature', check: 'test -f fixed', maxRetries: 4 },
+  });
+  await runChecks('check-walkback', plants({}));
+  const first = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 1 } } });
+  assert.equal(first.outcome, 'check_failed', 'attempt 1 collided with the check');
+
+  // Attempt 2 is stopped by `hkb down` landing mid-run — the abort has to happen DURING it, which
+  // is what a stop actually looks like: a pre-aborted pass claims nothing at all.
+  const ac = new AbortController();
+  const stopper: Runtime = {
+    name: 'stopper',
+    async run(spec) {
+      ac.abort();
+      return {
+        status: 'completed', ok: true, sessionId: spec.resume ?? `s-${spec.taskId}-${spec.attempt}`, text: '',
+        costUsd: 0, turns: 1, durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+      };
+    },
+  };
+  await reconcile({ runtime: stopper, cwd, board: 'check-walkback', readPr: false, signal: ac.signal });
+  const mid = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 2 } } });
+  assert.equal(mid.outcome, 'stopped');
+  assert.equal(mid.check, null, 'it ran no check, so it answered nothing');
+
+  const seen: string[] = [];
+  await runChecks('check-walkback', spyOn(seen));
+  assert.equal(seen.length, 1, 'attempt 3 ran');
+  assert.match(seen[0], /refused it/, 'and it was told what attempt 1 collided with, two rows back — the refusal, not just the contract');
+  assert.match(seen[0], /test -f fixed/);
+});
+
+test('the briefing names the check as it is NOW, not the one that refused the last attempt', async () => {
+  const b = await checkBoard('check-changed');
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'moved-goalposts', brief: 'write the feature', check: 'exit 1', maxRetries: 2 },
+  });
+  await runChecks('check-changed');
+  // The operator decides the check was wrong and changes it, then lets it run again.
+  await db.job.update({ where: { id: job.id }, data: { check: 'npm run lint' } });
+
+  const seen: string[] = [];
+  await runChecks('check-changed', spyOn(seen));
+  assert.match(seen[0], /judges THIS attempt is `npm run lint`/, 'the command that will decide');
+  assert.match(seen[0], /leave the tree so that `npm run lint` exits 0/, 'and it is what it is asked for');
+});
+
+// ---------------------------------------------------------------- opting out of a board-wide check
+
+test('a Job whose check is `` runs none, on a board that checks everything', async () => {
+  // The schema\'s own comment — "a Job whose brief is an investigation has no suite to pass" —
+  // could not be honoured: a blank normalised to null, and null inherits.
+  const b = await db.board.upsert({
+    where: { slug: 'check-optout' },
+    update: { defaultCheck: 'exit 1' },
+    create: { slug: 'check-optout', defaultCheck: 'exit 1' },
+  });
+  const investigation = await db.job.create({
+    data: { boardId: b.id, name: 'investigation', brief: 'read it and report', check: '', maxRetries: 0 },
+  });
+  const ordinary = await db.job.create({ data: { boardId: b.id, name: 'ordinary', brief: 'x', maxRetries: 0 } });
+  await reconcile({ runtime: fakeRuntime(), cwd, board: 'check-optout', readPr: false });
+
+  const out = await db.job.findUniqueOrThrow({ where: { id: investigation.id }, include: { attempts: true } });
+  assert.equal(out.phase, 'succeeded', 'it opted out, so the board\'s failing check never ran');
+  assert.equal(out.attempts[0].check, null, 'and nothing about one is recorded');
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: ordinary.id } })).phase, 'failed',
+    'while the Job beside it still inherits — one Job was narrowed, not the board');
+});
+
+test('a missing declared output outranks the check: one cause, and the cheaper one', async () => {
+  // The check is not run at all when the attempt has already failed. Spending ten minutes on a
+  // suite to report a second reason for a failure that already has one is the opposite of frugal.
+  const b = await checkBoard('check-outranked');
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'no-output-first', brief: 'x', results: ['finding'], check: 'exit 1', maxRetries: 0 },
+  });
+  await runChecks('check-outranked');
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.attempts[0].outcome, 'no_output', 'the declared result that never arrived is the reason');
+  assert.equal(after.attempts[0].check, null, 'and the command was never run');
+});
+
+// ---------------------------------------------------------------- runtimes for the sections below
+
+/** `plants`, with the prompt recorded. Two facts about one run, without two runtimes. */
+const spyingPlants = (into: string[], files: Record<string, string>): Runtime => ({
+  name: 'spying-plants',
+  async run(spec, onEvent) {
+    into.push(spec.prompt);
+    return plants(files).run(spec, onEvent);
+  },
+});
+
+/** A runtime that plants files AND writes a declared result to the path the prompt named. */
+const writesResult = (inner: Runtime, name: string, value: string): Runtime => ({
+  name: 'writes-result',
+  async run(spec, onEvent) {
+    const m = spec.prompt.match(new RegExp(`\`${name}\` \u2192 \`([^\`]+)\``));
+    if (m) fs.writeFileSync(m[1], value);
+    return inner.run(spec, onEvent);
+  },
+});
+
+/** A run that never came back: the outcome that nulls `lastSessionId` and sweeps the checkout. */
+const crashes = (): Runtime => ({
+  name: 'crashes',
+  async run() {
+    return {
+      status: 'error', ok: false, sessionId: null, text: '', costUsd: 0, turns: 0,
+      durationMs: 0, stopReason: 'error', denials: 0, error: 'the runtime fell over',
+    };
+  },
+});
+
+/** A run that hit a cap. Both of these KEEP the session, which is the point of them here. */
+const capped = (status: 'max_turns' | 'timeout'): Runtime => ({
+  name: 'capped',
+  async run(spec) {
+    return {
+      // A RESUMED session keeps its id — that is what resuming one means, and it is what makes
+      // `lastRefusedCheck`'s identity test the right test rather than a coincidence.
+      status, ok: false, sessionId: spec.resume ?? `s-${spec.taskId}-${spec.attempt}`, text: 'got partway',
+      costUsd: 0, turns: 1, durationMs: 0, stopReason: status, denials: 0, error: null,
+    };
+  },
+});
+
+/** A proposing worker: it writes the proposal the contract named, and records the prompt. */
+const proposes = (into: string[], jobs: { name: string; brief: string }[]): Runtime => ({
+  name: 'proposes',
+  async run(spec) {
+    into.push(spec.prompt);
+    const m = spec.prompt.match(/`(\S+proposal\.json)`/);
+    if (m) fs.writeFileSync(m[1], JSON.stringify({ jobs }));
+    return {
+      status: 'completed', ok: true, sessionId: `s-${spec.taskId}-${spec.attempt}`, text: 'proposed',
+      costUsd: 0, turns: 1, durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+    };
+  },
+});
+
+// ---------------------------------------------------------------- the lease, and the way out
+//
+// The renewer's `clearInterval` and the fenced release used to be the last two statements of a
+// section three hundred lines long, reached only on the way through. Every one of them is now under
+// a `finally`, because a claim with a deadline whose holder has stopped must lapse — and that is a
+// property of the release, not of the happy path arriving at it.
+
+test('the lease is RELEASED and the attempt closed even when the post-run section throws', async () => {
+  // Reproduced with a three-second lease: it went on advancing minutes after the pass had thrown,
+  // with the Job `running`, `reclaimExpired` finding no expired lease to take and `whileUnleased`
+  // refusing `hkb cancel` and `hkb rm` because a Lease row was there. Nothing on the machine could
+  // end it. The throw is injected where a real one lands — inside the results block, between the
+  // runtime call and the release — and what it is does not matter: an fs error in `collectResults`,
+  // a `SQLITE_BUSY` on the fence read and an `EPIPE` out of the log are the same shape.
+  const b = await checkBoard('lease-finally');
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'throws-after-the-run', brief: 'x', results: ['answer'], maxRetries: 0 },
+  });
+  await assert.rejects(
+    () => reconcile({
+      runtime: plants({}), cwd, board: 'lease-finally', readPr: false, leaseMs: 3_000,
+      onEvent: (l: string) => { if (/declared .answer./.test(l)) throw new Error('the log went away'); },
+    }),
+    /the log went away/,
+    'the pass still reports it — this is about what it leaves behind, not about swallowing it',
+  );
+
+  assert.equal(await db.lease.findUnique({ where: { jobId: job.id } }), null,
+    'no Lease row: the renewer is stopped and the claim is gone');
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.attempts[0].outcome, 'crashed', 'the attempt is closed rather than left open');
+  assert.match(after.attempts[0].reason ?? '', /the pass failed after the run/);
+  assert.notEqual(after.phase, 'running', 'and the Job is not stuck in a phase nothing can act on');
+
+  // The renewer really has stopped: the lease would otherwise be pushed forward every second.
+  await new Promise((r) => setTimeout(r, 1_200));
+  assert.equal(await db.lease.findUnique({ where: { jobId: job.id } }), null, 'and it stays gone');
+});
+
+
+test('the lease is released when the PRE-RUN section throws — the try begins at the renewer', async () => {
+  // The `try` began after the pre-run reads, ~330 lines past the renewer, so a throw in any of
+  // them — SQLITE_BUSY on the approval read, a file where the results directory should be, the
+  // log gone — still produced the immortal lease: a renewer ticking for the daemon's lifetime on
+  // a Job `running` that `hkb cancel` refused because a Lease row was there. The throw here lands
+  // where a real one does: in a `say` between the renewer and the runtime call.
+  const b = await checkBoard('lease-prerun');
+  const job = await db.job.create({
+    // A granted plugin directory that does not exist is dropped with a line — said BEFORE the run.
+    data: { boardId: b.id, name: 'throws-before-the-run', brief: 'x', pluginPaths: ['.nowhere-for-this-test'], maxRetries: 0 },
+  });
+  let ran = 0;
+  const runtime: Runtime = { ...fakeRuntime(), run: async (spec) => { ran++; return fakeRuntime().run(spec); } };
+  await assert.rejects(
+    () => reconcile({
+      runtime, cwd, board: 'lease-prerun', readPr: false, leaseMs: 3_000,
+      onEvent: (l: string) => { if (/granted plugin path/.test(l)) throw new Error('the log went away early'); },
+    }),
+    /the log went away early/,
+  );
+  assert.equal(ran, 0, 'the throw was before the runtime — nothing was bought');
+  assert.equal(await db.lease.findUnique({ where: { jobId: job.id } }), null, 'no Lease row: the renewer is stopped and the claim is gone');
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.attempts[0].outcome, 'crashed', 'the attempt is closed');
+  assert.notEqual(after.phase, 'running');
+  await new Promise((r) => setTimeout(r, 1_200));
+  assert.equal(await db.lease.findUnique({ where: { jobId: job.id } }), null, 'and it stays gone');
+});
+
+test('a failure AFTER the outcome is recorded rewrites nothing', async () => {
+  // The `catch` could not tell whether the rows were already right, so a throw on the way out —
+  // the event write losing a race, a closed log pipe on the final line — rewrote a `completed`
+  // attempt as `crashed` and flipped a `succeeded` Job back to `pending` with its session kept:
+  // the next pass re-claimed it and bought a second session for work already delivered.
+  const b = await checkBoard('recorded-then-throws');
+  const job = await db.job.create({ data: { boardId: b.id, name: 'done-then-log-dies', brief: 'x', maxRetries: 2 } });
+  await assert.rejects(
+    () => reconcile({
+      runtime: fakeRuntime(), cwd, board: 'recorded-then-throws', readPr: false,
+      // The final line of the pass, after the three writes.
+      onEvent: (l: string) => { if (/succeeded\s+completed/.test(l)) throw new Error('pipe closed at the end'); },
+    }),
+    /pipe closed at the end/,
+    'still raised — the operator is told',
+  );
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'succeeded', 'the Job stays what it earned');
+  assert.equal(after.attempts.length, 1);
+  assert.equal(after.attempts[0].outcome, 'completed', 'the attempt is not rewritten as crashed');
+  assert.equal(await db.event.count({ where: { jobId: job.id, kind: 'crashed' } }), 0, 'and no crashed event is invented');
+  assert.equal(await db.lease.findUnique({ where: { jobId: job.id } }), null, 'the lease is released all the same');
+  // And nothing to re-claim: a second pass finds no work.
+  const again = await reconcile({ runtime: fakeRuntime(), cwd, board: 'recorded-then-throws', readPr: false });
+  assert.deepEqual(again.claimed, [], 'the delivered work is not bought twice');
+});
+
+test('a holder whose lease was taken mid-run does not write the Job row from its catch either', async () => {
+  // The body refuses to touch the contended Job row once `heldToTheEnd` is false; the `catch`
+  // did not, so a stale holder that crashed while REPORTING that it had lost the lease wrote
+  // `pending` and its own stale session id over a Job another holder was running — or had already
+  // finished.
+  const b = await checkBoard('stale-catch');
+  const job = await db.job.create({ data: { boardId: b.id, name: 'taken-mid-run', brief: 'x', maxRetries: 2 } });
+  const runtime: Runtime = {
+    ...fakeRuntime(),
+    run: async (spec) => {
+      // Somebody else takes the lease while this run is in flight.
+      await db.lease.update({ where: { jobId: job.id }, data: { holder: 'other-host', token: 'theirs' } });
+      return { ...(await fakeRuntime().run(spec)), sessionId: 'stale-session' };
+    },
+  };
+  await assert.rejects(
+    () => reconcile({
+      runtime, cwd, board: 'stale-catch', readPr: false,
+      onEvent: (l: string) => { if (/lease was taken mid-run/.test(l)) throw new Error('log died while reporting the loss'); },
+    }),
+    /log died while reporting the loss/,
+  );
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+  assert.equal(after.phase, 'running', 'the Job row is the other holder\'s and was left alone');
+  assert.notEqual(after.lastSessionId, 'stale-session', 'and the stale session was not written over it');
+  assert.equal(await db.event.count({ where: { jobId: job.id, kind: 'crashed' } }), 0, 'no crashed event from a non-holder');
+  const lease = await db.lease.findUnique({ where: { jobId: job.id } });
+  assert.equal(lease?.holder, 'other-host', 'and the other holder\'s lease is untouched — the release is fenced on the token');
+});
+
+
+test('a Job left `running` with no lease and no live holder is reclaimed on the next pass', async () => {
+  // The state no lease describes: the holder released the lease and then could not write the Job
+  // row. The lease scan never saw it, no pass claims a Job that is not `pending`, and `hkb retry`
+  // refused it while saying `hkb run` reclaims it — which it now does.
+  const b = await checkBoard('stranded-running');
+  const job = await db.job.create({ data: { boardId: b.id, name: 'stranded', brief: 'x', phase: 'running', maxRetries: 2 } });
+  // A holder on THIS machine whose process is gone — the one case liveness can prove. An open
+  // attempt from another machine, or from a live process, is left alone: see the sibling tests
+  // that model another host's run in flight this same way.
+  await db.attempt.create({ data: { jobId: job.id, k: 1, host: `${os.hostname()}/999999@fake`, maxBudgetUsd: 1, startedAt: new Date() } });
+  const r = await reconcile({ runtime: fakeRuntime(), cwd, board: 'stranded-running', readPr: false });
+  assert.deepEqual(r.reclaimed, [job.id]);
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.attempts[0].outcome, 'lost', 'the open attempt is closed');
+  assert.equal(after.phase, 'succeeded', 'and, with retries left, it was pending — and this same pass then ran it');
+  assert.equal(await db.event.count({ where: { jobId: job.id, kind: 'reclaimed' } }), 1);
+});
+
+test('the interrupted-check notice survives a `stopped` attempt in between', async () => {
+  // `interruptedBefore` looked at `k - 1` only, so a stop mid-run between the interrupted check
+  // and the resume lost the notice — the exact gap the refusal walk-back already closes.
+  const b = await checkBoard('interrupted-walkback');
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'walk', brief: 'x', check: 'true', phase: 'pending', lastSessionId: 's-walk', maxRetries: 4 },
+  });
+  const at = new Date();
+  await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'h', maxBudgetUsd: 1, startedAt: at, endedAt: at, outcome: 'completed', sessionId: 's-walk', reason: 'check interrupted by a stop — the run stands, the check runs again' } });
+  await db.attempt.create({ data: { jobId: job.id, k: 2, host: 'h', maxBudgetUsd: 1, startedAt: at, endedAt: at, outcome: 'stopped', sessionId: 's-walk' } });
+  const prompts: string[] = [];
+  await reconcile({ runtime: spyingPlants(prompts, {}), cwd, board: 'interrupted-walkback', readPr: false });
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0], /a stop landed while this command was being run/, 'told, two rows back');
+});
+
+// ---------------------------------------------------------------- a stop that lands mid-check
+
+test('a stop during the check does not relabel a run that had already finished', async () => {
+  // `ran` was reassigned to `stopped` AFTER the results had been collected and `clearResults` had
+  // deleted them — so the resumed attempt could not re-produce them, ended `no_output`, and went
+  // terminal. Pressing Ctrl-C during a test suite destroyed the Job. What is true is narrower: the
+  // run completed, and the CHECK was interrupted.
+  const b = await checkBoard('check-stopped');
+  const gate = path.join(dir, 'release-the-stopped-check');
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'stopped-mid-check', brief: 'x', results: ['answer'], exports: ['docs/out.md'],
+      check: `while [ ! -f ${gate} ]; do sleep 0.05; done`,
+    },
+  });
+
+  const stop = new AbortController();
+  const said: string[] = [];
+  const runtime = plants({ 'docs/out.md': '# out\n' }, (where) => {
+    fs.mkdirSync(path.join(dir, 'x'), { recursive: true });
+    fs.writeFileSync(path.join(where, 'ignored'), '');
+  });
+  const pass = reconcile({
+    runtime: writesResult(runtime, 'answer', '42'), cwd, board: 'check-stopped', readPr: false,
+    signal: stop.signal, onEvent: (l: string) => said.push(l),
+  });
+  try {
+    await until(() => said.some((l) => l.includes('check while')), 'the check to start');
+    stop.abort();
+  } finally {
+    fs.writeFileSync(gate, '');
+  }
+  await pass;
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  const one = after.attempts[0];
+  assert.equal(one.outcome, 'completed', 'the run finished, and a stop is not a claim about that');
+  assert.deepEqual(one.results, { answer: '42' }, 'and what it produced is kept on the attempt');
+  assert.equal(one.check, null, 'no verdict was given, so none is recorded');
+  // The exports are withheld, exactly as they are for a check that REFUSED: nothing verified this
+  // tree, and a copy made now is one the next attempt's check may refuse with no way to take it
+  // back. `[]` is the truth about what reached the repository.
+  assert.deepEqual(one.exported, [], 'nothing was copied — the check never answered');
+  assert.ok(!fs.existsSync(path.join(cwd, 'docs', 'out.md')), 'and nothing unverified is in the repository');
+  assert.equal(one.reason, 'check interrupted by a stop — the run stands, the check runs again');
+  assert.equal(after.phase, 'pending', 'the check has not been answered, so it goes round again');
+  assert.equal(after.lastError, null, 'and nothing is asked of a human — the word `completed` is not an error');
+  assert.ok(after.lastSessionId, 'in the same session — nothing about the work changed');
+  const stopEvent = await db.event.findFirst({ where: { jobId: job.id, kind: 'completed' }, orderBy: { id: 'desc' } });
+  assert.deepEqual(stopEvent?.payload, { k: 1, phase: 'pending', checkInterrupted: true }, 'the log says why a completed run is pending');
+
+  // And the next attempt is briefed NOTHING about a check refusal, because there was none.
+  const prompts: string[] = [];
+  await reconcile({
+    runtime: writesResult(spyingPlants(prompts, { 'docs/out.md': '# out\n' }), 'answer', '42'),
+    cwd, board: 'check-stopped', readPr: false,
+  });
+  assert.equal(prompts.length, 1, 'it did go round again');
+  assert.doesNotMatch(prompts[0], /refused it/, 'no refusal happened, so none is quoted');
+  assert.match(prompts[0], /a stop landed while this command was being run/, 'but it is told the check never answered');
+  assert.match(prompts[0], /results are per attempt/, 'and that this attempt owes its own results');
+  const ended = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.notEqual(ended.attempts[1].outcome, 'no_output', 'and it does not fail for results attempt 1 already gave');
+  assert.equal(ended.phase, 'succeeded', 'the check ran to a verdict this time, and it passed');
+});
+
+// ---------------------------------------------------------------- a proposing Job runs no check
+
+test('a PROPOSING Job runs no check, however the board is configured', async () => {
+  // It changes nothing in the tree — its output is `proposal.json` — so there is no behaviour for a
+  // command to judge. Running one anyway did real harm: a check over an unchanged tree fails, and
+  // `check_failed` outranks the gate, so the Job never suspended for approval. Measured: three
+  // attempts, the same proposal stored three times, zero Jobs filed.
+  const b = await checkBoard('check-proposes');
+  const marker = path.join(dir, 'proposer-check-ran');
+  await db.board.update({ where: { id: b.id }, data: { defaultCheck: `touch ${marker}; exit 1` } });
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'proposer', brief: 'x', proposes: 'jobs', gate: 'ok?' },
+  });
+  const prompts: string[] = [];
+  await reconcile({
+    runtime: proposes(prompts, [{ name: 'a follow-up', brief: 'do the next thing' }]),
+    cwd, board: 'check-proposes', readPr: false,
+  });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(fs.existsSync(marker), false, 'the board\'s check was not run in a tree it has nothing to say about');
+  assert.equal(after.attempts.length, 1, 'one attempt, not three');
+  assert.equal(after.phase, 'suspended', 'it suspends for the approval, which is the whole point of it');
+  assert.equal(after.attempts[0].check, null);
+  assert.doesNotMatch(prompts[0] ?? '', /must exit 0 in your checkout/, 'and it is not told about one either');
+});
+
+// ---------------------------------------------------------------- the export rule, restored
+
+test('a declared export that IS there is delivered even when something else fell short', async () => {
+  // `main`'s rule: copy what is present, and let the shortfall be the shortfall. Gating the copy on
+  // `!shortfall` meant a missing RESULT withheld an export that was sitting right there — and the
+  // rebase-conflict case is worse, because that attempt is not resumable, so nothing ever delivers
+  // it. The check is the one thing that may withhold a copy, and it is why the copy moved at all.
+  const b = await checkBoard('check-exports-partial');
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'partly-productive', brief: 'x',
+      exports: ['docs/present.md'], results: ['never-written'], maxRetries: 0,
+    },
+  });
+  await runChecks('check-exports-partial', plants({ 'docs/present.md': '# here\n' }));
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.attempts[0].outcome, 'no_output', 'the missing result is still the cause, and still fails it');
+  assert.equal(fs.existsSync(path.join(cwd, 'docs', 'present.md')), true,
+    'and the file it DID produce is in the repository, which is where a durable record belongs');
+  assert.deepEqual(after.attempts[0].exported, ['docs/present.md']);
+});
+
+// ---------------------------------------------------------------- the walk-back and the session
+
+test('the walk-back stops at a crash that took the session with it', async () => {
+  // `CHECKLESS_OUTCOMES` walked past `crashed` on the premise that it clears no session. A
+  // runtime-error `crashed` nulls `lastSessionId` and its worktree is swept, so attempt 3 starts
+  // COLD — and was briefed "the work is still there: the same session" about a session that no
+  // longer exists, with the plain line saying what it has to pass suppressed in favour of it.
+  const b = await checkBoard('check-walk-cold');
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'crashed-between', brief: 'x', check: 'exit 1', maxRetries: 4 },
+  });
+  // Attempt 1: the check refuses it, and the session is kept.
+  await runChecks('check-walk-cold', plants({}));
+  const one = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+  assert.ok(one.lastSessionId, 'attempt 1 left a session for attempt 2 to resume');
+
+  // Attempt 2 crashes in the runtime, which nulls the session.
+  await reconcile({ runtime: crashes(), cwd, board: 'check-walk-cold', readPr: false });
+  const two = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(two.attempts[1].outcome, 'crashed');
+  assert.equal(two.lastSessionId, null, 'and the session is gone with it');
+
+  // Attempt 3 is cold. It is told the command, plainly, and nothing about a refusal it cannot see.
+  const prompts: string[] = [];
+  await reconcile({ runtime: spyOn(prompts), cwd, board: 'check-walk-cold', readPr: false });
+  assert.match(prompts[0], /This command must exit 0 in your checkout when you finish/,
+    'the plain line, which the refusal used to suppress');
+  assert.doesNotMatch(prompts[0], /the same session, and normally the same checkout/,
+    'and no claim about work a cold session cannot reach');
+});
+
+test('the walk-back DOES cross a cap that kept the session, because the refusal is still unanswered', async () => {
+  // `timed_out` and `max_turns` write no `check` column and clear no session, so an attempt that
+  // hit one has not answered the refusal before it — and stopping the walk there dropped the
+  // briefing entirely, exactly as `stopped` and `lost` did before them.
+  const b = await checkBoard('check-walk-capped');
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'capped-between', brief: 'x', check: 'exit 1', maxRetries: 4 },
+  });
+  await runChecks('check-walk-capped', plants({}));
+  // A cap, which keeps the session the check refused.
+  await reconcile({ runtime: capped('max_turns'), cwd, board: 'check-walk-capped', readPr: false });
+  const two = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(two.attempts[1].outcome, 'max_turns');
+  assert.ok(two.lastSessionId, 'the session survives a cap');
+
+  const prompts: string[] = [];
+  await reconcile({ runtime: spyOn(prompts), cwd, board: 'check-walk-capped', readPr: false });
+  assert.match(prompts[0], /the check this Job must pass refused it/,
+    'the refusal is still the most recent thing anybody said about this session');
+});
+
+// ---------------------------------------------------------------- two tails, both kept
+
+test('the two tails are recorded apart, so a loud stderr cannot evict the stdout verdict', async () => {
+  const b = await checkBoard('check-two-tails');
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'two-tails', brief: 'x', maxRetries: 0,
+      // 6 KB of stderr noise and one line of stdout: joined and re-cut to 4 KB, the verdict was gone.
+      check: 'i=0; while [ $i -lt 300 ]; do echo "warning: something is deprecated" >&2; i=$((i+1)); done;'
+        + ' echo "FAILED: 3 assertions"; exit 1',
+    },
+  });
+  await runChecks('check-two-tails', plants({}));
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  const rec = after.attempts[0].check as { stdout: string; stderr: string };
+  assert.match(rec.stdout, /FAILED: 3 assertions/, 'the verdict survived a stream that drowned it');
+  assert.match(rec.stderr, /warning: something is deprecated/);
+  assert.match(rec.stderr, /earlier bytes dropped/, 'and the loud one was cut on its own');
+});
+
+// ---------------------------------------------------------------- the fence around a tail
+
+test('fenceSafe breaks a run of FIVE, and leaves a run of four byte-identical', () => {
+  // The prompt fences a check's tails with five backticks, and CommonMark §4.5 closes a fence only
+  // with a run at least as long as the one that opened it — so a run of four inside it is ordinary
+  // content. Rewriting fours put a U+200B into the standard four-around-three nesting idiom, which
+  // is how anybody shows a fenced block inside a fenced block; and this text is handed to the
+  // worker as DATA it may quote, diff or copy into the repository.
+  const nested = 'here is a block:\n\n````\n```js\nconst a = 1;\n```\n````\n';
+  assert.equal(fenceSafe(nested), nested, 'a four-run passes through untouched, byte for byte');
+  assert.equal(fenceSafe(nested).includes('\u200b'), false, 'and no zero-width space is inserted');
+
+  // Five or more cannot survive, or it closes the fence and the rest of the tail becomes prose the
+  // model may read as instruction.
+  for (const n of [5, 6, 9, 20]) {
+    const out = fenceSafe('x'.repeat(3) + '`'.repeat(n) + 'y');
+    assert.doesNotMatch(out, /`{5,}/, `a run of ${n} must not leave one of five`);
+    assert.match(out, /\u200b/, `a run of ${n} is broken up`);
+  }
+});
+
+test('the briefing carries BOTH tails, each labelled with the stream it came from', () => {
+  const out = withCheckFailure('do the work', {
+    command: 'cargo test',
+    exitCode: 101,
+    kind: 'exit',
+    stdout: 'test result: FAILED. 1 passed; 2 failed',
+    stderr: 'warning: unused variable `x`',
+  }, 'cargo test');
+  assert.match(out, /The last of what it printed on stdout:/);
+  assert.match(out, /The last of what it printed on stderr:/);
+  assert.match(out, /test result: FAILED/);
+  assert.match(out, /warning: unused variable/);
+  // An empty stream draws no block at all — a blank fence is not evidence.
+  const oneSided = withCheckFailure('do the work', {
+    command: 'npm test', exitCode: 1, kind: 'exit', stdout: '', stderr: '1 failing',
+  }, 'npm test');
+  assert.doesNotMatch(oneSided, /printed on stdout/);
+  assert.match(oneSided, /printed on stderr/);
 });

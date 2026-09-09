@@ -22,6 +22,7 @@
 
 ## Features
 
+- [check — the exit code hkb does not have](./features/check.md): A shell command run in the attempt's checkout after the run and after the rebase, whose non-zero exit fails the attempt. Why it sits beside the declared outputs rather than in a hooks list, why the command may never come from the worktree, and why a failed check is transient, resumable, and briefed to the next attempt.
 - [Declared outputs — export, result, artifact](./features/declared-outputs.md): The three declared outputs and the one rule over them: --export to the repository, --result onto the board as a value, --artifact beside the board as a file; why an undeclared output is litter, and the syntax each refuses before a checkout is ever made.
 - [Labels and the selector (`--label key=value`)](./features/labels.md): The grouping key the board had none of: a string→string map on a Job, k8s-shaped, filed with `hkb new --label` and selected with `hkb ls --label`. Why a map and not a tag list, why the selector language stops at equality, and why nothing in the controller reads one.
 - [Proposals — how a workload files work without touching the board](./features/proposals.md): A proposing Job writes one JSON file, a person reads it, and the controller creates the rows — the transport, the refusals, the approval, and why applying it twice creates nothing twice.
@@ -50,7 +51,7 @@
 
 ## Gotchas
 
-- [What `parseArgs` does quietly, and the two bugs it shipped](./gotchas/argv-traps.md): `strict: false` makes an undeclared long option a BOOLEAN, and a value that lost its quotes falls through as positionals the greedy verbs join into prose. Both shipped, both silent, both corrupted the field a person was trying to fix. What the guards are and which invocations they must not break.
+- [What `parseArgs` does quietly, and the bugs it shipped](./gotchas/argv-traps.md): `strict: false` makes an undeclared long option a BOOLEAN, a value that lost its quotes falls through as positionals the greedy verbs join into prose, a DECLARED flag with no value is a boolean too — and a declared flag handed the NEXT FLAG swallows it as its value. Four traps, all silent, all of which corrupted the field a person was trying to fix.
 - [Per-PR CI does not compose](./gotchas/merge-composition.md): Four collisions where every PR was individually correct and CI-green: what parallel workers on one base actually collide on (shared invariants, not shared files), and why briefing fixed it where machinery could not.
 
 ## Howto

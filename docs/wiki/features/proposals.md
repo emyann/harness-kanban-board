@@ -9,15 +9,15 @@ covers:
   - path: src/proposals.ts
     sha: fd5e1eee8b847c9b4024d1bf5f635a85907baae4
   - path: src/controller.ts
-    sha: 41c7fbd41f65c61a80c6fcfa9ec56236d0811a7f
+    sha: 67e1a217f67ec6731ebcc0cd491d5f55d712be81
   - path: src/brief.ts
-    sha: 2d3db74f559f4310ccd91b7117395c24ebb398bd
+    sha: 9090eb71378c7dac7b89cf63c2140f1e97e98c69
   - path: prisma/schema.prisma
-    sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
+    sha: 34921e6803578d6831938ada63d477d55a95eb6a
   - path: src/hkb.ts
-    sha: 58995038dfcf0e00183f7331b57f1a4350a5994c
-generated_at_commit: 3c57c88
-last_refreshed: 2026-09-07
+    sha: f7cca4f068b7ccb229e6f7b87727de198f9efb6e
+generated_at_commit: 6d4142a
+last_refreshed: 2026-09-09
 related:
   [
     decisions/adr-011-proposals-not-board-access,
@@ -53,6 +53,11 @@ Job's approval resumes a session *in* its checkout, while a proposer's approval 
 controller and no session ever wakes up there (`src/controller.ts`). Keeping it would cost a whole
 repository on disk to hold work nothing will return to.
 | Refuse or accept | the controller, after the run | `checkProposal` (`src/proposals.ts`), stored on `Attempt.proposal` |
+
+A proposing Job also runs **no completion check**, however the board is configured: it changes
+nothing in the tree, so there is nothing for a command to judge — and because `check_failed`
+outranks the gate in `nextPhase`, a check over that unchanged tree stopped the Job suspending for
+approval at all and sent it round the retry loop instead (`features/check`).
 | Decide | a person | `hkb approve <id>` / `hkb reject <id> "<why>"` — an `approved` event |
 | Apply | the controller, next pass | `applyProposals` (`src/controller.ts`), before anything is claimed |
 

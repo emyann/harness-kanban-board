@@ -228,7 +228,7 @@ test('describeChange renders a list and an absence as something a person says', 
 test('SETTABLE names every field the CLI can set, and no field it cannot', () => {
   // The closed list is the guard. If a field is added here it must be reachable, and if a flag is
   // added it must be in here — the failure otherwise is silent in both directions.
-  for (const f of ['name', 'brief', 'model', 'maxBudgetUsd', 'base', 'labels', 'gate', 'inputs']) {
+  for (const f of ['name', 'brief', 'model', 'maxBudgetUsd', 'base', 'labels', 'gate', 'inputs', 'check']) {
     assert.ok((SETTABLE as readonly string[]).includes(f), `${f} is settable`);
   }
   for (const f of ['phase', 'proposes', 'isolate', 'boardId', 'id', 'lastError', 'lastSessionId']) {

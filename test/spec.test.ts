@@ -23,6 +23,7 @@ const board = {
   defaultAllowedTools: ['Read', 'Grep'],
   defaultGuide: 'CLAUDE.md',
   defaultBase: 'origin/develop',
+  defaultCheck: 'npm test',
 };
 
 test('a Job that says nothing takes the board default, and says so', () => {
@@ -39,7 +40,7 @@ test('the Job wins over the board on every field — the failure that is otherwi
   const job = {
     model: 'claude-opus-4-6', effort: 'max', maxTurns: 99, maxBudgetUsd: 12, maxRetries: 1,
     allowedTools: ['Read'], pluginPaths: ['.claude'], guide: 'CONTRIBUTING.md',
-    base: 'origin/kb-33-1',
+    base: 'origin/kb-33-1', check: 'npm run lint',
   };
   const r = resolveSpec(job, board);
   assert.equal(r.model.value, 'claude-opus-4-6', 'the board must not override an explicit --model');
@@ -49,12 +50,16 @@ test('the Job wins over the board on every field — the failure that is otherwi
   assert.equal(r.maxRetries.value, 1);
   assert.deepEqual(r.allowedTools.value, ['Read'], 'a Job that narrowed its own surface keeps it');
   assert.equal(r.base.value, 'origin/kb-33-1', 'a step branching from another Job keeps its base');
+  assert.equal(r.check.value, 'npm run lint', 'a Job that named its own completion check keeps it');
   for (const f of Object.values(r)) assert.equal(f.from, 'job');
 });
 
 test('a board with no opinion falls through to the built-in, and says so', () => {
   const r = resolveSpec({}, {});
   assert.equal(r.model.value, null, 'saying nothing IS the built-in answer for a model');
+  // The shipped default for the completion check, and the one that decides whether a shell command
+  // ever runs at all: nobody said, so nothing does (ADR-016 §3).
+  assert.equal(r.check.value, null, 'no check is configured anywhere until a person writes one');
   assert.equal(r.effort.value, null);
   assert.equal(r.maxTurns.value, BUILT_IN.maxTurns);
   assert.equal(r.maxBudgetUsd.value, BUILT_IN.maxBudgetUsd);
@@ -93,16 +98,18 @@ test('hasDefaults is false only when the board says nothing at all', () => {
   assert.equal(hasDefaults({ defaultModel: null, defaultMaxTurns: null }), false);
   assert.equal(hasDefaults({ defaultMaxRetries: 0 }), true, 'a default of zero is still a default');
   assert.equal(hasDefaults(board), true);
+  assert.equal(hasDefaults({ defaultCheck: 'npm test' }), true, 'a board-wide check is a default like any other');
 });
 
 test('boardDefaults renames the columns to what a Job calls them, and keeps the nulls', () => {
   assert.deepEqual(boardDefaults(board), {
     model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 5,
     allowedTools: ['Read', 'Grep'], pluginPaths: null, guide: 'CLAUDE.md', base: 'origin/develop',
+    check: 'npm test',
   });
   assert.deepEqual(boardDefaults({}), {
     model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null,
-    allowedTools: null, pluginPaths: null, guide: null, base: null,
+    allowedTools: null, pluginPaths: null, guide: null, base: null, check: null,
   });
 });
 
@@ -127,4 +134,32 @@ test('a plugin grant resolves job > board > nothing, and an empty list is a valu
 
   assert.deepEqual(resolveSpec({}, {}).pluginPaths, { value: null, from: 'built-in' },
     'and nothing is granted by default, including on hkb\'s own board');
+});
+
+// ---------------------------------------------------------------- the check has three states
+//
+// The one string field where the EMPTY STRING is a value. Without it a board that sets
+// `defaultCheck` owns every Job on it: `pick` reads a null column as *unset*, so a cleared value
+// falls straight back through to the board — and the schema's own "a Job whose brief is an
+// investigation has no suite to pass" could not be honoured at all.
+
+test("check: a Job's `''` means NO check, and does not fall through to the board", () => {
+  const board = { defaultCheck: 'npm test' };
+  assert.deepEqual(resolveSpec({ check: '' }, board).check, { value: '', from: 'job' });
+  assert.deepEqual(resolveSpec({ check: '   ' }, board).check, { value: '', from: 'job' },
+    'whitespace normalises INTO the opt-out — a command of one space is not a command');
+  // And the two states either side of it are unchanged.
+  assert.deepEqual(resolveSpec({ check: null }, board).check, { value: 'npm test', from: 'board' });
+  assert.deepEqual(resolveSpec({ check: 'make verify' }, board).check, { value: 'make verify', from: 'job' });
+  assert.deepEqual(resolveSpec({}, {}).check, { value: null, from: 'built-in' },
+    'and at the shipped defaults there is nothing to run');
+});
+
+test('check: it is the same shape `allowedTools: []` already uses, for the same reason', () => {
+  // An empty value is a decision; only a null is silence. `guide` and `base` are deliberately NOT
+  // like this — "no guide" IS the absence, and "branch from no base" is not a thing.
+  assert.deepEqual(resolveSpec({ allowedTools: [] }, { defaultAllowedTools: ['Read'] }).allowedTools,
+    { value: [], from: 'job' });
+  assert.deepEqual(resolveSpec({ guide: '' }, { defaultGuide: 'CLAUDE.md' }).guide,
+    { value: 'CLAUDE.md', from: 'board' }, 'a blank guide is still an absence, and still inherits');
 });

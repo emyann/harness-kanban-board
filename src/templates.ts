@@ -82,6 +82,11 @@ export const TEMPLATE_KEYS: Record<string, Kind> = {
   // The ref a step branches from — the key that lets a workflow file express a chain at all, since
   // a coding Job's output is a branch and this is what a later step points at.
   base: 'string',
+  // The command a step must pass (ADR-016 §3). A workflow is the natural home for it — "this kind
+  // of work is done when the suite is green" is a property of the workflow, not of one Job — and it
+  // is safe here for the reason this file's header gives: a workflow is read from `Board.repoPath`
+  // and never from a worktree, so a worker cannot author what judges its own next attempt.
+  check: 'string',
   'max-turns': 'string',
   'max-budget': 'string',
   'max-retries': 'string',
@@ -289,7 +294,29 @@ export function readTemplate(repoPath: string | null, name: string): Template {
     }
     if (!rest) refuse(`${file}, line ${i + 2}: \`${key}\` has no value. Delete the line rather than leaving it blank — an empty key is not the same as an absent one.`);
 
-    const isList = rest.startsWith('[') && rest.endsWith(']');
+    // A list is `[a, b]` — EXCEPT where a scalar key's value is a shell `[ … ]` test.
+    //
+    // `check: [ -f dist/index.js ]` is the POSIX spelling of `test -f dist/index.js`, and the
+    // generic bracket rule read it as a list and refused it with a suggested fix —
+    // `check: -f dist/index.js` — that would have filed a command exiting 127. The two forms are
+    // told apart by the spaces `[` requires to be a command at all: `[a, b]` is a list and `[ x ]`
+    // is an argument list ending in `]`.
+    //
+    // **And by the comma**, which is the narrowing this needed. `kind !== 'list'` is thirteen scalar
+    // keys, not one, and inner spaces are how a person writes a list they expect to be read as one:
+    // `model: [ opus, sonnet ]` was filed as the literal thirteen-character model name, and
+    // `check: [ a, b ]` as a command exiting 2 on every attempt — an exemption meant for one shape
+    // silently swallowing every mistake in that shape's neighbourhood. A shell `[ … ]` test is one
+    // command with one argument list and no commas in it; a list is exactly the thing with commas.
+    // What is left over — `[ a, b ]` genuinely meant as a shell test — is reachable by quoting.
+    //
+    // **And by the key.** The comma caught the multi-item shape and not the single one: `model:
+    // [ opus ]`, `guide: [ CLAUDE.md ]`, `gate: [ looks right? ]` were still filed as those literal
+    // strings where `main` refused each with a fix. `check` is the one key whose value is a shell
+    // line; every other scalar takes a name, a ref, a path or a sentence, and none of those starts
+    // with `[ `.
+    const shellTest = key === 'check' && rest.startsWith('[ ') && rest.endsWith(' ]') && !rest.includes(',');
+    const isList = rest.startsWith('[') && rest.endsWith(']') && !shellTest;
     const items = isList
       ? rest.slice(1, -1).split(',').map((s) => unquote(s)).filter(Boolean)
       : [unquote(rest)];
@@ -300,7 +327,16 @@ export function readTemplate(repoPath: string | null, name: string): Template {
       if (!items.length) refuse(`${file}, line ${i + 2}: \`${key}: []\` is an empty list. Delete the line — the absence of a key is how a workflow says nothing about it.`);
       spec[key] = items;
     } else if (isList) {
-      refuse(`${file}, line ${i + 2}: \`${key}\` takes one value, not a list — \`${key}: ${items[0] ?? 'value'}\`.`);
+      // The quoted form is named as well as the bare one, because for a shell line the bare
+      // suggestion is wrong: `check: [a,b]` really is a list mistake, but a value that only LOOKS
+      // like one is fixed by quoting it, not by stripping the brackets that are part of it. And it
+      // is named as something that WORKS rather than as a hope: the bracket test above runs on the
+      // raw `rest`, before `unquote`, so a quoted value never reaches it at all.
+      refuse(
+        `${file}, line ${i + 2}: \`${key}\` takes one value, not a list — \`${key}: ${items[0] ?? 'value'}\`.`
+        + ` If the brackets are part of the value, quote the whole thing and it is taken verbatim:`
+        + ` \`${key}: "${rest}"\`.`,
+      );
     } else if (kind === 'boolean') {
       const v = items[0].toLowerCase();
       if (v !== 'true' && v !== 'false') {
@@ -308,6 +344,19 @@ export function readTemplate(repoPath: string | null, name: string): Template {
       }
       spec[key] = v === 'true';
     } else {
+      // `check: none` is refused HERE, where the file and the line are in hand. It reached `hkb new`
+      // as though it had been typed, so the refusal an author saw was about a flag they had not
+      // used — "leave `--check` out", against a file where leaving the key out is the fix and the
+      // only fix. A workflow always files a NEW Job, whose check column is already null, so there
+      // is nothing for `none` to clear: it would file the literal command `none`, which exits 127.
+      if (key === 'check' && items[0] === 'none') {
+        refuse(
+          `${file}, line ${i + 2}: \`check: none\` would file the literal shell command \`none\`, which `
+          + 'exits 127 — every attempt would fail its check and burn a retry. Delete the line: a Job '
+          + 'filed without a check already inherits the board\'s. For a Job that runs NO check and '
+          + 'inherits nothing, write `check: ""`.',
+        );
+      }
       spec[key] = items[0];
     }
   }

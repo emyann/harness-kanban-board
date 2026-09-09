@@ -919,6 +919,7 @@ export const BoardScalarFieldEnum = {
   defaultPluginPaths: 'defaultPluginPaths',
   defaultGuide: 'defaultGuide',
   defaultBase: 'defaultBase',
+  defaultCheck: 'defaultCheck',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
 } as const
@@ -959,6 +960,7 @@ export const JobScalarFieldEnum = {
   inputs: 'inputs',
   results: 'results',
   artifacts: 'artifacts',
+  check: 'check',
   labels: 'labels',
   gate: 'gate',
   proposes: 'proposes',
@@ -1001,6 +1003,7 @@ export const AttemptScalarFieldEnum = {
   inputs: 'inputs',
   proposal: 'proposal',
   artifacts: 'artifacts',
+  check: 'check',
   turns: 'turns',
   denials: 'denials'
 } as const

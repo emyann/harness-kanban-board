@@ -359,6 +359,55 @@ prose to parse. It is also the only output a Job with no commit to make has — 
 nothing to change"* is a real outcome, and without somewhere to put it such a Job succeeds and leaves only
 a session id.
 
+### What says the work *behaves*: `--check`
+
+A Kubernetes Job is complete when its container **exits 0**. hkb's container is an agent session, and a
+session always finishes successfully — so hkb has no exit code, and the three declarations above are hkb
+reconstructing one for *files*. `--check` is the same question asked for *behaviour*
+([ADR-016 §3](docs/wiki/decisions/adr-016-the-pod-spec-is-the-map.md)):
+
+```bash
+hkb new "fix the parser" --check "npm run lint && npm test"
+hkb boards set my-board --check "npm test"      # or once, for every Job on the board
+```
+
+It is a shell line, run in the attempt's own checkout **after the run and after the rebase onto the base**
+— so it tests what would actually merge, not what the branch was cut from. Where the rebase legitimately
+declined (a pull request somebody has taken out of draft, a base that could not be fetched) the record and
+`hkb show` say which base the tree was really on, rather than leaving the claim overstated. A non-zero exit
+fails the attempt, and the failure is *transient*: the retry resumes the same session and is told the
+command, the exit code and the last 4 KB of each of stdout and stderr — two windows, so a loud stderr
+cannot evict the one-line verdict on stdout — because a retry that does not know why it is retrying
+produces the same tree. The verdict is the **exit code**, so a check that exits while a background process
+it started still holds the pipe is read as having exited; the pipes get a couple of seconds to drain and
+no more. A check that hangs is killed after ten minutes — the whole process group, not just the shell,
+`SIGTERM` then `SIGKILL` — and fails the same way; `hkb down` and `Ctrl-C` interrupt one rather than
+waiting it out, and an interrupted check leaves the run's own outcome alone and simply runs again.
+
+The controller reads 0 / not-0 and **knows nothing else about the command** — the way the kubelet knows
+nothing about a container. There is no test-runner integration and no parsing of output into findings.
+
+The command comes from the Job, the board, or a workflow file under the board's repository — **never from
+the worktree**, which is the same fence `--guide` and `--plugin-dir` stand behind and matters most here:
+a worker able to author what judges its own next attempt would be marking its own work. Nothing runs
+until somebody sets one; there is no built-in check, because a command hkb guessed for your repository
+would be a shell line nobody wrote. The worker is told the command up front, which is not a hole in that
+fence — the fence is about who *authors* it.
+
+On a board that sets `--check` for everything, one Job opts out with the empty string:
+
+```bash
+hkb new "read the parser and report what it does" --check ""   # an investigation has no suite to pass
+```
+
+On `hkb new`, `--check none` is refused by name — a Job filed without `--check` already inherits the
+board's, so there is nothing to clear and the literal command `none` is what it would file. On
+`hkb job set` and `hkb boards set`, `--check none` clears the column and so goes *back* to inheriting,
+which is what `none` means everywhere else on those verbs.
+
+A **proposing** Job runs no check: it changes nothing in the tree, so there is nothing for a command to
+judge, and `hkb new --propose --check` is refused.
+
 ### What a Job is given
 
 The other direction. **`--input <name>=<source>`** is content the board resolves *before* the run and puts
@@ -437,8 +486,8 @@ repository is the worker.
 ### Changing a Job after it is filed
 
 `hkb job set <id>` takes the same flags `hkb new` does — `--model`, `--max-budget`, `--allow-tool`,
-`--base`, `--label`, `--gate`, `--guide`, `--export`, `--result`, `--artifact`, `--input`, and the
-brief — so one vocabulary covers filing a Job, editing it, and writing a workflow file. Repeatable
+`--base`, `--label`, `--gate`, `--guide`, `--check`, `--export`, `--result`, `--artifact`, `--input`,
+and the brief — so one vocabulary covers filing a Job, editing it, and writing a workflow file. Repeatable
 flags **replace** rather than append, and `none` clears a value back to the board's default.
 
 Every change goes on the event stream with its before and after, because a Job's spec is what the

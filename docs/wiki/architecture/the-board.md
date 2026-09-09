@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "adding a column, deciding whether something belongs on the Job or the Attempt, writing a migration, or explaining why a board refuses to open"
 covers:
   - path: prisma/schema.prisma
-    sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
+    sha: 34921e6803578d6831938ada63d477d55a95eb6a
   - path: src/schema.ts
     sha: ee1920b789eb96be121c8bba20cc92e452ddf818
   - path: src/db.ts
@@ -15,9 +15,9 @@ covers:
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/spec.ts
-    sha: 8924cf095921bd72fd50912552ec348d2b139b3a
-generated_at_commit: aa34c9c
-last_refreshed: 2026-09-07
+    sha: d3fba5cc6bb9a1cebeea496bf445f4165c3cecbc
+generated_at_commit: 6075a95
+last_refreshed: 2026-09-08
 related:
   [
     architecture/job-kind,
@@ -25,6 +25,7 @@ related:
     architecture/overview,
     concepts/node-floor-and-type-check,
     decisions/adr-007-workload-scheduler,
+    features/check,
   ]
 ---
 
@@ -58,8 +59,8 @@ one delete and why the migration path below has to be so careful about `DROP TAB
 
 ## Why almost every spec column is nullable
 
-`Job.model`, `effort`, `maxTurns`, `maxBudgetUsd`, `maxRetries`, `allowedTools`, `pluginPaths` are
-all nullable, and that is not laziness about defaults — **null is the value that means "nobody
+`Job.model`, `effort`, `maxTurns`, `maxBudgetUsd`, `maxRetries`, `allowedTools`, `pluginPaths`,
+`guide`, `base` and `check` are all nullable, and that is not laziness about defaults — **null is the value that means "nobody
 said"**, and it is what makes a board default mean anything (`src/spec.ts`). Three levels resolve in
 one fixed order: the Job's own value wins, the Board's default fills a null, the built-in is the last
 resort.
@@ -77,6 +78,11 @@ because a spec you cannot trace is worse than one you have to repeat.
 spec nor status but **metadata for selection**, the first column on this table that exists to make a
 *set* of Jobs askable rather than to say anything about one (`src/labels.ts`, `features/labels`).
 Null there means "no labels", which is the same fact as an empty map and is stored as the absence.
+
+`Job.check` is the one where null is doing more than deferring (`features/check`): it resolves to a
+null built-in, so a board nobody has configured runs no command at all — and the alternative, a
+default check, would be a shell line hkb invented for a repository it knows nothing about, executed
+with the daemon's privileges.
 
 The `Json?` columns are read defensively for the same reason: `toolList` treats both null *and* "not
 a list of strings" as unset, so a malformed column cannot silently narrow a Job's tool surface to

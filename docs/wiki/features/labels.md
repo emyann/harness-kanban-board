@@ -9,11 +9,11 @@ covers:
   - path: src/labels.ts
     sha: b524ef31fce5611a1a676dfb4631aaa83ecba926
   - path: src/hkb.ts
-    sha: 58995038dfcf0e00183f7331b57f1a4350a5994c
+    sha: f7cca4f068b7ccb229e6f7b87727de198f9efb6e
   - path: prisma/schema.prisma
-    sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
+    sha: 34921e6803578d6831938ada63d477d55a95eb6a
   - path: src/templates.ts
-    sha: 216569e82eb7ef9f240d8a87db1707d775032cbf
+    sha: fb6b019b10b138755c8f1b6e753dc19adb9d5735
 related:
   [
     architecture/the-board,
@@ -22,8 +22,8 @@ related:
     features/workflow-templates,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: 3c57c88
-last_refreshed: 2026-09-07
+generated_at_commit: 6d4142a
+last_refreshed: 2026-09-09
 ---
 
 # Labels and the selector (`--label key=value`)

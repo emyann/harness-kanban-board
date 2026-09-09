@@ -14,8 +14,8 @@ covers:
     sha: 5ae775633cae411b71443add232b79f1325c4075
   - path: src/runtime/fake.ts
     sha: 94f9f21ab7c9702506ae625dff37ac15ecfdbcce
-generated_at_commit: 1542483
-last_refreshed: 2026-09-06
+generated_at_commit: 6075a95
+last_refreshed: 2026-09-08
 related: [decisions/adr-007-workload-scheduler, architecture/job-kind, concepts/admission-control, concepts/worker-identity]
 ---
 

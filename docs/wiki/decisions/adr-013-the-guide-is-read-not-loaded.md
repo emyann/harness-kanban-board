@@ -13,17 +13,17 @@ covers:
   - path: src/guide.ts
     sha: 835b973b5ae725eb1c7a811601260bfbe6e07abb
   - path: src/brief.ts
-    sha: 2d3db74f559f4310ccd91b7117395c24ebb398bd
+    sha: 9090eb71378c7dac7b89cf63c2140f1e97e98c69
   - path: src/runtime/claude.ts
     sha: 5ae775633cae411b71443add232b79f1325c4075
   - path: src/controller.ts
-    sha: 41c7fbd41f65c61a80c6fcfa9ec56236d0811a7f
+    sha: 67e1a217f67ec6731ebcc0cd491d5f55d712be81
   - path: src/spec.ts
-    sha: 8924cf095921bd72fd50912552ec348d2b139b3a
+    sha: d3fba5cc6bb9a1cebeea496bf445f4165c3cecbc
   - path: prisma/schema.prisma
-    sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
-generated_at_commit: 9ce6588
-last_refreshed: 2026-09-07
+    sha: 34921e6803578d6831938ada63d477d55a95eb6a
+generated_at_commit: 6d4142a
+last_refreshed: 2026-09-09
 related:
   [
     decisions/adr-012-skills-by-grant-not-by-settings,

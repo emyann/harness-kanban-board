@@ -72,7 +72,7 @@ function refuse(message: string): never {
 export const SETTABLE = [
   'name', 'brief', 'model', 'effort', 'maxTurns', 'maxBudgetUsd', 'maxRetries',
   'base', 'guide', 'gate', 'allowedTools', 'pluginPaths', 'labels',
-  'exports', 'results', 'artifacts', 'inputs',
+  'exports', 'results', 'artifacts', 'inputs', 'check',
 ] as const;
 // `timeoutMs` is deliberately absent: no flag reaches it, and the column is non-nullable, so a
 // caller clearing it would get a raw Prisma error instead of a refusal. The list is what the CLI
@@ -153,6 +153,13 @@ export async function setJobSpec(
       `#${id} proposes work, and a proposal with no approver is a proposal nothing ever reads `
       + `(ADR-011). The controller only suspends a Job that has a gate — clearing it here would let `
       + `this one succeed with its proposal parsed and never applied, silently.`,
+    );
+  }
+  if (job.proposes && 'check' in changes && changes.check) {
+    refuse(
+      `#${id} proposes work, and a proposing Job runs no check — its output is the proposal, not a `
+      + `change to the tree, so the controller never runs one and \`hkb show\` would print a command `
+      + `nothing honours. Drop --check.`,
     );
   }
   if (!job.isolate && changes.base) {
@@ -246,6 +253,9 @@ export function describeChange(c: SpecChange): string {
 
 function show(v: unknown): string {
   if (v === null || v === undefined) return '(none)';
+  // `''` is a value with a meaning — "no check, and do not inherit" — and rendered as nothing it
+  // read as a blank line in `hkb job set`'s report of what changed.
+  if (v === '') return '(none — opted out)';
   // Before the plain-array case, because `inputs` is an array of OBJECTS and `join` renders those
   // as `[object Object]` — the exact thing this function's docstring says it exists to avoid, in
   // the one shape the unit test did not cover.
