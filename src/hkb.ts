@@ -24,6 +24,7 @@ import {
   readTemplate, placeholders, workflowPath, WORKFLOW_DIR,
   type Template,
 } from './templates.ts';
+import { toolSurface } from './runtime/surface.ts';
 import { fakeRuntime } from './runtime/fake.ts';
 import * as daemon from './daemon.ts';
 import { EFFORTS, boardDefaults, hasDefaults, resolveSpec, type SpecSource } from './spec.ts';
@@ -303,7 +304,10 @@ const HELP = `hkb — run one agent against one brief
        --daily-budget <usd>|none
        --model <m>|none  --effort <e>|none  --max-turns <n>|none
        --max-budget <usd>|none  --max-retries <n>|none
-       --allow-tools <a,b>|none  the default tool surface for Jobs that name none
+       --allow-tools <a,b>|none  the default tool surface for Jobs that name none. Same
+                        rule as --allow-tool above and one level more dangerous: a board
+                        default that omits \`Skill\` turns skill invocation off for every
+                        Job filed here at once, including ones granted a --plugin-dir.
        --default-plugin-dirs <a,b>|none  directories, repo-relative, whose skills every Job
                         on this board may see — \`.claude\` is the usual one
        --guide <path>|none  the contributor guide every Job on this board reads, repo-relative
@@ -1324,10 +1328,15 @@ export async function main(argv: string[]): Promise<number> {
           console.log(`           ${job.endedFor}`);
         }
         console.log(`  spec     isolate=${job.isolate} timeoutMs=${job.timeoutMs}`);
-        // The surface the run will actually get. `(runtime default)` is an answer, not a blank:
-        // it says nobody narrowed this Job, which is the difference between a Job that may write
-        // and a Job that was deliberately stopped from writing.
-        console.log(`  tools    ${spec.allowedTools.value?.join(', ') ?? '(runtime default)'}`
+        // The surface the run will actually get, RESOLVED — the list itself rather than the words
+        // `(runtime default)`, which named neither what is on it nor what is missing. An operator
+        // debugging a refused skill read that line and learned nothing; the source is still printed
+        // beside it, so "nobody narrowed this Job" is still visible without being the whole answer.
+        //
+        // Free, and only free since `src/runtime/surface.ts` exists: the constant used to live
+        // inside the SDK driver where reaching it meant buying a session, which is why this was
+        // deferred to #55 in the first place. `toolSurface` is pure and importable now.
+        console.log(`  tools    ${toolSurface({ allowedTools: spec.allowedTools.value ?? undefined }).join(', ') || '(none — this Job may call nothing)'}`
           + `  [${spec.allowedTools.from}]`);
         // What this Job may READ, as distinct from what it may DO. A granted directory widens the
         // skills a worker sees and nothing about the tools it may call — the admission gate is

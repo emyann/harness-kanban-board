@@ -9,14 +9,14 @@ covers:
   - path: src/admission.ts
     sha: 3da82a22f3e857c3142359fce3cfefda0be59da8
   - path: src/runtime/claude.ts
-    sha: 99f48dce1ec77266c5f486a386d55d438a02397c
+    sha: c19d9065a63bc8265bbad6bcb29f1643bfe72938
   - path: src/runtime/surface.ts
-    sha: 91dc14a46f39d60c04e59d95dbc5d6c4c360d67c
+    sha: e7660f0ce513bfc804cc31a0a92040e5bdc7fa1a
   - path: src/push.ts
     sha: 79181173571e3f6359402de26638e1e5fef904ac
   - path: src/pre-push.ts
     sha: 589393dab0dfb3bff5d7b4edf16c7b808b85e1c7
-generated_at_commit: 01c316b
+generated_at_commit: ff67f87
 last_refreshed: 2026-09-09
 related: [architecture/runtime-layer, architecture/job-kind, features/skill-invocation, decisions/adr-007-workload-scheduler, decisions/adr-017-the-workflow-is-content, gotchas/prompt-is-not-a-guarantee]
 ---
@@ -104,13 +104,19 @@ free (`test/tool-surface.test.ts`).
 
 Two entries carry an argument rather than a convenience.
 
-**`Skill` is on it, and admitting it widened nothing.** Invoking a skill is a
-prompt expansion — layer 6 — so every tool the skill then reaches for arrives
-back here at layer 2 and is judged against this same list. Until it was admitted,
-no worker had ever invoked a skill and every `--plugin-dir` grant was inert:
-ADR-012 measured skills *reaching* a worker and the gate denied the tool that
-*calls* one. The first invocations this project recorded, refusal included, are
-in `features/skill-invocation`.
+**`Skill` is on it, and what a skill then *does* is judged here.** Invoking one
+is a prompt expansion — layer 6 — so every tool it reaches for arrives back at
+layer 2 and meets this same list. Until it was admitted, no worker had ever
+invoked a skill and every `--plugin-dir` grant was inert: ADR-012 measured skills
+*reaching* a worker and the gate denied the tool that *calls* one.
+
+Admitting it does widen one thing, and the first implementation of that card
+missed it: **which** skills exist is not this gate's question. The gate matches
+tool names, so it cannot tell a granted repository skill from one sitting in the
+operator's own `~/.claude`. That fence is `Options.skills`, set on every run from
+what was actually granted (`features/skill-invocation`) — a second guard at a
+second layer, for the same reason the push rule ended up at git rather than here:
+the layer that can answer the question is the layer the rule belongs at.
 
 **`Agent` is not on it.** One Job is one agent; a worker that could fan out would
 spawn work nothing has claimed. This is where a skill that spawns subagents

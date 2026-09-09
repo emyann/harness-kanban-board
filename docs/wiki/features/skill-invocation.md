@@ -6,12 +6,14 @@ kind: explanation
 audience: [dev]
 read_when: "granting a --plugin-dir, narrowing --allow-tool, or wiring a step that runs a slash command like /code-review"
 covers:
+  - path: src/plugins.ts
+    sha: 50314938ab90cd9f5793091dc79faf6a5bd52e65
   - path: src/runtime/surface.ts
-    sha: 91dc14a46f39d60c04e59d95dbc5d6c4c360d67c
+    sha: e7660f0ce513bfc804cc31a0a92040e5bdc7fa1a
   - path: src/runtime/claude.ts
-    sha: 99f48dce1ec77266c5f486a386d55d438a02397c
+    sha: c19d9065a63bc8265bbad6bcb29f1643bfe72938
   - path: src/runtime/fake.ts
-    sha: 1a034150eee10661a6f1e5abac96e0e58499492d
+    sha: 6a1ec6e6f7890b54a254018b3b7d277020b4b23e
 related:
   [
     decisions/adr-012-skills-by-grant-not-by-settings,
@@ -19,7 +21,7 @@ related:
     architecture/runtime-layer,
     gotchas/prompt-is-not-a-guarantee,
   ]
-generated_at_commit: 01c316b
+generated_at_commit: ff67f87
 last_refreshed: 2026-09-09
 ---
 
@@ -117,20 +119,92 @@ ask — and be refused by (`test/tool-surface.test.ts`).
 
 That also makes the fake's `denials` real rather than a hardcoded `0`.
 
+## The fence: only what was granted
+
+Admitting `Skill` to the surface is not the whole feature, and the first
+implementation of this card shipped without the other half. ADR-012's rule is
+that nothing reaches a worker the operator did not grant it, and its own
+Consequences section records what a worker is advertised with `settingSources:
+[]` and **no grant at all**: *"17 user-level skills, 5 agents, 4 claude.ai MCP
+connectors and 52 slash commands, none of them permitted"*.
+
+**"None of them permitted" was true only because `Skill` was off the surface.**
+Put it on and leave `Options.skills` unset, and every ordinary Job — nothing
+granted, no `--plugin-dir` near it — can invoke the operator's own `~/.claude`
+skills: content nobody granted, on a repository hkb is running an agent against
+precisely because nobody has read it yet.
+
+So the driver passes `Options.skills` explicitly on every run
+(`skillFilter`, `src/runtime/surface.ts`):
+
+| the Job | what the SDK is handed | why |
+|---|---|---|
+| no plugin grant | `[]` | nothing was granted, so nothing is enabled |
+| granted `.claude` | that directory's skills, twice each | only what the operator granted |
+| `--allow-tool Read,Bash` | `[]` | the operator dropped `Skill`; the SDK hears it too, not just the gate |
+
+Omitting the option is **not** "skills off" — `sdk.d.ts` says so in as many
+words: *"omitted (default): no SDK auto-configuration. The CLI's own defaults
+still apply."* An empty array is what shuts the door.
+
+### Two spellings, because the canonical name is not ours to know
+
+`sdk.d.ts` matches an entry against *"the exact canonical name (e.g.
+`my-plugin:my-skill`) or a `:name` suffix of it"*. Whether a local plugin's
+skills are canonically bare (`prisma-cli`) or qualified (`<plugin>:prisma-cli`)
+depends on how the SDK names a local plugin, which hkb does not control and has
+not measured. `skillFilter` emits **both** `name` and `:name`, so the fence
+matches either — and no guess can fail open, because a name matching nothing
+enables nothing.
+
+The names come from the granted directories themselves (`discoverSkills`,
+`src/plugins.ts`): `<grant>/skills/<name>/SKILL.md`, directory name wins,
+symlinks followed — this repository's own `.claude/skills/*` are symlinks into
+`.agents/skills/`, so a reader that skipped them would be inert in the shipped
+layout.
+
+### ADR-012 measurement 7 and the SDK now disagree
+
+That record says *"`Options.skills` narrows nothing, in either spelling"* and
+declines to ship a per-skill column on the strength of it. At the pinned
+`0.3.261` the SDK documents the opposite: a `string[]` enables only the listed
+skills, and *"unlisted skills are hidden from the model's listing and rejected
+by the Skill tool."* The measurement and the shipped contract disagree, and the
+contract is what runs. **This is a note, not a quiet edit to an accepted record**
+— ADR-012 wants a fresh measurement and probably a superseding one.
+
+### What the fence is not
+
+`sdk.d.ts`, restated because it bounds the claim: *"This is a context filter,
+not a sandbox: unlisted skills are hidden from the model's listing and rejected
+by the Skill tool, but their files remain on disk and are reachable via
+Read/Bash."* That is a property of granting `Bash` at all, not something this
+undoes.
+
+## `Skill` is not in `allowedTools`, deliberately
+
+The gate's list and the SDK's list are the same value minus one entry
+(`queryOptions`, `src/runtime/claude.ts`). `Skill` stays on the **gate's**
+surface — a skill invocation is a tool call and admission judges it — while
+`Options.allowedTools` must not carry it: `sdk.d.ts` deprecates that spelling
+twice and points at `Options.skills` as *"the single place to turn skills on"*.
+Leaving it there works today and stops working on the SDK bump that drops the
+deprecated handling — silently, with no failing test, which is this card's own
+bug returning by another door.
+
 ## Known gaps
 
-- **`hkb show` prints `(runtime default)` rather than the resolved list** for a
-  Job that named no surface (`src/hkb.ts`), so an operator cannot see that
-  `Skill` is on it without reading the code. Until that lands, `hkb --help`'s
-  `--allow-tool` entry names `Skill` — and names `Agent` as absent — so a
-  narrowing operator knows what they are dropping.
-- **A grant is per-directory, not per-skill.** ADR-012 measured `Options.skills`
-  narrowing nothing in either spelling, so granting `.claude` grants all nine
-  Prisma skills and anything else that directory later carries. The fence is the
-  human merge, not a filter.
+- **A grant is per-directory, not per-skill.** Granting `.claude` grants all
+  nine Prisma skills and anything that directory later carries. The fence above
+  is per-*grant*, not per-skill; narrowing further is an operator's job with a
+  second directory, and the human merge is still the boundary.
 - **`/code-review` and the reviewer step still cannot run.** They need `Agent`,
-  which stays denied until the subagent fence is measured across a spawn.
+  which stays denied until the subagent fence is measured across a spawn (#63).
 - The measurement above ran `--no-isolate` on a clone, because nothing about
   admission is worktree-shaped. A skill invoked inside a sandboxed worktree
   additionally meets the `pre-push` hook and the two escape refusals
   (`concepts/admission-control`), which are unchanged by any of this.
+- **The two-spelling fence has not been measured against a real session.** It
+  cannot fail open, but if the SDK matched neither spelling a granted skill
+  would be silently unavailable — fail-closed, and the same state the board was
+  in before this card. Worth one paid run to settle.

@@ -143,7 +143,10 @@ meet one in the git history, that is what it was.
   (`DEFAULT_TOOLS`, `src/runtime/surface.ts`). Invoking one is a prompt expansion, so it widens what
   a worker knows and nothing about what it may do — every tool the skill then reaches for comes back
   through the admission gate. Until `Skill` was admitted no worker could invoke one and every grant
-  was inert (*features/skill-invocation*).
+  was inert. **Which** skills exist is a separate fence the gate cannot enforce, because it matches
+  tool names: `Options.skills` is set on every run from the directories actually granted, and is
+  `[]` when none were — without it, admitting the tool would also hand a worker the operator's own
+  `~/.claude` skills (`skillFilter`, *features/skill-invocation*).
 - **Tool surface** — the whole set of tools a workload may call: `Job.allowedTools`, else
   `Board.defaultAllowedTools`, else `DEFAULT_TOOLS` (`src/spec.ts`, `src/runtime/surface.ts`).
   Anything absent is denied at admission rather than discouraged, `[]` means *no tools at all* and is

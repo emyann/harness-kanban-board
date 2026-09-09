@@ -38,9 +38,9 @@ import type { WorkerSpec } from './index.ts';
  * kind's tool surface is the whole change, not the change plus the discovery that the rule was only
  * ever right for isolated Jobs.
  */
-export const DEFAULT_TOOLS = [
+export const DEFAULT_TOOLS: readonly string[] = Object.freeze([
   'Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash', 'WebFetch', 'WebSearch', 'TodoWrite', 'Skill',
-];
+]);
 
 /**
  * What this run may call: the surface the Job resolved to, or the shipped default.
@@ -50,7 +50,11 @@ export const DEFAULT_TOOLS = [
  * default.
  */
 export function toolSurface(spec: Pick<WorkerSpec, 'allowedTools'>): string[] {
-  return spec.allowedTools ?? DEFAULT_TOOLS;
+  // A COPY, and the constant is frozen. Both halves matter: this array is handed to the SDK, to the
+  // admission gate and to the fake, and returning the module-level reference meant one `push`
+  // anywhere permanently rewrote the shipped default for every later Job in the process — with no
+  // board write and nothing in `hkb show` to explain it.
+  return [...(spec.allowedTools ?? DEFAULT_TOOLS)];
 }
 
 /**
@@ -61,15 +65,61 @@ export function toolSurface(spec: Pick<WorkerSpec, 'allowedTools'>): string[] {
  * still cannot skip it, while a workload running in the operator's checkout has no worktree to
  * bring a subagent's work back to and so refuses a spawn that asks for one.
  *
- * `spec.admission` is spread last, but it carries no `allow` — the surface is not a per-run
- * override, it is the resolved spec.
+ * **`spec.admission` is spread FIRST, and the two derived keys are set after it.** It used to be
+ * spread last, which read as "a per-run field wins" and was wrong in the one way that matters:
+ * `subagentIsolation` is already a field on `AdmissionPolicy`, so the day `WorkerSpec.admission`
+ * gains it, a caller could silently override the rule computed from `spec.isolated` and an isolated
+ * Job's subagents would stop getting `isolation: "worktree"` injected — their work landing in the
+ * parent's worktree, or in a throwaway one, which is the failure the rule exists to prevent. The
+ * surface is not a per-run override either: it is the resolved spec, and nothing may widen it.
  */
 export function admissionPolicy(
   spec: Pick<WorkerSpec, 'allowedTools' | 'isolated' | 'admission'>,
 ): AdmissionPolicy {
   return {
+    ...spec.admission,
     subagentIsolation: spec.isolated === false ? 'forbid' : 'force',
     allow: toolSurface(spec),
-    ...spec.admission,
   };
+}
+
+/**
+ * Which skills this run may invoke, as `Options.skills` — and it is a **fence**, not a convenience.
+ *
+ * ADR-012's rule is that nothing reaches a worker the operator did not grant it, and admitting
+ * `Skill` to the surface above broke it in a way the first implementation did not measure. ADR-012's
+ * own Consequences section records what a worker is advertised with `settingSources: []` and no
+ * grant at all: *"17 user-level skills, 5 agents, 4 claude.ai MCP connectors and 52 slash commands,
+ * none of them permitted"*. **"None of them permitted" was true only because `Skill` was off the
+ * surface.** Put it on, leave this unset, and every ordinary Job — no `--plugin-dir` anywhere near
+ * it — can invoke the operator's own `~/.claude` skills: content nobody granted, on a repository
+ * hkb is running an agent against precisely because nobody has read it yet.
+ *
+ * **ADR-012 measurement 7 says this option narrows nothing, and that is no longer true.** At the
+ * pinned 0.3.261 the SDK documents the opposite (`sdk.d.ts`): a `string[]` enables *only* the listed
+ * skills, and *"unlisted skills are hidden from the model's listing and rejected by the Skill
+ * tool"*. The measurement and the shipped contract disagree; the contract is what runs. That record
+ * wants a fresh measurement and probably a superseding one — this is a note, not a quiet edit to it.
+ *
+ * ## Two spellings per skill, and why that is not belt-and-braces
+ *
+ * `sdk.d.ts` again: an entry matches *"the exact canonical name (e.g. `my-plugin:my-skill`) or a
+ * `:name` suffix of it"*. Whether a granted skill is canonically `prisma-cli` or
+ * `<plugin>:prisma-cli` depends on how the SDK names a local plugin, which hkb does not control and
+ * has not measured. Emitting both `name` and `:name` matches either, so the fence does not depend
+ * on the answer — and no guess here can fail open, because a name that matches nothing enables
+ * nothing.
+ *
+ * `[]` when the surface does not carry `Skill`: an operator who narrowed with `--allow-tool
+ * Read,Bash` has said no, and the SDK must hear it too rather than only the gate.
+ *
+ * The SDK's own caveat, restated because it bounds the claim: *"This is a context filter, not a
+ * sandbox: unlisted skills are hidden from the model's listing and rejected by the Skill tool, but
+ * their files remain on disk and are reachable via Read/Bash."* That is a property of granting
+ * `Bash` at all, not something this fence undoes.
+ */
+export function skillFilter(granted: string[], surface: string[]): string[] {
+  if (!surface.includes('Skill')) return [];
+  const names = [...new Set(granted.map((n) => n.trim()).filter(Boolean))].sort();
+  return names.flatMap((n) => [n, `:${n}`]);
 }

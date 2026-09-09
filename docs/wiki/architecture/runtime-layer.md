@@ -9,14 +9,14 @@ covers:
   - path: src/runtime/index.ts
     sha: 99ec06b9d41099f47b52a74873edc14b0a7d6567
   - path: src/plugins.ts
-    sha: 8057664cf308d860315bd9abe7b941a00fcf4519
+    sha: 50314938ab90cd9f5793091dc79faf6a5bd52e65
   - path: src/runtime/claude.ts
-    sha: 99f48dce1ec77266c5f486a386d55d438a02397c
+    sha: c19d9065a63bc8265bbad6bcb29f1643bfe72938
   - path: src/runtime/fake.ts
-    sha: 1a034150eee10661a6f1e5abac96e0e58499492d
+    sha: 6a1ec6e6f7890b54a254018b3b7d277020b4b23e
   - path: src/runtime/surface.ts
-    sha: 91dc14a46f39d60c04e59d95dbc5d6c4c360d67c
-generated_at_commit: 01c316b
+    sha: e7660f0ce513bfc804cc31a0a92040e5bdc7fa1a
+generated_at_commit: ff67f87
 last_refreshed: 2026-09-09
 related: [decisions/adr-007-workload-scheduler, architecture/job-kind, concepts/admission-control, concepts/worker-identity, features/skill-invocation]
 ---
@@ -137,6 +137,20 @@ the pattern of `src/limits.ts` and `src/liveness.ts` — because inside the driv
 the shipped default could only be exercised by buying a session. `Skill` is on
 that default and `Agent` is not; both are arguments rather than lists, and they
 are made in `concepts/admission-control` and `features/skill-invocation`.
+
+`queryOptions(spec, abortController)` is the same move one step further along:
+everything the SDK is told, as a value. It exists because the surface being
+*correct* and the surface *reaching the SDK* are two claims, and only the first
+had a test — deleting `allowedTools` from the options object left the whole suite
+green, since the only importer of `claudeRuntime` is a live test that skips
+without an API key.
+
+Two fields there are deliberately not the same list. `Options.allowedTools` gets
+the surface **minus `Skill`**, because `sdk.d.ts` deprecates that spelling and
+points at `Options.skills`; the gate's `allow` keeps it, because a skill
+invocation is a tool call. And `Options.skills` is passed on every run — `[]`
+when nothing was granted — since omitting it is documented as *not* "skills off"
+(`features/skill-invocation`).
 
 Two things in that hook *are* per-run, and both answer the same question — did
 this attempt get a worktree? The subagent isolation policy reads

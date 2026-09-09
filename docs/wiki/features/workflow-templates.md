@@ -9,7 +9,7 @@ covers:
   - path: src/templates.ts
     sha: 5377df2c14203132e63b836c3685a7f6b0e9d9bc
   - path: src/hkb.ts
-    sha: 306d4fa2d8af038fbfd904dbb17161850a65e942
+    sha: 07cc5da2cf62b8a7cb356558d805b9c2a29ba5b7
   - path: src/inputs.ts
     sha: 140cf48b8b323742a57e3e604b6853f829c72b6c
   - path: prisma/schema.prisma
@@ -24,7 +24,7 @@ related:
     concepts/ceilings,
     features/proposals,
   ]
-generated_at_commit: 32ea87c
+generated_at_commit: ff67f87
 last_refreshed: 2026-09-09
 ---
 

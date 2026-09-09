@@ -512,8 +512,14 @@ every tool a granted skill might suggest.
 
 *Invoking* a granted skill is itself a tool call, `Skill`, and it is on the default surface. It has to be:
 a grant reaches a worker's context either way, but until `Skill` was admitted no worker could ever run one,
-so every grant was a declaration that did nothing. Admitting it widens nothing — a skill is a prompt
-expansion, and every tool it then reaches for comes back through the same gate.
+so every grant was a declaration that did nothing. What a skill then *does* widens nothing — a skill is a
+prompt expansion, and every tool it reaches for comes back through the same gate.
+
+**Which** skills it may invoke is a separate fence, and the gate cannot enforce it: the gate matches tool
+names, so it cannot tell a granted repository skill from one sitting in the operator's own `~/.claude`.
+So hkb tells the SDK explicitly, on every run — the skills the granted directories actually carry, and an
+**empty list when nothing was granted**. Without that, admitting the tool would hand every ordinary Job the
+operator's own skills, which is precisely what ADR-012 exists to prevent.
 
 Two properties worth knowing ([ADR-012](docs/wiki/decisions/adr-012-skills-by-grant-not-by-settings.md)).
 hkb **never loads a repository's settings** — `.claude/settings.json` hooks are shell commands the
