@@ -9,14 +9,16 @@ covers:
   - path: src/admission.ts
     sha: 3da82a22f3e857c3142359fce3cfefda0be59da8
   - path: src/runtime/claude.ts
-    sha: 479b992254c82445bc839ebb302d748c712eec38
+    sha: c19d9065a63bc8265bbad6bcb29f1643bfe72938
+  - path: src/runtime/surface.ts
+    sha: e7660f0ce513bfc804cc31a0a92040e5bdc7fa1a
   - path: src/push.ts
     sha: 79181173571e3f6359402de26638e1e5fef904ac
   - path: src/pre-push.ts
     sha: 589393dab0dfb3bff5d7b4edf16c7b808b85e1c7
-generated_at_commit: f8ea774
+generated_at_commit: ff67f87
 last_refreshed: 2026-09-09
-related: [architecture/runtime-layer, architecture/job-kind, decisions/adr-007-workload-scheduler, decisions/adr-017-the-workflow-is-content, gotchas/prompt-is-not-a-guarantee]
+related: [architecture/runtime-layer, architecture/job-kind, features/skill-invocation, decisions/adr-007-workload-scheduler, decisions/adr-017-the-workflow-is-content, gotchas/prompt-is-not-a-guarantee]
 ---
 
 # Admission control
@@ -87,6 +89,39 @@ be decoration.
   `isolation: "worktree"` is not requested and not checked; it is **injected**.
   A parent that omits it cannot skip it. Verified against the real SDK: a spawn
   with no isolation parameter came back `mutate Agent — isolation injected`.
+
+## The default surface
+
+The `allow` list is the *resolved* surface — the Job's, or the board's, or the
+shipped default when neither named one (`src/spec.ts`, `src/runtime/surface.ts`).
+That default is a pure module rather than a constant inside the SDK driver, for a
+reason this page's own rule predicts: while it lived in the driver, the only way
+to exercise the shipped default was to buy a session, so every test of this gate
+supplied an `allow` list of its own and proved the code rather than the product.
+`src/runtime/fake.ts` now builds the same policy from the same function and puts
+its tool calls through this gate, so the default can be asked what it refuses for
+free (`test/tool-surface.test.ts`).
+
+Two entries carry an argument rather than a convenience.
+
+**`Skill` is on it, and what a skill then *does* is judged here.** Invoking one
+is a prompt expansion — layer 6 — so every tool it reaches for arrives back at
+layer 2 and meets this same list. Until it was admitted, no worker had ever
+invoked a skill and every `--plugin-dir` grant was inert: ADR-012 measured skills
+*reaching* a worker and the gate denied the tool that *calls* one.
+
+Admitting it does widen one thing, and the first implementation of that card
+missed it: **which** skills exist is not this gate's question. The gate matches
+tool names, so it cannot tell a granted repository skill from one sitting in the
+operator's own `~/.claude`. That fence is `Options.skills`, set on every run from
+what was actually granted (`features/skill-invocation`) — a second guard at a
+second layer, for the same reason the push rule ended up at git rather than here:
+the layer that can answer the question is the layer the rule belongs at.
+
+**`Agent` is not on it.** One Job is one agent; a worker that could fan out would
+spawn work nothing has claimed. This is where a skill that spawns subagents
+(`/code-review`) stops — the spawn is a tool call, so it makes no difference
+whether a brief or a skill asked for it.
 
 ## The push rule — and the layer it had to move to
 
@@ -185,8 +220,9 @@ whether *this attempt* got a worktree (`WorkerSpec.isolated`, set from the same
   with a reason that says to spawn it without one; a spawn that asks for nothing is
   left alone and inherits the parent's cwd, which is where the work belongs.
 
-The constant was unreachable — `Agent` is not in the runtime's `DEFAULT_TOOLS`, so
-nothing could spawn at all — and it would have become reachable the day anyone
+The constant was unreachable — `Agent` is not in `DEFAULT_TOOLS`
+(`src/runtime/surface.ts`), so nothing could spawn at all — and it would have
+become reachable the day anyone
 allowlisted `Agent` for a kind. A guard that is wrong while it is inert is a guard
 that is wrong on the day it is switched on.
 

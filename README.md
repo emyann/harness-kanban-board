@@ -498,7 +498,8 @@ no policy pinned to it is governed by nothing.
 `--allow-tool <name>` (repeatable, or `--allow-tools Read,Grep`) narrows the tool surface a Job may use.
 This is a **ceiling the board enforces, not a request**: anything absent is denied in a `PreToolUse` hook
 that runs before every other permission rule, so a Job given `Read` and `Grep` *cannot* write, whatever its
-brief says. Without it, the runtime's own default applies. `hkb boards set <slug> --allow-tools …` sets the
+brief says. Without it, the runtime's own default applies — and `Skill` is on that default, so a narrowed
+list must name it to keep it. `hkb boards set <slug> --allow-tools …` sets the
 default for Jobs that name none — a default a Job may still widen, unlike `--daily-budget`, which it cannot
 exceed.
 
@@ -508,6 +509,17 @@ none of the skills the repository carries, and rebuilds that knowledge from trai
 other half of least privilege and it points the other way: `--allow-tool` narrows what a worker may *do*,
 `--plugin-dir` widens what it may *read*, and neither touches the other — the admission gate still denies
 every tool a granted skill might suggest.
+
+*Invoking* a granted skill is itself a tool call, `Skill`, and it is on the default surface. It has to be:
+a grant reaches a worker's context either way, but until `Skill` was admitted no worker could ever run one,
+so every grant was a declaration that did nothing. What a skill then *does* widens nothing — a skill is a
+prompt expansion, and every tool it reaches for comes back through the same gate.
+
+**Which** skills it may invoke is a separate fence, and the gate cannot enforce it: the gate matches tool
+names, so it cannot tell a granted repository skill from one sitting in the operator's own `~/.claude`.
+So hkb tells the SDK explicitly, on every run — the skills the granted directories actually carry, and an
+**empty list when nothing was granted**. Without that, admitting the tool would hand every ordinary Job the
+operator's own skills, which is precisely what ADR-012 exists to prevent.
 
 Two properties worth knowing ([ADR-012](docs/wiki/decisions/adr-012-skills-by-grant-not-by-settings.md)).
 hkb **never loads a repository's settings** — `.claude/settings.json` hooks are shell commands the

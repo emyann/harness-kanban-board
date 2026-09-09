@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "a Job failed as `check_failed`, you are adding anything that runs before/beside/after the agent, or you are about to change what makes an attempt succeed"
 covers:
   - path: src/hkb.ts
-    sha: 306d4fa2d8af038fbfd904dbb17161850a65e942
+    sha: 07cc5da2cf62b8a7cb356558d805b9c2a29ba5b7
   - path: src/check.ts
     sha: d5d2e273d51d281992cfa4dbb34e92458150e0d2
   - path: src/controller.ts
@@ -20,7 +20,7 @@ covers:
     sha: 5377df2c14203132e63b836c3685a7f6b0e9d9bc
   - path: prisma/schema.prisma
     sha: 4e4b7aa6863fad5e660435982912460565ebabf3
-generated_at_commit: 32ea87c
+generated_at_commit: ff67f87
 last_refreshed: 2026-09-09
 related:
   [

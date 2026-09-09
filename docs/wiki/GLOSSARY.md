@@ -138,6 +138,19 @@ meet one in the git history, that is what it was.
   *features/labels*). A map rather than a tag list so `workflow=release` and `step=draft` compose.
   Nothing in the controller reads one: a label is how a person finds work again, not how work finds
   work.
+- **Skill** — a markdown instruction sheet a worker may load mid-run, reached through a **plugin
+  grant**; and `Skill`, the tool that loads one, which is on the default tool surface
+  (`DEFAULT_TOOLS`, `src/runtime/surface.ts`). Invoking one is a prompt expansion, so it widens what
+  a worker knows and nothing about what it may do — every tool the skill then reaches for comes back
+  through the admission gate. Until `Skill` was admitted no worker could invoke one and every grant
+  was inert. **Which** skills exist is a separate fence the gate cannot enforce, because it matches
+  tool names: `Options.skills` is set on every run from the directories actually granted, and is
+  `[]` when none were — without it, admitting the tool would also hand a worker the operator's own
+  `~/.claude` skills (`skillFilter`, *features/skill-invocation*).
+- **Tool surface** — the whole set of tools a workload may call: `Job.allowedTools`, else
+  `Board.defaultAllowedTools`, else `DEFAULT_TOOLS` (`src/spec.ts`, `src/runtime/surface.ts`).
+  Anything absent is denied at admission rather than discouraged, `[]` means *no tools at all* and is
+  not the same value as "named none", and it is a default a Job may widen rather than a ceiling.
 - **Slot** — the concurrency ordinal a lease holds: the lowest non-negative integer no other live
   lease holds, machine-wide, released when the lease is (`Lease.slot`, frozen onto `Attempt.slot`).
   It is the only fact answering *"which of the concurrent workers am I"*, which a run picking a port

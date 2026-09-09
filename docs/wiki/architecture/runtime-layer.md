@@ -9,14 +9,16 @@ covers:
   - path: src/runtime/index.ts
     sha: 99ec06b9d41099f47b52a74873edc14b0a7d6567
   - path: src/plugins.ts
-    sha: 8057664cf308d860315bd9abe7b941a00fcf4519
+    sha: 50314938ab90cd9f5793091dc79faf6a5bd52e65
   - path: src/runtime/claude.ts
-    sha: 479b992254c82445bc839ebb302d748c712eec38
+    sha: c19d9065a63bc8265bbad6bcb29f1643bfe72938
   - path: src/runtime/fake.ts
-    sha: 94f9f21ab7c9702506ae625dff37ac15ecfdbcce
-generated_at_commit: f8ea774
+    sha: 6a1ec6e6f7890b54a254018b3b7d277020b4b23e
+  - path: src/runtime/surface.ts
+    sha: e7660f0ce513bfc804cc31a0a92040e5bdc7fa1a
+generated_at_commit: ff67f87
 last_refreshed: 2026-09-09
-related: [decisions/adr-007-workload-scheduler, architecture/job-kind, concepts/admission-control, concepts/worker-identity]
+related: [decisions/adr-007-workload-scheduler, architecture/job-kind, concepts/admission-control, concepts/worker-identity, features/skill-invocation]
 ---
 
 # The runtime layer
@@ -129,6 +131,27 @@ one by hand still can; what is gone is the default that wrote it unasked.
 
 `maxBudgetUsd` is the runaway-cost stop and it covers subagent spend.
 
+**The tool surface is not a driver detail.** `DEFAULT_TOOLS`, `toolSurface(spec)`
+and `admissionPolicy(spec)` live in `src/runtime/surface.ts` — a pure module, in
+the pattern of `src/limits.ts` and `src/liveness.ts` — because inside the driver
+the shipped default could only be exercised by buying a session. `Skill` is on
+that default and `Agent` is not; both are arguments rather than lists, and they
+are made in `concepts/admission-control` and `features/skill-invocation`.
+
+`queryOptions(spec, abortController)` is the same move one step further along:
+everything the SDK is told, as a value. It exists because the surface being
+*correct* and the surface *reaching the SDK* are two claims, and only the first
+had a test — deleting `allowedTools` from the options object left the whole suite
+green, since the only importer of `claudeRuntime` is a live test that skips
+without an API key.
+
+Two fields there are deliberately not the same list. `Options.allowedTools` gets
+the surface **minus `Skill`**, because `sdk.d.ts` deprecates that spelling and
+points at `Options.skills`; the gate's `allow` keeps it, because a skill
+invocation is a tool call. And `Options.skills` is passed on every run — `[]`
+when nothing was granted — since omitting it is documented as *not* "skills off"
+(`features/skill-invocation`).
+
 Two things in that hook *are* per-run, and both answer the same question — did
 this attempt get a worktree? The subagent isolation policy reads
 `WorkerSpec.isolated`: a parent with no worktree has nowhere to bring a subagent's
@@ -144,6 +167,13 @@ session id included, so the store never learns which runtime ran the work. The
 control plane — readiness, leases, retries, terminal writes — is the part that has
 to be right, and none of it is about Claude. Testing it against a real model would
 make the suite cost money and stop being deterministic.
+
+It is not a hole in the gate, and it used to look like one. The fake builds the
+admission policy with `admissionPolicy(spec)` — the same call the SDK driver
+makes — and puts the tool calls it claims to make through it, so a Job run on the
+fake is refused exactly what a Job run for real would be refused, at the shipped
+defaults and for nothing. Its `denials` count is that gate's answer rather than a
+hardcoded `0`.
 
 ## Known gaps
 

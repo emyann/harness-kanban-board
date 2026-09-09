@@ -106,3 +106,51 @@ export function resolvePlugins(repoPath: string, granted: string[] | null): { pa
   }
   return out;
 }
+
+/**
+ * The skills a set of granted plugin directories actually carries, by name.
+ *
+ * The read side of the fence in `src/runtime/surface.ts`. `Options.skills` wants names, and the only
+ * honest source for "what did the operator grant" is the directories themselves — a hardcoded list
+ * would be a second record of a fact the filesystem already holds, and it would go stale the first
+ * time somebody added a skill.
+ *
+ * A skill is `<grant>/skills/<name>/SKILL.md`, and the **directory name** is the name. The
+ * frontmatter carries one too, and it is deliberately not read: `skillFilter` emits a `:name` suffix
+ * form precisely so that a canonical name it cannot predict still matches, and parsing YAML here to
+ * be more certain would add a dependency this repository does not take (CLAUDE.md) to answer a
+ * question the suffix form already answers.
+ *
+ * Symlinks are followed, because this repository's own `.claude/skills/*` are symlinks into
+ * `.agents/skills/` and a grant that silently skipped them would be inert in exactly the layout hkb
+ * ships with.
+ *
+ * Best effort by construction: a grant that is unreadable contributes nothing rather than throwing.
+ * Failing closed is right here — an unreadable grant enables no skills, which is where the board was
+ * before it was granted, and a run that dies because a directory moved is worse than one that runs
+ * without a skill nobody could read.
+ */
+export function discoverSkills(pluginPaths: string[]): string[] {
+  const names = new Set<string>();
+  for (const dir of pluginPaths) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(path.join(dir, 'skills'), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      const at = path.join(dir, 'skills', e.name);
+      try {
+        // `statSync` rather than `e.isDirectory()`: a symlinked skill is a link, not a directory,
+        // and this repository's own grants are symlinks.
+        if (!fs.statSync(at).isDirectory()) continue;
+        if (!fs.existsSync(path.join(at, 'SKILL.md'))) continue;
+      } catch {
+        continue;
+      }
+      names.add(e.name);
+    }
+  }
+  return [...names].sort();
+}
