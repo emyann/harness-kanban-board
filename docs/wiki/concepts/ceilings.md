@@ -9,17 +9,17 @@ covers:
   - path: src/limits.ts
     sha: 61b65c43e2fd7c28f952c403e02d073ca9907561
   - path: src/controller.ts
-    sha: 90455e098974f28f31a507c7141a13f5309ee3b4
+    sha: 67e1a217f67ec6731ebcc0cd491d5f55d712be81
   - path: prisma/schema.prisma
     sha: 34921e6803578d6831938ada63d477d55a95eb6a
   - path: src/spec.ts
     sha: d3fba5cc6bb9a1cebeea496bf445f4165c3cecbc
   - path: src/hkb.ts
-    sha: 9a0d90d2c6f06166e47f3576328577b1894da63f
+    sha: f7cca4f068b7ccb229e6f7b87727de198f9efb6e
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
-generated_at_commit: 26814cb
-last_refreshed: 2026-09-08
+generated_at_commit: 6d4142a
+last_refreshed: 2026-09-09
 related: [architecture/the-board, architecture/the-loop, architecture/job-kind, concepts/leases-and-liveness]
 ---
 

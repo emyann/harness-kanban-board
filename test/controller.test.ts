@@ -2562,6 +2562,41 @@ test('a holder whose lease was taken mid-run does not write the Job row from its
   assert.equal(lease?.holder, 'other-host', 'and the other holder\'s lease is untouched — the release is fenced on the token');
 });
 
+
+test('a Job left `running` with no lease and no live holder is reclaimed on the next pass', async () => {
+  // The state no lease describes: the holder released the lease and then could not write the Job
+  // row. The lease scan never saw it, no pass claims a Job that is not `pending`, and `hkb retry`
+  // refused it while saying `hkb run` reclaims it — which it now does.
+  const b = await checkBoard('stranded-running');
+  const job = await db.job.create({ data: { boardId: b.id, name: 'stranded', brief: 'x', phase: 'running', maxRetries: 2 } });
+  // A holder on THIS machine whose process is gone — the one case liveness can prove. An open
+  // attempt from another machine, or from a live process, is left alone: see the sibling tests
+  // that model another host's run in flight this same way.
+  await db.attempt.create({ data: { jobId: job.id, k: 1, host: `${os.hostname()}/999999@fake`, maxBudgetUsd: 1, startedAt: new Date() } });
+  const r = await reconcile({ runtime: fakeRuntime(), cwd, board: 'stranded-running', readPr: false });
+  assert.deepEqual(r.reclaimed, [job.id]);
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.attempts[0].outcome, 'lost', 'the open attempt is closed');
+  assert.equal(after.phase, 'succeeded', 'and, with retries left, it was pending — and this same pass then ran it');
+  assert.equal(await db.event.count({ where: { jobId: job.id, kind: 'reclaimed' } }), 1);
+});
+
+test('the interrupted-check notice survives a `stopped` attempt in between', async () => {
+  // `interruptedBefore` looked at `k - 1` only, so a stop mid-run between the interrupted check
+  // and the resume lost the notice — the exact gap the refusal walk-back already closes.
+  const b = await checkBoard('interrupted-walkback');
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'walk', brief: 'x', check: 'true', phase: 'pending', lastSessionId: 's-walk', maxRetries: 4 },
+  });
+  const at = new Date();
+  await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'h', maxBudgetUsd: 1, startedAt: at, endedAt: at, outcome: 'completed', sessionId: 's-walk', reason: 'check interrupted by a stop — the run stands, the check runs again' } });
+  await db.attempt.create({ data: { jobId: job.id, k: 2, host: 'h', maxBudgetUsd: 1, startedAt: at, endedAt: at, outcome: 'stopped', sessionId: 's-walk' } });
+  const prompts: string[] = [];
+  await reconcile({ runtime: spyingPlants(prompts, {}), cwd, board: 'interrupted-walkback', readPr: false });
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0], /a stop landed while this command was being run/, 'told, two rows back');
+});
+
 // ---------------------------------------------------------------- a stop that lands mid-check
 
 test('a stop during the check does not relabel a run that had already finished', async () => {

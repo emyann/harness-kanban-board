@@ -81,7 +81,9 @@ function given(raw: unknown, flag: string, clear?: string): string {
   // Tested on the RAW value, before the trim: `--flag " -x"` is the escape the message below
   // prescribes, and trimming first refused it with the same message — no spelling reached a value
   // that really starts with a dash.
-  if (raw.startsWith('-')) {
+  // FLAG-shaped: a dash followed by a letter, or two dashes. A brief that opens with a Markdown
+  // bullet (`- add a test`) and a negative number are values; `-x` and `--json` are the trap.
+  if (/^--?[A-Za-z]/.test(raw)) {
     const v = raw.trim();
     throw usage(
       `${flag} was given \`${v}\`, which is a flag rather than a value — \`${flag} ${v}\` would file `
@@ -867,6 +869,9 @@ export async function main(argv: string[]): Promise<number> {
       // for, with nothing created. It resolves against the board's REPOSITORY, never the cwd and
       // never a worktree: the same fence as a guide and a plugin grant (`src/templates.ts`).
       const tpl = values.from !== undefined ? readTemplate(scope.repoPath, given(values.from, '--from')) : null;
+      // Whether the operator TYPED `--check`, read before the workflow fills the gaps below — after
+      // the fill, `values.check` no longer says which of the two it came from.
+      const checkTyped = values.check !== undefined;
       if (tpl) {
         // The whole precedence rule, and it is `src/spec.ts`'s grain: **the more specific value
         // wins**, so a flag the operator typed outranks the file. Written as "fill what is absent"
@@ -984,7 +989,7 @@ export async function main(argv: string[]): Promise<number> {
         throw usage(
           'a proposing Job has nothing to check — its output is the proposal, not a change to the '
           + 'tree, so there is nothing for a command to judge. Drop the check '
-          + (tpl?.spec.check !== undefined && values.check === undefined
+          + (tpl?.spec.check !== undefined && !checkTyped
             ? `(\`check:\` in workflow ${tpl.name})`
             : '(--check)')
           + ', or drop --propose and file the work itself.',
@@ -1768,7 +1773,12 @@ export async function main(argv: string[]): Promise<number> {
         // Stored verbatim, checked only for being non-empty: the controller reads an exit code and
         // knows nothing about the command (ADR-016 §3), so validating it here would be hkb having
         // an opinion about a shell line it cannot parse. `none` clears it, like every other default.
-        setString('check', 'defaultCheck');
+        setString('check', 'defaultCheck', (v) => {
+          // The same cap `hkb new --check` has: the command reaches `spawn` as one argv token.
+          if (Buffer.byteLength(v, 'utf8') > CHECK_COMMAND_MAX_BYTES) {
+            throw usage(`--check is ${Buffer.byteLength(v, 'utf8')} bytes, and the limit is ${CHECK_COMMAND_MAX_BYTES} — put the command in a script and name that.`);
+          }
+        });
         // One path, not a list: a repository has one contributor guide, and a second one would be
         // two documents disagreeing about the same rules with no way to say which wins.
         if (values.guide !== undefined) {

@@ -7,11 +7,11 @@ audience: [dev]
 read_when: "a Job failed as `check_failed`, you are adding anything that runs before/beside/after the agent, or you are about to change what makes an attempt succeed"
 covers:
   - path: src/hkb.ts
-    sha: 9a0d90d2c6f06166e47f3576328577b1894da63f
+    sha: f7cca4f068b7ccb229e6f7b87727de198f9efb6e
   - path: src/check.ts
-    sha: e3a41365b041c5eef99f64fed2c076bc0b6a7e80
+    sha: d5d2e273d51d281992cfa4dbb34e92458150e0d2
   - path: src/controller.ts
-    sha: 90455e098974f28f31a507c7141a13f5309ee3b4
+    sha: 67e1a217f67ec6731ebcc0cd491d5f55d712be81
   - path: src/spec.ts
     sha: d3fba5cc6bb9a1cebeea496bf445f4165c3cecbc
   - path: src/brief.ts
@@ -20,8 +20,8 @@ covers:
     sha: fb6b019b10b138755c8f1b6e753dc19adb9d5735
   - path: prisma/schema.prisma
     sha: 34921e6803578d6831938ada63d477d55a95eb6a
-generated_at_commit: 26814cb
-last_refreshed: 2026-09-08
+generated_at_commit: 6d4142a
+last_refreshed: 2026-09-09
 related:
   [
     decisions/adr-016-the-pod-spec-is-the-map,
@@ -169,6 +169,10 @@ byte — all measured. Each of those resolves the `unstartable` record this modu
 because an unhandled rejection out of the controller's post-run section is a Job stuck `running`.
 
 ### A stop that lands mid-check
+
+"Interrupted" is read off the **record**, not off `deps.signal.aborted`: the verdict is frozen at
+`exit`, so an abort landing in the drain window leaves a real exit status behind it, and that
+status — not the stop — is the answer; asking the signal re-ran a session whose check had passed.
 
 It leaves the run's outcome exactly as it was and records only that the check was interrupted: no
 verdict, no retry burnt (`charged` does not count a `completed` attempt), phase back to `pending`,

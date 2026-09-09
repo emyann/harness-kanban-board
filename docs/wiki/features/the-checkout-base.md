@@ -11,7 +11,7 @@ covers:
   - path: src/spec.ts
     sha: d3fba5cc6bb9a1cebeea496bf445f4165c3cecbc
   - path: src/controller.ts
-    sha: 90455e098974f28f31a507c7141a13f5309ee3b4
+    sha: 67e1a217f67ec6731ebcc0cd491d5f55d712be81
   - path: src/rebase.ts
     sha: 5b0df395ad3a5c5a8b2bad44a782d40e92d40d28
   - path: prisma/schema.prisma
@@ -24,8 +24,8 @@ related:
     architecture/job-kind,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: 26814cb
-last_refreshed: 2026-09-08
+generated_at_commit: 6d4142a
+last_refreshed: 2026-09-09
 ---
 
 # The checkout base (`--base`)

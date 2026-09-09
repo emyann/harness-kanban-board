@@ -15,7 +15,7 @@ covers:
   - path: src/results.ts
     sha: 0fc3dc145a1c515267534909aee79f034effa61b
   - path: src/controller.ts
-    sha: 90455e098974f28f31a507c7141a13f5309ee3b4
+    sha: 67e1a217f67ec6731ebcc0cd491d5f55d712be81
   - path: src/runtime/claude.ts
     sha: 5ae775633cae411b71443add232b79f1325c4075
   - path: src/brief.ts
@@ -35,8 +35,8 @@ related:
     architecture/job-kind,
     architecture/the-loop,
   ]
-generated_at_commit: 26814cb
-last_refreshed: 2026-09-08
+generated_at_commit: 6d4142a
+last_refreshed: 2026-09-09
 ---
 
 # ADR-011: A workload proposes, the controller writes

@@ -335,6 +335,44 @@ async function reclaimExpired(db: ReturnType<typeof openBoard>, at: Date, report
     report.reclaimed.push(l.jobId);
     log?.(`#${l.jobId} reclaimed (the lease from ${l.holder} expired)`);
   }
+
+  // ---- and the state no lease describes: `running` with no Lease row at all.
+  //
+  // The claim writes the lease before the phase and the release comes after the outcome, so this
+  // is never a Job in flight — it is one whose holder released the lease and then could not write
+  // the Job row (a `SQLITE_BUSY` past the busy timeout in the `catch`, a process killed between
+  // the two). Nothing else can act on it: the lease scan above never sees it, no pass claims a
+  // Job that is not `pending`, and `hkb retry` refuses it while pointing here. So here takes it,
+  // on the strength of the row alone — which is what level-triggered means.
+  const stranded = await db.job.findMany({
+    where: { phase: 'running', lease: { is: null }, ...(board ? { board: { slug: board } } : {}) },
+    select: { id: true, maxRetries: true, board: { select: { defaultMaxRetries: true } } },
+  });
+  for (const j of stranded) {
+    const open = await db.attempt.findFirst({ where: { jobId: j.id, endedAt: null }, orderBy: { k: 'desc' } });
+    // The same proof the lease scan wants. An open attempt whose holder cannot be shown dead — a
+    // process on another machine, or one still running here — is somebody's, and a Job in that
+    // state is left exactly as it is; with no lease there is no deadline to fall back on, so the
+    // conservative answer is to wait for a row that says more.
+    if (open && holderLiveness(open.host, open.startedAt ?? at) !== 'dead') continue;
+    if (open) {
+      await db.attempt.update({
+        where: { jobId_k: { jobId: j.id, k: open.k } },
+        data: { endedAt: at, outcome: 'lost', reason: 'running with no lease — the holder is gone' },
+      });
+    }
+    const maxRetries = resolveSpec(j, j.board).maxRetries.value;
+    const spent = await db.attempt.count({ where: { jobId: j.id, endedAt: { not: null }, outcome: { not: 'stopped' } } });
+    // Fenced on the phase: a claim that landed between the read above and this write is not ours to undo.
+    const fixed = await db.job.updateMany({
+      where: { id: j.id, phase: 'running', lease: { is: null } },
+      data: { phase: spent < maxRetries + 1 ? 'pending' : 'failed', lastError: 'running with no lease — the holder is gone' },
+    });
+    if (fixed.count === 0) continue;
+    await db.event.create({ data: { kind: 'reclaimed', jobId: j.id, actor: 'nobody' } });
+    report.reclaimed.push(j.id);
+    log?.(`#${j.id} reclaimed (running with no lease — the holder is gone)`);
+  }
 }
 
 /**
@@ -363,6 +401,28 @@ async function reclaimExpired(db: ReturnType<typeof openBoard>, at: Date, report
  * know is that the check never answered — read back by `checkWasInterrupted` below.
  */
 const CHECK_INTERRUPTED = 'check interrupted by a stop — the run stands, the check runs again';
+
+/**
+ * Did the last attempt that could have answered the check finish with the check cut short?
+ *
+ * Walks back past `CHECKLESS_OUTCOMES` the way `lastRefusedCheck` does — a `stopped`, `lost` or
+ * pre-run `crashed` attempt in between ran no check and says nothing about it — and only while the
+ * session is still the one that finished: a nulled session starts cold and owes nothing to a
+ * checkout it never saw. Looking at `k - 1` alone lost the notice across exactly those rows.
+ */
+async function checkWasInterrupted(db: ReturnType<typeof openBoard>, jobId: number, sessionId: string | null): Promise<boolean> {
+  if (!sessionId) return false;
+  const ended = await db.attempt.findMany({
+    where: { jobId, endedAt: { not: null } },
+    orderBy: { k: 'desc' },
+    select: { outcome: true, reason: true, sessionId: true },
+  });
+  for (const a of ended) {
+    if (a.outcome && CHECKLESS_OUTCOMES.has(a.outcome)) continue;
+    return a.outcome === 'completed' && a.reason === CHECK_INTERRUPTED && a.sessionId === sessionId;
+  }
+  return false;
+}
 
 const CHECKLESS_OUTCOMES: ReadonlySet<string> = new Set(['stopped', 'lost', 'crashed', 'timed_out', 'max_turns', 'max_budget']);
 
@@ -1004,12 +1064,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       // A previous attempt that finished and whose check a stop cut short: the resumed session is
       // told so, and told that its declared results are per attempt — the ones it wrote last time
       // were read and are on that attempt; this attempt owes its own.
-      const interruptedBefore = k > 1 && runsCheck
-        ? !!(await db.attempt.findFirst({
-          where: { jobId: job.id, k: k - 1, outcome: 'completed', reason: CHECK_INTERRUPTED },
-          select: { k: true },
-        }))
-        : false;
+      const interruptedBefore = k > 1 && runsCheck ? await checkWasInterrupted(db, job.id, job.lastSessionId) : false;
       const priorCheck = k > 1 && runsCheck
         ? await lastRefusedCheck(db, job.id, k, job.lastSessionId)
         : null;
@@ -1546,7 +1601,10 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // the phase goes back to `pending` so the check is run again, the session is kept, and no
         // retry is burnt — `nextPhase` is not consulted at all, because there is no failure here for
         // it to decide about.
-        if (deps.signal?.aborted) {
+        // From the RECORD, not from `deps.signal.aborted`: the verdict is frozen at `exit`, so an
+        // abort landing in the drain window leaves a real exit status behind it, and that status
+        // — not the stop — is the answer. Asking the signal re-ran a session whose check had passed.
+        if (r.interrupted) {
           say('  check interrupted by the stop — the run stands, and the check runs again');
           checkInterrupted = true;
           ran = { phase: 'pending', outcome: ran.outcome, resumable: true, lastError: null };

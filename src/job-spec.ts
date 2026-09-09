@@ -253,6 +253,9 @@ export function describeChange(c: SpecChange): string {
 
 function show(v: unknown): string {
   if (v === null || v === undefined) return '(none)';
+  // `''` is a value with a meaning — "no check, and do not inherit" — and rendered as nothing it
+  // read as a blank line in `hkb job set`'s report of what changed.
+  if (v === '') return '(none — opted out)';
   // Before the plain-array case, because `inputs` is an array of OBJECTS and `join` renders those
   // as `[object Object]` — the exact thing this function's docstring says it exists to avoid, in
   // the one shape the unit test did not cover.

@@ -2305,3 +2305,30 @@ test('a proposing Job cannot be given a check by hkb job set, and --json says th
   assert.deepEqual((json((await hkb('show', String(j.id), '--board', b, '--json')).out) as { check: unknown }).check,
     { value: null, source: 'proposes' }, 'show agrees with new');
 });
+
+test('a brief that opens with a Markdown bullet is a brief, not a flag', async () => {
+  // The dash guard is for FLAG-shaped values — `-x`, `--json` — and a first version refused
+  // `--brief "- add a test"`, which is how a person writes a list.
+  const b = 'bullet-brief-board';
+  const j = json((await hkb('new', 'bullets', '--brief', '- add a test\n- run it', '--board', b, '--json')).out) as { id: number; brief?: string };
+  const shown = json((await hkb('show', String(j.id), '--board', b, '--json')).out) as { brief: string };
+  assert.match(shown.brief, /^- add a test/);
+  await assert.rejects(() => main(['new', 'flagged', '--board', b, '--brief', '-x']),
+    (e: Error & { exitCode?: number }) => e.exitCode === 2 && /which is a flag rather than a value/.test(e.message));
+});
+
+test('hkb boards set --check has the same byte cap as hkb new --check', async () => {
+  const repo = scratchRepo('cap-board');
+  await hkb('boards', 'add', 'cap-board', '--repo', repo);
+  await assert.rejects(
+    () => main(['boards', 'set', 'cap-board', '--check', 'x'.repeat(9_000)]),
+    (e: Error & { exitCode?: number }) => e.exitCode === 2 && /the limit is/.test(e.message),
+  );
+});
+
+test('hkb job set --check "" reports the opt-out as what it means, not as a blank', async () => {
+  const b = 'optout-render-board';
+  const j = json((await hkb('new', 'opt', '--brief', 'x', '--board', b, '--check', 'npm test', '--json')).out) as { id: number };
+  const r = await hkb('job', 'set', String(j.id), '--board', b, '--check', '');
+  assert.match(r.out, /npm test → \(none — opted out\)/);
+});

@@ -9,7 +9,7 @@ covers:
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
-    sha: 90455e098974f28f31a507c7141a13f5309ee3b4
+    sha: 67e1a217f67ec6731ebcc0cd491d5f55d712be81
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/worktree.ts
@@ -18,8 +18,8 @@ covers:
     sha: 61b65c43e2fd7c28f952c403e02d073ca9907561
   - path: prisma/schema.prisma
     sha: 34921e6803578d6831938ada63d477d55a95eb6a
-generated_at_commit: 26814cb
-last_refreshed: 2026-09-08
+generated_at_commit: 6d4142a
+last_refreshed: 2026-09-09
 related: [architecture/the-loop, architecture/the-board, architecture/job-kind, concepts/ceilings]
 ---
 
@@ -245,6 +245,17 @@ pipe on the final line — is raised without turning a `completed` attempt into
 session for work already delivered. A resumed attempt that crashed before its
 runtime ran keeps its session (`src/controller.ts`). The error is then re-thrown,
 so the pass still reports it.
+
+And the one state no lease describes — a Job `running` with **no Lease row** — is
+repaired by the same reclaim, level-triggered: the holder released the lease and then
+could not write the Job row (a `SQLITE_BUSY` in the `catch`, a process killed between
+the two), and nothing else could act on it — the lease scan never saw it, no pass
+claims a Job that is not `pending`, and `hkb retry` refused it while saying `hkb run`
+reclaims it. Now it does, on the same proof the lease scan wants: no open attempt, or
+an open attempt whose holder is a dead process on this machine. An open attempt from
+another machine, or from a live process, is left alone — with no lease there is no
+deadline to fall back on, so the conservative answer is to wait for a row that says
+more (`reclaimExpired`, `src/controller.ts`).
 
 ## The daemon's belt and braces: skip one reclaim after a wake
 

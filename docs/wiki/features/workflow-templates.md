@@ -9,7 +9,7 @@ covers:
   - path: src/templates.ts
     sha: fb6b019b10b138755c8f1b6e753dc19adb9d5735
   - path: src/hkb.ts
-    sha: 9a0d90d2c6f06166e47f3576328577b1894da63f
+    sha: f7cca4f068b7ccb229e6f7b87727de198f9efb6e
   - path: src/inputs.ts
     sha: ffd76fce7689fe1c9a1dc0db3756cdf343d2b623
 related:
@@ -21,8 +21,8 @@ related:
     concepts/ceilings,
     features/proposals,
   ]
-generated_at_commit: 26814cb
-last_refreshed: 2026-09-08
+generated_at_commit: 6d4142a
+last_refreshed: 2026-09-09
 ---
 
 # Workflow templates (`.hkb/workflows/`, `hkb new --from`)

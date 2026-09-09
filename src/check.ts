@@ -178,7 +178,10 @@ export type CheckRecord = {
   base?: string;
 };
 
-export type CheckResult = { ok: true; record: null } | { ok: false; record: CheckRecord };
+export type CheckResult = ({ ok: true; record: null } | { ok: false; record: CheckRecord }) & {
+  /** Set when a stop settled the check before it had answered. A frozen verdict is never interrupted. */
+  interrupted?: true;
+};
 
 /**
  * The last `max` bytes of some text, marked when something was dropped.
@@ -262,6 +265,14 @@ export type SpawnLike = {
  * says so on stderr, which is a better message than anything this function could write.
  */
 export function readCheck(command: string, r: SpawnLike, ms: number, timeoutMs = CHECK_TIMEOUT_MS): CheckResult {
+  const read = readCheckRecord(command, r, ms, timeoutMs);
+  // An abort that settled the check BEFORE a verdict existed. The controller asks this rather than
+  // `signal.aborted`: the verdict is frozen at `exit`, so an abort landing in the drain window
+  // leaves a real exit status behind it — and that status, not the stop, is the answer.
+  return r.error?.code === 'ABORT_ERR' ? { ...read, interrupted: true } : read;
+}
+
+function readCheckRecord(command: string, r: SpawnLike, ms: number, timeoutMs: number): CheckResult {
   // Two windows, cut independently. Joining them first and cutting the join is what let 4 KB of
   // stderr noise evict a one-line stdout verdict.
   const stdout = tailOf(r.stdout ?? '', CHECK_TAIL_BYTES, r.dropped?.stdout ?? 0);

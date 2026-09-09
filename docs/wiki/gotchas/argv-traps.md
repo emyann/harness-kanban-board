@@ -7,15 +7,15 @@ audience: [dev]
 read_when: "adding a flag, adding a verb that joins positionals, or wondering why a value arrived as one word — or as the word `true`, or as another flag"
 covers:
   - path: src/hkb.ts
-    sha: 9a0d90d2c6f06166e47f3576328577b1894da63f
+    sha: f7cca4f068b7ccb229e6f7b87727de198f9efb6e
 related:
   [
     architecture/transitions,
     features/workflow-templates,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: 26814cb
-last_refreshed: 2026-09-08
+generated_at_commit: 6d4142a
+last_refreshed: 2026-09-09
 ---
 
 # What `parseArgs` does quietly, and the bugs it shipped
@@ -182,7 +182,9 @@ is *not in effect*, because it was eaten: the operator asked for machine output 
 
 `unknownFlags` cannot see it (both flags are declared) and `strayWords` cannot either (the token was
 consumed, so nothing fell through as a positional). What catches it is the value's own shape:
-`given` (`src/hkb.ts`) refuses a value beginning with `-`, on every flag that shares it.
+`given` (`src/hkb.ts`) refuses a **flag-shaped** value — a dash followed by a letter, or two dashes
+— on every flag that shares it. Not every leading dash: a brief that opens with a Markdown bullet
+(`--brief "- add a test"`) and a negative number are values, and a first version refused the bullet.
 
 Nothing legitimate is lost. A shell line, a git ref, a repo-relative path, a model name and a
 comma-separated list all begin with something else, and a value that really does start with a dash

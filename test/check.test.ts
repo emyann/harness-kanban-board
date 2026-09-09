@@ -466,3 +466,25 @@ test('the SIGKILL is sent even by a process with nothing else to do — a single
   try { process.kill(pid, 0); } catch { alive = false; }
   assert.equal(alive, false, 'the TERM-ignoring child is dead: the SIGKILL was sent by a process that had nothing else to do');
 });
+
+test('`interrupted` comes from the record, and a frozen verdict is never interrupted', async () => {
+  // The controller used to ask `deps.signal.aborted`, which is true for an abort that landed in
+  // the drain window AFTER a passing `exit 0` — and it then re-ran a session whose check had
+  // passed. The result says which: only a stop that settled the check before it answered.
+  const where = fs.mkdtempSync(path.join(dir, 'interrupted-'));
+  const passed = new AbortController();
+  const p = runCheck(where, 'echo PASSED; sleep 4 & exit 0', { signal: passed.signal, drainMs: 1_500, killGraceMs: 200 });
+  await new Promise((r) => setTimeout(r, 300));
+  passed.abort();
+  const r1 = await p;
+  assert.equal(r1.ok, true);
+  assert.equal(r1.interrupted, undefined, 'the shell had answered before the abort — that answer stands');
+
+  const cut = new AbortController();
+  const q = runCheck(where, 'sleep 30', { signal: cut.signal, killGraceMs: 200 });
+  await new Promise((r) => setTimeout(r, 200));
+  cut.abort();
+  const r2 = await q;
+  assert.equal(r2.ok, false);
+  assert.equal(r2.interrupted, true, 'no verdict existed — this one was interrupted');
+});
