@@ -103,6 +103,8 @@ meet one in the git history, that is what it was.
 - **Forge** — where pull requests live, deliberately not where the board lives. GitHub, read through
   one `gh` shell-out (`src/pulls.ts`) and joined to a Job by branch name. It holds no Job, no lease
   and no state hkb depends on.
+- **hkb, the board** — the product, in Tekton's shape: kinds of its own with a controller of their own, built **on** the Job kind the way `tekton.dev` is built on `batch/v1`. Everything git-shaped, workflow-shaped or kanban-shaped lives here, never in the machinery (ADR-018).
+- **hkb, the machinery** — Kubernetes for agent sessions: one kind, `Job`, whose contract is *cut a workspace, run one agent session under limits, record what happened, clean up*. It has never heard of a branch, a pull request, a review, a card or a workflow (ADR-018).
 - **Holder** — who a lease or a `Controller` row belongs to, written as `<hostname>/<pid>@<runtime>`
   and parsed back on the way in (`holderId`/`parseHolder`, `src/liveness.ts`). The hostname is not
   decoration: a pid without a host is a number with no referent, so a bare pid cannot be checked for
@@ -310,3 +312,4 @@ meet one in the git history, that is what it was.
   worker's worktree, because a fresh checkout does not have the `.env` its tests need. Git answers
   both halves of the match rule, and no pattern may reach the board's own directory (`includedFiles`,
   `src/worktree.ts`; *features/worktree-includes*).
+- **Workspace** — where a Job's session runs. **Declared** on the runtime seam (`WorkerSpec.workspace`) and **provisioned by the runtime**, never by the controller: a PodSpec declares `volumes:` and a workload never provisions storage (ADR-018). The Claude driver satisfies it with a git worktree via the CLI's `--worktree`; the fake runtime satisfies it with a plain directory, and nothing in the Job kind can tell the difference. `WorkerOutcome.workspacePath` reports where it landed (`src/runtime/index.ts`).
