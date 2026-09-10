@@ -1,6 +1,29 @@
 # Realign the Job kind: a Job is a wrapper around an agent session, and nothing else
 
-**Status:** a plan, written 2026-09-10, to be executed from a clean session.
+**Status: EXECUTED. This is history, not a live plan — read
+[`docs/wiki/decisions/adr-018-the-boundary.md`](wiki/decisions/adr-018-the-boundary.md) instead.**
+
+It is kept because it is the provenance: ADR-018 is the record that came out of it, and the reasoning
+started here. What landed, as of `64c7034` (PR #434):
+
+| step below | outcome |
+|---|---|
+| 1. close #432 unmerged | done — closed with the reasoning, *wrong not incomplete* |
+| 2. the superseding ADR | **ADR-018**, which supersedes this document as well as part of ADR-016 and ADR-017 |
+| 3. split the gate into admission and ask | **not built.** Measured and designed in ADR-018 decision 4; no code |
+| 4. move the git protocol out of the Job kind | done — five modules deleted, −3,900 lines |
+| 5. adopt the spec fields hkb hand-rolls | **partly.** `ttlSecondsAfterFinished` exists as a built-in constant, not a spec field; `podFailurePolicy`, a real `suspend` field and `parallelism` vs `maxConcurrent` are untouched |
+| 6. Workflow/Step | not started — [`docs/is-a-step-data.md`](is-a-step-data.md) is the question that precedes it |
+
+**Where this document was wrong, and it is worth knowing:** it proposed moving the git work behind a
+seam in the core. Measurement during execution showed the harness already provides all of it —
+worktree creation, `.worktreeinclude` under the same filename, base freshening, the lock, resume into
+the same tree — so the code was **deleted rather than moved**, and the workspace became a runtime
+concern. This document does not contain that conclusion; ADR-018 does.
+
+---
+
+**Original status:** a plan, written 2026-09-10, to be executed from a clean session.
 **Verdict:** the Job kind and its controller are mis-scoped. Fix that before anything else is built
 on top of them. **Scrapping working code is expected and authorised** — see *"On deleting code"*.
 
