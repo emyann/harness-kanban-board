@@ -42,7 +42,7 @@ const mkJob = (name: string, extra: Record<string, unknown> = {}) =>
 async function askGate(name: string, calls: string[], extra: Record<string, unknown> = {}) {
   const job = await mkJob(name, extra);
   const runtime = fakeRuntime({ calls });
-  await reconcile({ runtime, cwd: REPO, board: 'surface', only: job.id, readPr: false });
+  await reconcile({ runtime, cwd: REPO, board: 'surface', only: job.id });
   return { job, decisions: runtime.decisions };
 }
 
@@ -264,21 +264,6 @@ test('a DENIED call still emits a tool event, because that is what the real driv
   });
   assert.equal(out.denials, 1, 'the call was refused');
   assert.deepEqual(seen, ['Agent'], 'and the operator still saw it attempted');
-});
-
-test('a call with INPUT reaches the gate branches that read one — the sandbox refusal', async () => {
-  // With `tool_input: {}` this branch was unreachable, so `calls: ['Bash']` on a sandboxed Job read
-  // as gate coverage, reported allowed, and proved nothing.
-  const rt = fakeRuntime({
-    calls: [{ name: 'Bash', input: { command: 'git push --no-verify origin main' } }],
-  });
-  const out = await rt.run(spec({ admission: { sandboxed: true } }));
-  assert.equal(out.denials, 1, 'the push escape is refused inside a sandbox');
-  assert.match(rt.decisions[0].reason ?? '', /--no-verify/);
-
-  // And the same call on a Job that is not sandboxed is admitted — the refusal is the sandbox's.
-  const open = fakeRuntime({ calls: [{ name: 'Bash', input: { command: 'git push --no-verify origin main' } }] });
-  assert.equal((await open.run(spec())).denials, 0);
 });
 
 test('decisions can be reset, so a second pass is not read through the first', async () => {

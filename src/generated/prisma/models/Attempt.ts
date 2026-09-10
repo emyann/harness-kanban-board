@@ -31,7 +31,6 @@ export type AttemptAvgAggregateOutputType = {
   k: number | null
   maxBudgetUsd: number | null
   attemptDeadlineSeconds: number | null
-  prNumber: number | null
   costUsd: number | null
   slot: number | null
   turns: number | null
@@ -43,7 +42,6 @@ export type AttemptSumAggregateOutputType = {
   k: number | null
   maxBudgetUsd: number | null
   attemptDeadlineSeconds: number | null
-  prNumber: number | null
   costUsd: number | null
   slot: number | null
   turns: number | null
@@ -63,9 +61,6 @@ export type AttemptMinAggregateOutputType = {
   reason: string | null
   maxBudgetUsd: number | null
   attemptDeadlineSeconds: number | null
-  branch: string | null
-  prNumber: number | null
-  prUrl: string | null
   costUsd: number | null
   slot: number | null
   turns: number | null
@@ -85,9 +80,6 @@ export type AttemptMaxAggregateOutputType = {
   reason: string | null
   maxBudgetUsd: number | null
   attemptDeadlineSeconds: number | null
-  branch: string | null
-  prNumber: number | null
-  prUrl: string | null
   costUsd: number | null
   slot: number | null
   turns: number | null
@@ -107,9 +99,6 @@ export type AttemptCountAggregateOutputType = {
   reason: number
   maxBudgetUsd: number
   attemptDeadlineSeconds: number
-  branch: number
-  prNumber: number
-  prUrl: number
   exported: number
   costUsd: number
   results: number
@@ -129,7 +118,6 @@ export type AttemptAvgAggregateInputType = {
   k?: true
   maxBudgetUsd?: true
   attemptDeadlineSeconds?: true
-  prNumber?: true
   costUsd?: true
   slot?: true
   turns?: true
@@ -141,7 +129,6 @@ export type AttemptSumAggregateInputType = {
   k?: true
   maxBudgetUsd?: true
   attemptDeadlineSeconds?: true
-  prNumber?: true
   costUsd?: true
   slot?: true
   turns?: true
@@ -161,9 +148,6 @@ export type AttemptMinAggregateInputType = {
   reason?: true
   maxBudgetUsd?: true
   attemptDeadlineSeconds?: true
-  branch?: true
-  prNumber?: true
-  prUrl?: true
   costUsd?: true
   slot?: true
   turns?: true
@@ -183,9 +167,6 @@ export type AttemptMaxAggregateInputType = {
   reason?: true
   maxBudgetUsd?: true
   attemptDeadlineSeconds?: true
-  branch?: true
-  prNumber?: true
-  prUrl?: true
   costUsd?: true
   slot?: true
   turns?: true
@@ -205,9 +186,6 @@ export type AttemptCountAggregateInputType = {
   reason?: true
   maxBudgetUsd?: true
   attemptDeadlineSeconds?: true
-  branch?: true
-  prNumber?: true
-  prUrl?: true
   exported?: true
   costUsd?: true
   results?: true
@@ -320,9 +298,6 @@ export type AttemptGroupByOutputType = {
   reason: string | null
   maxBudgetUsd: number
   attemptDeadlineSeconds: number
-  branch: string | null
-  prNumber: number | null
-  prUrl: string | null
   exported: runtime.JsonValue | null
   costUsd: number | null
   results: runtime.JsonValue | null
@@ -371,9 +346,6 @@ export type AttemptWhereInput = {
   reason?: Prisma.StringNullableFilter<"Attempt"> | string | null
   maxBudgetUsd?: Prisma.FloatFilter<"Attempt"> | number
   attemptDeadlineSeconds?: Prisma.IntFilter<"Attempt"> | number
-  branch?: Prisma.StringNullableFilter<"Attempt"> | string | null
-  prNumber?: Prisma.IntNullableFilter<"Attempt"> | number | null
-  prUrl?: Prisma.StringNullableFilter<"Attempt"> | string | null
   exported?: Prisma.JsonNullableFilter<"Attempt">
   costUsd?: Prisma.FloatNullableFilter<"Attempt"> | number | null
   results?: Prisma.JsonNullableFilter<"Attempt">
@@ -400,9 +372,6 @@ export type AttemptOrderByWithRelationInput = {
   reason?: Prisma.SortOrderInput | Prisma.SortOrder
   maxBudgetUsd?: Prisma.SortOrder
   attemptDeadlineSeconds?: Prisma.SortOrder
-  branch?: Prisma.SortOrderInput | Prisma.SortOrder
-  prNumber?: Prisma.SortOrderInput | Prisma.SortOrder
-  prUrl?: Prisma.SortOrderInput | Prisma.SortOrder
   exported?: Prisma.SortOrderInput | Prisma.SortOrder
   costUsd?: Prisma.SortOrderInput | Prisma.SortOrder
   results?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -433,9 +402,6 @@ export type AttemptWhereUniqueInput = Prisma.AtLeast<{
   reason?: Prisma.StringNullableFilter<"Attempt"> | string | null
   maxBudgetUsd?: Prisma.FloatFilter<"Attempt"> | number
   attemptDeadlineSeconds?: Prisma.IntFilter<"Attempt"> | number
-  branch?: Prisma.StringNullableFilter<"Attempt"> | string | null
-  prNumber?: Prisma.IntNullableFilter<"Attempt"> | number | null
-  prUrl?: Prisma.StringNullableFilter<"Attempt"> | string | null
   exported?: Prisma.JsonNullableFilter<"Attempt">
   costUsd?: Prisma.FloatNullableFilter<"Attempt"> | number | null
   results?: Prisma.JsonNullableFilter<"Attempt">
@@ -462,9 +428,6 @@ export type AttemptOrderByWithAggregationInput = {
   reason?: Prisma.SortOrderInput | Prisma.SortOrder
   maxBudgetUsd?: Prisma.SortOrder
   attemptDeadlineSeconds?: Prisma.SortOrder
-  branch?: Prisma.SortOrderInput | Prisma.SortOrder
-  prNumber?: Prisma.SortOrderInput | Prisma.SortOrder
-  prUrl?: Prisma.SortOrderInput | Prisma.SortOrder
   exported?: Prisma.SortOrderInput | Prisma.SortOrder
   costUsd?: Prisma.SortOrderInput | Prisma.SortOrder
   results?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -498,9 +461,6 @@ export type AttemptScalarWhereWithAggregatesInput = {
   reason?: Prisma.StringNullableWithAggregatesFilter<"Attempt"> | string | null
   maxBudgetUsd?: Prisma.FloatWithAggregatesFilter<"Attempt"> | number
   attemptDeadlineSeconds?: Prisma.IntWithAggregatesFilter<"Attempt"> | number
-  branch?: Prisma.StringNullableWithAggregatesFilter<"Attempt"> | string | null
-  prNumber?: Prisma.IntNullableWithAggregatesFilter<"Attempt"> | number | null
-  prUrl?: Prisma.StringNullableWithAggregatesFilter<"Attempt"> | string | null
   exported?: Prisma.JsonNullableWithAggregatesFilter<"Attempt">
   costUsd?: Prisma.FloatNullableWithAggregatesFilter<"Attempt"> | number | null
   results?: Prisma.JsonNullableWithAggregatesFilter<"Attempt">
@@ -525,9 +485,6 @@ export type AttemptCreateInput = {
   reason?: string | null
   maxBudgetUsd: number
   attemptDeadlineSeconds: number
-  branch?: string | null
-  prNumber?: number | null
-  prUrl?: string | null
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -554,9 +511,6 @@ export type AttemptUncheckedCreateInput = {
   reason?: string | null
   maxBudgetUsd: number
   attemptDeadlineSeconds: number
-  branch?: string | null
-  prNumber?: number | null
-  prUrl?: string | null
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -581,9 +535,6 @@ export type AttemptUpdateInput = {
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxBudgetUsd?: Prisma.FloatFieldUpdateOperationsInput | number
   attemptDeadlineSeconds?: Prisma.IntFieldUpdateOperationsInput | number
-  branch?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  prNumber?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
-  prUrl?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -610,9 +561,6 @@ export type AttemptUncheckedUpdateInput = {
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxBudgetUsd?: Prisma.FloatFieldUpdateOperationsInput | number
   attemptDeadlineSeconds?: Prisma.IntFieldUpdateOperationsInput | number
-  branch?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  prNumber?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
-  prUrl?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -638,9 +586,6 @@ export type AttemptCreateManyInput = {
   reason?: string | null
   maxBudgetUsd: number
   attemptDeadlineSeconds: number
-  branch?: string | null
-  prNumber?: number | null
-  prUrl?: string | null
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -665,9 +610,6 @@ export type AttemptUpdateManyMutationInput = {
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxBudgetUsd?: Prisma.FloatFieldUpdateOperationsInput | number
   attemptDeadlineSeconds?: Prisma.IntFieldUpdateOperationsInput | number
-  branch?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  prNumber?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
-  prUrl?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -693,9 +635,6 @@ export type AttemptUncheckedUpdateManyInput = {
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxBudgetUsd?: Prisma.FloatFieldUpdateOperationsInput | number
   attemptDeadlineSeconds?: Prisma.IntFieldUpdateOperationsInput | number
-  branch?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  prNumber?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
-  prUrl?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -736,9 +675,6 @@ export type AttemptCountOrderByAggregateInput = {
   reason?: Prisma.SortOrder
   maxBudgetUsd?: Prisma.SortOrder
   attemptDeadlineSeconds?: Prisma.SortOrder
-  branch?: Prisma.SortOrder
-  prNumber?: Prisma.SortOrder
-  prUrl?: Prisma.SortOrder
   exported?: Prisma.SortOrder
   costUsd?: Prisma.SortOrder
   results?: Prisma.SortOrder
@@ -756,7 +692,6 @@ export type AttemptAvgOrderByAggregateInput = {
   k?: Prisma.SortOrder
   maxBudgetUsd?: Prisma.SortOrder
   attemptDeadlineSeconds?: Prisma.SortOrder
-  prNumber?: Prisma.SortOrder
   costUsd?: Prisma.SortOrder
   slot?: Prisma.SortOrder
   turns?: Prisma.SortOrder
@@ -776,9 +711,6 @@ export type AttemptMaxOrderByAggregateInput = {
   reason?: Prisma.SortOrder
   maxBudgetUsd?: Prisma.SortOrder
   attemptDeadlineSeconds?: Prisma.SortOrder
-  branch?: Prisma.SortOrder
-  prNumber?: Prisma.SortOrder
-  prUrl?: Prisma.SortOrder
   costUsd?: Prisma.SortOrder
   slot?: Prisma.SortOrder
   turns?: Prisma.SortOrder
@@ -798,9 +730,6 @@ export type AttemptMinOrderByAggregateInput = {
   reason?: Prisma.SortOrder
   maxBudgetUsd?: Prisma.SortOrder
   attemptDeadlineSeconds?: Prisma.SortOrder
-  branch?: Prisma.SortOrder
-  prNumber?: Prisma.SortOrder
-  prUrl?: Prisma.SortOrder
   costUsd?: Prisma.SortOrder
   slot?: Prisma.SortOrder
   turns?: Prisma.SortOrder
@@ -812,7 +741,6 @@ export type AttemptSumOrderByAggregateInput = {
   k?: Prisma.SortOrder
   maxBudgetUsd?: Prisma.SortOrder
   attemptDeadlineSeconds?: Prisma.SortOrder
-  prNumber?: Prisma.SortOrder
   costUsd?: Prisma.SortOrder
   slot?: Prisma.SortOrder
   turns?: Prisma.SortOrder
@@ -885,9 +813,6 @@ export type AttemptCreateWithoutJobInput = {
   reason?: string | null
   maxBudgetUsd: number
   attemptDeadlineSeconds: number
-  branch?: string | null
-  prNumber?: number | null
-  prUrl?: string | null
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -912,9 +837,6 @@ export type AttemptUncheckedCreateWithoutJobInput = {
   reason?: string | null
   maxBudgetUsd: number
   attemptDeadlineSeconds: number
-  branch?: string | null
-  prNumber?: number | null
-  prUrl?: string | null
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -968,9 +890,6 @@ export type AttemptScalarWhereInput = {
   reason?: Prisma.StringNullableFilter<"Attempt"> | string | null
   maxBudgetUsd?: Prisma.FloatFilter<"Attempt"> | number
   attemptDeadlineSeconds?: Prisma.IntFilter<"Attempt"> | number
-  branch?: Prisma.StringNullableFilter<"Attempt"> | string | null
-  prNumber?: Prisma.IntNullableFilter<"Attempt"> | number | null
-  prUrl?: Prisma.StringNullableFilter<"Attempt"> | string | null
   exported?: Prisma.JsonNullableFilter<"Attempt">
   costUsd?: Prisma.FloatNullableFilter<"Attempt"> | number | null
   results?: Prisma.JsonNullableFilter<"Attempt">
@@ -995,9 +914,6 @@ export type AttemptCreateManyJobInput = {
   reason?: string | null
   maxBudgetUsd: number
   attemptDeadlineSeconds: number
-  branch?: string | null
-  prNumber?: number | null
-  prUrl?: string | null
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -1022,9 +938,6 @@ export type AttemptUpdateWithoutJobInput = {
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxBudgetUsd?: Prisma.FloatFieldUpdateOperationsInput | number
   attemptDeadlineSeconds?: Prisma.IntFieldUpdateOperationsInput | number
-  branch?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  prNumber?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
-  prUrl?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -1049,9 +962,6 @@ export type AttemptUncheckedUpdateWithoutJobInput = {
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxBudgetUsd?: Prisma.FloatFieldUpdateOperationsInput | number
   attemptDeadlineSeconds?: Prisma.IntFieldUpdateOperationsInput | number
-  branch?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  prNumber?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
-  prUrl?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -1076,9 +986,6 @@ export type AttemptUncheckedUpdateManyWithoutJobInput = {
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxBudgetUsd?: Prisma.FloatFieldUpdateOperationsInput | number
   attemptDeadlineSeconds?: Prisma.IntFieldUpdateOperationsInput | number
-  branch?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  prNumber?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
-  prUrl?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -1106,9 +1013,6 @@ export type AttemptSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs 
   reason?: boolean
   maxBudgetUsd?: boolean
   attemptDeadlineSeconds?: boolean
-  branch?: boolean
-  prNumber?: boolean
-  prUrl?: boolean
   exported?: boolean
   costUsd?: boolean
   results?: boolean
@@ -1135,9 +1039,6 @@ export type AttemptSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Exten
   reason?: boolean
   maxBudgetUsd?: boolean
   attemptDeadlineSeconds?: boolean
-  branch?: boolean
-  prNumber?: boolean
-  prUrl?: boolean
   exported?: boolean
   costUsd?: boolean
   results?: boolean
@@ -1164,9 +1065,6 @@ export type AttemptSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Exten
   reason?: boolean
   maxBudgetUsd?: boolean
   attemptDeadlineSeconds?: boolean
-  branch?: boolean
-  prNumber?: boolean
-  prUrl?: boolean
   exported?: boolean
   costUsd?: boolean
   results?: boolean
@@ -1193,9 +1091,6 @@ export type AttemptSelectScalar = {
   reason?: boolean
   maxBudgetUsd?: boolean
   attemptDeadlineSeconds?: boolean
-  branch?: boolean
-  prNumber?: boolean
-  prUrl?: boolean
   exported?: boolean
   costUsd?: boolean
   results?: boolean
@@ -1208,7 +1103,7 @@ export type AttemptSelectScalar = {
   denials?: boolean
 }
 
-export type AttemptOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"jobId" | "k" | "host" | "runtime" | "startedAt" | "endedAt" | "outcome" | "sessionId" | "summary" | "reason" | "maxBudgetUsd" | "attemptDeadlineSeconds" | "branch" | "prNumber" | "prUrl" | "exported" | "costUsd" | "results" | "slot" | "inputs" | "proposal" | "artifacts" | "check" | "turns" | "denials", ExtArgs["result"]["attempt"]>
+export type AttemptOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"jobId" | "k" | "host" | "runtime" | "startedAt" | "endedAt" | "outcome" | "sessionId" | "summary" | "reason" | "maxBudgetUsd" | "attemptDeadlineSeconds" | "exported" | "costUsd" | "results" | "slot" | "inputs" | "proposal" | "artifacts" | "check" | "turns" | "denials", ExtArgs["result"]["attempt"]>
 export type AttemptInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   job?: boolean | Prisma.JobDefaultArgs<ExtArgs>
 }
@@ -1271,7 +1166,7 @@ export type $AttemptPayload<ExtArgs extends runtime.Types.Extensions.InternalArg
      * Pod with the limits a LimitRange supplied; the scheduler then reads the Pod, never the
      * namespace, and a LimitRange edited afterwards does not retroactively rewrite what is running.
      * An Attempt is this system's Pod, and it already records what *happened* rather than what is
-     * configured — `costUsd`, `sessionId`, `branch`, `outcome`. The cap it ran under is that same
+     * configured — `costUsd`, `sessionId`, `outcome`. The cap it ran under is that same
      * kind of fact, and it is the one an operator most wants beside `costUsd`.
      * 
      * What it costs: `kb show` reports the frozen number for a past attempt, not what resolution
@@ -1293,9 +1188,6 @@ export type $AttemptPayload<ExtArgs extends runtime.Types.Extensions.InternalArg
      * was admitted under, and a LimitRange edited afterwards does not rewrite what is running.
      */
     attemptDeadlineSeconds: number
-    branch: string | null
-    prNumber: number | null
-    prUrl: string | null
     /**
      * What this attempt handed over: the paths that actually arrived in the repository, expanded
      * from the Job's declaration (a declared directory becomes the files under it). Null when the
@@ -1820,9 +1712,6 @@ export interface AttemptFieldRefs {
   readonly reason: Prisma.FieldRef<"Attempt", 'String'>
   readonly maxBudgetUsd: Prisma.FieldRef<"Attempt", 'Float'>
   readonly attemptDeadlineSeconds: Prisma.FieldRef<"Attempt", 'Int'>
-  readonly branch: Prisma.FieldRef<"Attempt", 'String'>
-  readonly prNumber: Prisma.FieldRef<"Attempt", 'Int'>
-  readonly prUrl: Prisma.FieldRef<"Attempt", 'String'>
   readonly exported: Prisma.FieldRef<"Attempt", 'Json'>
   readonly costUsd: Prisma.FieldRef<"Attempt", 'Float'>
   readonly results: Prisma.FieldRef<"Attempt", 'Json'>

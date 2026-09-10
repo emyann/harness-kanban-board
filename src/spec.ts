@@ -111,12 +111,6 @@ export const BUILT_IN = {
   pluginPaths: null,
   guide: null,
   /**
-   * Null, and the null means something: *the repository's default branch*, resolved fresh by
-   * `baseRef` from `origin/HEAD`. Writing a name here would make one branch the built-in answer for
-   * every repository hkb ever runs in, which is exactly the constant `Job.base` exists to remove.
-   */
-  base: null,
-  /**
    * Null, and the null is the whole shipped default: **nothing runs**. A check is a shell command
    * executed with the daemon's privileges, and one hkb invented for a repository it knows nothing
    * about would be a guess with a shell in it. It reaches a worker only because a person wrote it
@@ -140,7 +134,6 @@ export type JobSpec = {
   /** Raw, off the `Json?` column. `pluginList` normalizes it here, not at each call site. */
   pluginPaths?: unknown;
   guide?: unknown;
-  base?: unknown;
   check?: unknown;
 };
 
@@ -156,7 +149,6 @@ export type BoardDefaults = {
   defaultAllowedTools?: unknown;
   defaultPluginPaths?: unknown;
   defaultGuide?: unknown;
-  defaultBase?: unknown;
   defaultCheck?: unknown;
   /**
    * The board's default workflow — and the one field here `resolveSpec` deliberately does not
@@ -184,7 +176,6 @@ export type ResolvedSpec = {
   allowedTools: Traced<string[] | null>;
   pluginPaths: Traced<string[] | null>;
   guide: Traced<string | null>;
-  base: Traced<string | null>;
   check: Traced<string | null>;
 };
 
@@ -239,9 +230,6 @@ export function resolveSpec(
     // "no guide" is the absence, so a blank is normalised to it rather than becoming a Job that
     // reads the repository root.
     guide: pick(str(j.guide), str(b.defaultGuide), BUILT_IN.guide as string | null),
-    // Same shape as `guide`: a ref or nothing, with a blank normalised to the absence. There is no
-    // third state to protect here — "branch from no base" is not a thing a checkout can do.
-    base: pick(str(j.base), str(b.defaultBase), BUILT_IN.base as string | null),
     // The completion condition. Resolved like `guide` in its three levels and UNLIKE it in one
     // thing: the empty string is a value here, not a blank to normalise away. `checkValue` says why
     // — it is the per-Job opt-out from a board-wide check, and without it a board that sets one owns
@@ -275,7 +263,7 @@ export function hasDefaults(b: BoardDefaults): boolean {
   return b.defaultModel != null || b.defaultEffort != null || b.defaultMaxTurns != null
     || b.defaultMaxBudgetUsd != null || b.defaultMaxRetries != null || toolList(b.defaultAllowedTools) != null
     || pluginList(b.defaultPluginPaths) != null || str(b.defaultGuide) != null
-    || str(b.defaultBase) != null || str(b.defaultCheck) != null || str(b.defaultWorkflow) != null
+    || str(b.defaultCheck) != null || str(b.defaultWorkflow) != null
     || b.defaultAttemptDeadlineSeconds != null || b.defaultActiveDeadlineSeconds != null;
 }
 
@@ -290,7 +278,6 @@ export function boardDefaults(b: BoardDefaults) {
     allowedTools: toolList(b.defaultAllowedTools),
     pluginPaths: pluginList(b.defaultPluginPaths),
     guide: str(b.defaultGuide),
-    base: str(b.defaultBase),
     check: str(b.defaultCheck),
     workflow: str(b.defaultWorkflow),
     attemptDeadlineSeconds: b.defaultAttemptDeadlineSeconds ?? null,

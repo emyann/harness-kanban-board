@@ -81,7 +81,7 @@ test('a lapsed lease whose holder is still running is NOT reclaimed', async () =
   await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
   await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'me', runtime: 'fake', maxBudgetUsd: 1 , attemptDeadlineSeconds: 1800} });
 
-  const report = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug, readPr: false });
+  const report = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug });
 
   assert.deepEqual(report.reclaimed, [], 'nothing was reclaimed');
   assert.ok(await db.lease.findUnique({ where: { jobId: job.id } }), 'the lease is still held');
@@ -105,7 +105,7 @@ test('a lapsed lease whose holder has exited IS reclaimed, without waiting any l
   await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
   await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'gone', runtime: 'fake', maxBudgetUsd: 1 , attemptDeadlineSeconds: 1800} });
 
-  const report = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug, readPr: false });
+  const report = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug });
   assert.deepEqual(report.reclaimed, [job.id]);
   assert.equal(await db.lease.findUnique({ where: { jobId: job.id } }), null);
   const attempt = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 1 } } });
@@ -124,7 +124,7 @@ test('a holder on another machine is left to the clock, and the clock says take 
     },
   });
   await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
-  const report = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug, readPr: false });
+  const report = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug });
   assert.deepEqual(report.reclaimed, [job.id], 'we cannot see that host, so expiry is all there is');
 });
 
@@ -140,11 +140,11 @@ test('reclaim: false leaves even a provably dead holder alone — the pass after
   });
   await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
 
-  const skipped = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug, readPr: false, reclaim: false });
+  const skipped = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug, reclaim: false });
   assert.deepEqual(skipped.reclaimed, []);
   assert.ok(await db.lease.findUnique({ where: { jobId: job.id } }), 'held through the woke pass');
 
-  const next = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug, readPr: false });
+  const next = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug });
   assert.deepEqual(next.reclaimed, [job.id], 'and taken on the very next one');
 });
 
@@ -157,7 +157,7 @@ test('a shutdown mid-run releases the lease, and records a stop rather than a fa
   // maxRetries 0 is the sharp version: one attempt is all this Job is allowed. If a stop spends
   // it, the Job is `failed` and unrunnable, having never once failed at anything.
   const run = reconcile({
-    runtime: fakeRuntime({ delayMs: 30_000 }), cwd: REPO, board: board.slug, readPr: false,
+    runtime: fakeRuntime({ delayMs: 30_000 }), cwd: REPO, board: board.slug,
     signal: stopper.signal,
   });
   await new Promise((r) => setTimeout(r, 150));
@@ -178,14 +178,14 @@ test('a stopped attempt does not spend a retry: the Job still runs to completion
   const job = await mkJob(board.id, { maxRetries: 0 });
   const stopper = new AbortController();
   const run = reconcile({
-    runtime: fakeRuntime({ delayMs: 30_000 }), cwd: REPO, board: board.slug, readPr: false,
+    runtime: fakeRuntime({ delayMs: 30_000 }), cwd: REPO, board: board.slug,
     signal: stopper.signal,
   });
   await new Promise((r) => setTimeout(r, 150));
   stopper.abort();
   await run;
 
-  await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug, readPr: false });
+  await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug });
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: { orderBy: { k: 'asc' } } } });
   assert.equal(after.phase, 'succeeded');
   assert.equal(after.attempts.length, 2, 'k still advanced — it is half a primary key');
@@ -200,7 +200,7 @@ test('a shutdown claims nothing new', async () => {
   const stopper = new AbortController();
   stopper.abort();
   const report = await reconcile({
-    runtime: fakeRuntime(), cwd: REPO, board: board.slug, readPr: false, signal: stopper.signal,
+    runtime: fakeRuntime(), cwd: REPO, board: board.slug, signal: stopper.signal,
   });
   assert.deepEqual(report.claimed, [], 'already stopping when the pass began');
   for (const j of [a, b]) {
@@ -595,55 +595,49 @@ test('a resumable stop keeps its checkout — the next attempt resumes IN it', a
       };
     },
   };
-  await reconcile({ runtime: capped, cwd: REPO, board: board.slug, readPr: false });
+  await reconcile({ runtime: capped, cwd: REPO, board: board.slug });
 
-  // The worker left nothing behind, so the keep-test alone would have taken this directory — and
-  // the next attempt would then be cut fresh from origin, on a branch reset to base, with the
-  // resumed session convinced it was still in the tree it had been working in.
-  assert.equal(fs.existsSync(path.join(elsewhere, '.hkb', 'worktrees', `kb-${job.id}-1`)), true,
-    'resume is not restart, on disk as well as in the transcript');
+  // The property that used to be bought by a keep-test over the tree's contents, now bought by the
+  // TTL: a Job that has not FINISHED cannot be selected however old it is, so nothing collects the
+  // workspace its next attempt will resume into. Resume is not restart, on disk as well as in the
+  // transcript.
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
   assert.equal(after.phase, 'pending');
   assert.ok(after.lastSessionId, 'and there is a session to resume');
+  const { collectable } = await import('../src/workspaces.ts');
+  assert.equal(after.finishedAt, null);
+  assert.deepEqual(
+    collectable([{ id: job.id, finishedAt: after.finishedAt, phase: after.phase }], new Date(Date.now() + 1e9), 0),
+    [],
+    'and no TTL, however long, makes it collectable while another attempt may resume there',
+  );
 });
 
-test('the tick reclaims a checkout whose branch has landed — a sweep, not a step of the run', async () => {
-  // A repository with a real remote: the sweep's proof is a fact about what the remote still has.
-  const repo = path.join(dir, 'landed');
-  const remote = path.join(dir, 'landed-remote.git');
-  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', remote]);
-  fs.mkdirSync(repo);
-  const g = (args: string[], cwd = repo) => spawnSync('git', args, { cwd, encoding: 'utf8' });
-  g(['init', '-q', '-b', 'main']);
-  g(['config', 'user.email', 'l@test']);
-  g(['config', 'user.name', 'l']);
-  fs.writeFileSync(path.join(repo, 'README.md'), '# landed\n');
-  g(['add', '-A']);
-  g(['commit', '-qm', 'base']);
-  g(['remote', 'add', 'origin', remote]);
-  g(['push', '-q', '-u', 'origin', 'main']);
+test('the tick collects a finished Job\'s workspace once its TTL has elapsed', async () => {
+  // What replaced the old heuristic. That one asked each checkout whether it held uncommitted or
+  // unpushed work and kept it if so — a question that needed `pushedRef` and `heldWork`, only had
+  // an answer while the core required a push, and had no opinion about age at all (ADR-018).
+  //
+  // `ttlSecondsAfterFinished` asks nothing about the tree. The refusing cases are the interesting
+  // ones and they are exhaustive in `collectable`, so this test is about the two ends of it: a Job
+  // that has not finished is never a candidate, and a finished one becomes one on the clock.
+  const { collectable, workspaceName, removeWorkspace } = await import('../src/workspaces.ts');
 
-  // What an earlier run left: a checkout whose work is pushed and whose pull request has since
-  // been squash-merged and its branch deleted. Nothing tells hkb that happened — only asking does.
-  const { createWorktree } = await import('../src/worktree.ts');
-  const wt = createWorktree(repo, 99, 1);
-  fs.writeFileSync(path.join(wt.path, 'work.txt'), 'the Job did this\n');
-  g(['add', '-A'], wt.path);
-  g(['commit', '-qm', 'the Job'], wt.path);
-  g(['push', '-q', '-u', 'origin', wt.branch], wt.path);
-  execFileSync('git', ['--git-dir', remote, 'update-ref', '-d', `refs/heads/${wt.branch}`]);
+  const finishedAt = new Date('2026-09-10T10:00:00Z');
+  const rows = [
+    { id: 1, finishedAt, phase: 'succeeded' },
+    { id: 2, finishedAt: null, phase: 'running' },
+    { id: 3, finishedAt: null, phase: 'suspended' },
+  ];
+  const anHourLater = new Date('2026-09-10T11:00:00Z');
+  assert.deepEqual(collectable(rows, anHourLater, 3600), [1], 'exactly the finished one, and exactly on time');
+  assert.deepEqual(collectable(rows, new Date('2026-09-10T10:59:59Z'), 3600), [], 'a second early is not yet');
+  assert.deepEqual(collectable(rows, anHourLater, 0), [1], 'a TTL of zero means immediately, not never');
 
-  const board = await db.board.create({ data: { slug: `landed${++n}`, repoPath: repo } });
-  const lines: string[] = [];
-  await daemon.loop({
-    runtime: fakeRuntime(), cwd: REPO, board: board.slug, intervalMs: 5,
-    signal: new AbortController().signal, maxTicks: 1, log: (l) => lines.push(l),
-  });
-
-  assert.equal(fs.existsSync(wt.path), false, 'the tick took it back');
-  assert.ok(lines.some((l) => l.includes('swept') && l.includes(wt.branch)), lines.join('\n'));
-  const swept = await db.event.findFirst({ where: { boardId: board.id, kind: 'swept' } });
-  assert.ok(swept, 'and it is on the record, like every other thing the loop does');
+  // And the removal itself is git's refusal rather than ours: a workspace that is not there is a
+  // success, because the sweep is level-triggered and must not report the same thing for ever.
+  const gone = removeWorkspace(elsewhere, workspaceName(9999));
+  assert.equal(gone.removed, true, 'nothing to take is not a failure');
 });
 
 test('the Job runs in the repository its BOARD names, not wherever the daemon started', async () => {
@@ -654,13 +648,21 @@ test('the Job runs in the repository its BOARD names, not wherever the daemon st
   const job = await db.job.create({
     data: { boardId: board.id, name: 'in its own repo', brief: 'x', isolate: true, maxRetries: 0 },
   });
-  await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug, readPr: false });
-  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
-  assert.equal(after.attempts[0].branch, `kb-${job.id}-1`);
+  // The runtime is handed the BOARD's repository as `cwd`, not the daemon's. That is the whole
+  // assertion now: the controller declares a workspace and the runtime provisions it, so what
+  // proves the repository was right is what `cwd` was — there is no checkout of ours to look for.
+  const seen: string[] = [];
+  const spy = {
+    name: 'spy',
+    async run(spec: { cwd: string }) {
+      seen.push(spec.cwd);
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null, workspacePath: null };
+    },
+  } as never;
+  await reconcile({ runtime: spy, cwd: REPO, board: board.slug });
+  assert.deepEqual(seen, [elsewhere], 'the repository its BOARD names, never the daemon\'s own cwd');
   assert.ok(fs.existsSync(path.join(elsewhere, 'ELSEWHERE.md')),
     'sanity: the other repository is the one with this file in it');
-  const wt = path.join(elsewhere, '.hkb', 'worktrees');
-  assert.equal(fs.existsSync(path.join(REPO, '.hkb', 'worktrees', `kb-${job.id}-1`)), false,
-    'and no worktree was cut in the daemon-cwd repository');
-  void wt;
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
 });

@@ -100,13 +100,6 @@ test('a proposing Job with a check is refused, because it changes nothing to che
   );
 });
 
-test('--base and --no-isolate contradict each other, and neither is silently dropped', async () => {
-  await refusal(
-    () => createJob(db, scope, { name: 'contradiction', brief: 'x', base: 'origin/dev', 'no-isolate': true }, { by: 'a' }),
-    /--base and --no-isolate contradict each other/,
-  );
-});
-
 test('a gate with no question, an effort that is not one, and a label that is not key=value', async () => {
   await refusal(() => createJob(db, scope, { name: 'g', brief: 'x', gate: '  ' }, { by: 'a' }),
     /--gate needs the question a human is being asked/);

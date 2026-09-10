@@ -34,7 +34,6 @@ const MUST_SHIP = [
   ['dist/src/hkb.js', 'the verbs'],
   ['dist/src/daemon.js', '`hkb up`'],
   ['dist/src/schema.js', 'creates and migrates the board on first touch'],
-  ['dist/src/pre-push.js', 'READ AT RUNTIME BY GIT: the `pre-push` hook shim execs this path by absolute name, so a tarball without it turns every sandboxed push into a hook that cannot start'],
   ['dist/src/generated/prisma/client.js', 'the generated Prisma client — committed as .ts and emitted here, because this tarball has no `prisma generate`'],
   ['prisma/schema.prisma', 'the schema the migrations were generated from'],
   ['prisma/migrations', 'READ AT RUNTIME: ensureSchema applies these SQL files to make ~/.hkb/board.db exist'],

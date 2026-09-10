@@ -73,8 +73,6 @@ export type WorkerSpec = {
   admission?: {
     deny?: string[];
     admitSpawn?: (input: Record<string, unknown>) => Promise<string | null> | (string | null);
-    /** Is this worker inside the git sandbox, and so under its `pre-push` hook (`src/push.ts`)? */
-    sandboxed?: boolean;
     onDecision?: (d: string) => void;
   };
   /** Resume a previous session instead of starting cold — the retry path. */

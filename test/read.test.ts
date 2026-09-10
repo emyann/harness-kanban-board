@@ -106,21 +106,24 @@ test('the plural and the singular are one query with a where, so they cannot dis
 
 // ---------------------------------------------------------------- hkb ls
 
-test('the listing carries the attempt count and the pull request from one read', async () => {
-  const j = await mkJob(one.id, 'has attempts', { phase: 'succeeded' });
+test('the listing carries the attempt count and the declared outputs from one read', async () => {
+  // It used to carry the pull request too, joined from the attempts. The core stopped reading the
+  // forge (ADR-018), so what a Job left behind is what it DECLARED — which is also the only thing
+  // the machinery ever verified.
+  const j = await mkJob(one.id, 'has attempts', { phase: 'succeeded', exports: ['docs/report.md'] });
   for (const k of [1, 2]) {
     await db.attempt.create({
       data: {
         jobId: j.id, k, host: 'h', runtime: 'fake', startedAt: new Date(), maxBudgetUsd: 1,
-        attemptDeadlineSeconds: 1800, ...(k === 2 ? { prUrl: 'https://example/pull/7' } : {}),
+        attemptDeadlineSeconds: 1800,
       },
     });
   }
   const row = (await listJobs(db, { slug: 'read-one' })).find((r) => r.id === j.id);
   assert.ok(row);
   assert.equal(row.attempts, 2);
-  assert.equal(row.pr, 'https://example/pull/7', 'the newest attempt that has one answers');
-  assert.equal(row.producedNothing, false, 'a pull request is something left behind');
+  assert.deepEqual(row.exports, ['docs/report.md']);
+  assert.equal(row.producedNothing, false, 'a declared export is something left behind');
   assert.equal(row.board, 'read-one', 'the board is on every row whatever the scope was');
 });
 
@@ -132,8 +135,8 @@ test('a succeeded Job that left nothing behind is marked, and one that failed is
   assert.equal(rows.find((r) => r.id === failed.id)?.producedNothing, false,
     'a failed Job producing nothing is not news, and marking it would be noise');
   // The predicate itself, at the boundary that matters.
-  assert.equal(producedNothing({ phase: 'succeeded', pr: null, exports: [] }), true);
-  assert.equal(producedNothing({ phase: 'succeeded', pr: null, exports: [], proposes: 'jobs' }), false,
+  assert.equal(producedNothing({ phase: 'succeeded', exports: [] }), true);
+  assert.equal(producedNothing({ phase: 'succeeded', exports: [], proposes: 'jobs' }), false,
     'a proposer reaches succeeded only once its rows are filed, and rows are the most concrete output here');
 });
 

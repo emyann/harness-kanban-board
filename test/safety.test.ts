@@ -60,7 +60,7 @@ async function freshBoard() {
       db.job.create({ data: { boardId: board.id, name, brief: `do ${name}`, isolate: false, ...extra } }),
     set: (data: Record<string, unknown>) => db.board.update({ where: { id: board.id }, data }),
     run: (extra: Record<string, unknown> = {}) =>
-      reconcile({ runtime: fakeRuntime(), cwd: REPO, board: slug, readPr: false, ...extra }),
+      reconcile({ runtime: fakeRuntime(), cwd: REPO, board: slug, ...extra }),
   };
 }
 
@@ -341,7 +341,7 @@ test('the lease outlives the run it covers — a 60-minute Job is not reclaimed 
                durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
     },
   };
-  await reconcile({ runtime: watching, cwd: REPO, board: b.slug, readPr: false });
+  await reconcile({ runtime: watching, cwd: REPO, board: b.slug });
 
   assert.ok(held, 'a lease is held while the run is in flight');
   // A RANGE, not an equality. `expiresAt` is built from the controller's own `now()` and
@@ -383,7 +383,7 @@ test('a lease is renewed while the run is in flight, and renewedAt gets a writer
                durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
     },
   };
-  await reconcile({ runtime: slow, cwd: REPO, board: b.slug, readPr: false, leaseMs: 3_000 });
+  await reconcile({ runtime: slow, cwd: REPO, board: b.slug, leaseMs: 3_000 });
   assert.equal(seen.renewed, true, 'renewedAt is written during the run, not left null forever');
 });
 
@@ -403,7 +403,7 @@ test('a holder that lost its lease does not overwrite the new holder', async () 
                durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
     },
   };
-  const r = await reconcile({ runtime: thief, cwd: REPO, board: b.slug, readPr: false });
+  const r = await reconcile({ runtime: thief, cwd: REPO, board: b.slug });
 
   assert.ok(r.skipped.includes(job.id), 'the displaced holder skips rather than writing');
   assert.deepEqual(r.succeeded, [], 'and does NOT report success on a Job it no longer holds');
@@ -468,28 +468,26 @@ test('a resumable stop keeps the session, and the retry runs in the same checkou
     },
   };
 
-  await reconcile({ runtime: capThenFinish, cwd: SCRATCH, board: b.slug, readPr: false });
+  await reconcile({ runtime: capThenFinish, cwd: SCRATCH, board: b.slug });
   const mid = await db.job.findUniqueOrThrow({ where: { id: job.id } });
   assert.equal(mid.lastSessionId, 'sess-1', 'a turn cap is resumable, so the session is kept');
 
-  await reconcile({ runtime: capThenFinish, cwd: SCRATCH, board: b.slug, readPr: false });
+  await reconcile({ runtime: capThenFinish, cwd: SCRATCH, board: b.slug });
 
   assert.equal(dirs.length, 2);
   assert.equal(dirs[1], dirs[0], 'the retry resumed in the SAME checkout, not a fresh one');
 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: { orderBy: { k: 'asc' } } } });
   assert.equal(after.phase, 'succeeded');
-  assert.equal(after.attempts[1].branch, `kb-${job.id}-1`, 'and on the branch where its PR already is');
+  // The workspace it resumed into is asked for by the same NAME on both attempts, which is what
+  // makes a resume land in the tree the transcript describes (`workspaceName`, ADR-018). It is
+  // per-Job rather than per-attempt precisely so attempt 2 asks for something that already exists.
+  const { workspaceName } = await import('../src/workspaces.ts');
+  assert.equal(workspaceName(job.id), `kb-${job.id}`);
 
-  // Left where it is on purpose: it holds the `wip.txt` the first attempt wrote, and
-  // `removeWorktree` is right to refuse a tree that still holds work. It goes with the scratch
-  // repository when `test.after` removes the whole temp directory.
-  const { existingWorktree } = await import('../src/worktree.ts');
-  assert.ok(existingWorktree(SCRATCH, job.id, 1), 'and the checkout it resumed into is still there');
-
-  // Compared as a SET, not by name. This used to assert `existingWorktree(REPO, job.id, 1)` was
+  // Compared as a SET, not by name. This used to assert a worktree in the real repository was
   // null — but `job.id` comes from a scratch database and the path is in the real repository, and
-  // those two numbering schemes are independent. A real `kb-13-1` worktree from an actual Job made
+  // those two numbering schemes are independent. A real `kb-13` worktree from an actual Job made
   // a passing test fail for a reason that had nothing to do with it.
   assert.deepEqual(worktreesIn(REPO), worktreesBefore, 'and this test added nothing to the repo under test');
 });

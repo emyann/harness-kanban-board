@@ -7,7 +7,6 @@ import { openBoard, closeBoard } from './db.ts';
 import { ensureSchema } from './schema.ts';
 import { databaseUrl } from './db-url.ts';
 import { reconcile } from './controller.ts';
-import { checkRef } from './worktree.ts';
 import { checkExportPath } from './exports.ts';
 import {
   approveJob, concludeJob, queueJob, rejectJob, removeJob, retryJob, triageJob,
@@ -81,12 +80,6 @@ const HELP = `hkb — run one agent against one brief
                         with no further attempt, however many retries remain. Unset by default —
                         the per-attempt clock always applies; this one when somebody asks.
        --no-isolate     run in the current checkout instead of its own worktree
-       --base <ref>     the ref this Job branches from, and is kept on top of. Defaults to the
-                        repository's default branch. A step that starts from an earlier Job's
-                        branch — \`--base kb-33-1\` — starts from where that one finished, which is
-                        how work chains: a coding Job's output IS a branch. A plain name is tried
-                        as written and then as \`origin/<name>\`; a ref that names nothing fails
-                        the Job before a session is bought.
        --allow-tool <t> the tool surface this Job may use, repeatable. Anything absent is
                         DENIED at admission, not merely discouraged. Without it the runtime's
                         own default applies, and \`Skill\` is on it — a Job granted a
@@ -222,8 +215,6 @@ const HELP = `hkb — run one agent against one brief
                         on this board may see — \`.claude\` is the usual one
        --guide <path>|none  the contributor guide every Job on this board reads, repo-relative
                         — \`CLAUDE.md\` is the usual one
-       --base <ref>|none  the ref every Job on this board branches from, for a repository whose
-                        trunk is not what \`origin/HEAD\` points at
        --check "<cmd>"|none  the command every Job on this board must pass — usually the one
                         the contributor guide names, as in \`npm run lint && npm test\`. A Job's
                         own --check wins, and \`hkb job set <id> --check ""\` opts one Job out of
@@ -417,10 +408,6 @@ export function describeDefaults(d: ReturnType<typeof boardDefaults>): string {
     // And the third thing a board hands every worker: the document it reads as standing instruction
     // (ADR-013). Same reasoning as the two above — a grant nobody can see becomes a surprise.
     d.guide !== null ? `guide=${d.guide}` : null,
-    // And the ref every Job on this board branches from. Same reasoning again: a board silently
-    // building on something other than the repository's default branch is a surprise waiting in a
-    // diff nobody can explain.
-    d.base !== null ? `base=${d.base}` : null,
     // And the command every Job on this board has to pass. The loudest of them all, since it is a
     // shell line that runs with the daemon's privileges and decides whether an attempt failed —
     // a board-wide check nobody can see is exactly the surprise this line exists to prevent.
@@ -914,17 +901,6 @@ export async function main(argv: string[]): Promise<number> {
           ['maxTurns', String(spec.maxTurns.value), spec.maxTurns.from],
           ['maxBudget', `$${spec.maxBudgetUsd.value}`, spec.maxBudgetUsd.from],
           ['maxRetries', String(spec.maxRetries.value), spec.maxRetries.from],
-          // Where the branch starts. Printed with the traced spec rather than beside the pull
-          // request, because it is a thing somebody CHOSE — and "why does this diff contain that
-          // other Job's commits" is the question it answers.
-          //
-          // Omitted entirely for an un-isolated Job, which cuts no branch. A board's `defaultBase`
-          // resolves onto every Job it carries, so this line otherwise told an operator that a Job
-          // running in their own checkout branches from `origin/develop` — a fact about a checkout
-          // that will never be made.
-          ...(job.isolate
-            ? [['base', spec.base.value ?? "(the repository's default branch)", spec.base.from] as [string, string, SpecSource]]
-            : []),
         ];
         const vw = Math.max(...traced.map(([, v]) => v.length));
         for (const [k, v, from] of traced) {
@@ -1010,12 +986,10 @@ export async function main(argv: string[]): Promise<number> {
             const denied = a.denials ? `, ${a.denials} tool refusal${a.denials === 1 ? '' : 's'}` : '';
             console.log(`           ${a.turns} turn${a.turns === 1 ? '' : 's'}${denied}`);
           }
-          // The reviewable artifact. It is the point of the run, so it gets its own line rather
-          // than being something you go and look for.
-          if (a.prUrl) console.log(`           PR #${a.prNumber}  ${a.prUrl}`);
-          else if (a.branch) console.log(`           branch ${a.branch} — no pull request found`);
-          // The other reviewable artifact, and the one that is not on a forge: what this attempt
-          // took out of its checkout and left in the repository.
+          // What this attempt took out of its workspace and left in the repository. The pull
+          // request line that used to lead here went with the forge read (ADR-018): a Job whose
+          // deliverable is a pull request hands its URL back as a declared result, and that is what
+          // the board prints — a fact the Job promised rather than one a branch lookup guessed.
           // What this attempt was FED, beside what it cost. The pair is the measurement — an input
           // is paid for on every request of the run, so its size sits next to `turns` above.
           if (Array.isArray(a.inputs) && a.inputs.length) {
@@ -1435,15 +1409,6 @@ export async function main(argv: string[]): Promise<number> {
             ? null
             : raw.split(',').map((v) => v.trim()).filter(Boolean).map(checkPluginPath);
         }
-        // Not validated against the repository here, and deliberately. `boards set` may run on a
-        // host that is not the one the daemon runs on, and a ref that does not exist YET is the
-        // normal case for a board whose trunk is created by the work itself. The check is at claim
-        // time, where the answer is about the checkout being made rather than about the string.
-        if (values.base !== undefined) {
-          const raw = given(values.base, '--base', `"${CLEAR}"`);
-          if (!raw) throw usage(`--base was given nothing — pass a ref like origin/develop, or "${CLEAR}" to go back to the repository's default branch`);
-          data.defaultBase = raw === CLEAR ? null : checkRef(raw, '--base');
-        }
         // Stored verbatim, checked only for being non-empty: the controller reads an exit code and
         // knows nothing about the command (ADR-016 §3), so validating it here would be hkb having
         // an opinion about a shell line it cannot parse. `none` clears it, like every other default.
@@ -1730,7 +1695,6 @@ export async function main(argv: string[]): Promise<number> {
       // on a verb that only writes what it is given is a no-op. See `checkFlag`; `--check ""` is
       // still the different thing, the per-Job opt-out that inherits nothing.
       if (values.check !== undefined) changes.check = checkFlag(values.check, '--check', true);
-      str('base', 'base', (v) => checkRef(v, '--base'));
       number('max-turns', 'maxTurns', (n) => Number.isInteger(n) && n >= 1, 'a whole number of turns, 1 or more');
       number('max-budget', 'maxBudgetUsd', (n) => n > 0, 'dollars above zero');
       number('max-retries', 'maxRetries', (n) => Number.isInteger(n) && n >= 0, 'a whole number of retries, 0 or more');
