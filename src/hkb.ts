@@ -12,24 +12,35 @@ import {
   approveJob, concludeJob, queueJob, rejectJob, removeJob, retryJob, triageJob,
 } from './transitions.ts';
 import { describeChange, setJobSpec, type Settable } from './job-spec.ts';
+import { createJob } from './filing.ts';
+import { boardSummaries, listJobs, showJob, PHASES, type Phase } from './read.ts';
+import {
+  checkFlag, given, givenList, num, seconds, usage,
+} from './flags.ts';
 import { checkResultName, RESULT_MAX_BYTES } from './results.ts';
 import { checkArtifactName, artifactsDir, bytes } from './artifacts.ts';
-import { parseLabels, jobLabels, selects, describeLabels } from './labels.ts';
+import { parseLabels, jobLabels, describeLabels } from './labels.ts';
 import { PROPOSAL_ARTIFACT, describeProposal, storedProposal } from './proposals.ts';
 import { eventLine, watchEvents, watchWhere, WATCH_FALLBACK_MS } from './watch.ts';
 import { checkPluginPath, pluginList } from './plugins.ts';
 import { CHECK_COMMAND_MAX_BYTES, describeCheck, storedCheck } from './check.ts';
 import { checkInputSpec, declaredInputs, renderBrief, describeSource } from './inputs.ts';
-import {
-  readTemplate, placeholders, workflowPath, WORKFLOW_DIR,
-  type Template,
-} from './templates.ts';
+import { workflowPath, WORKFLOW_DIR } from './templates.ts';
 import { toolSurface } from './runtime/surface.ts';
 import { fakeRuntime } from './runtime/fake.ts';
 import * as daemon from './daemon.ts';
-import { EFFORTS, boardDefaults, hasDefaults, resolveSpec, type SpecSource } from './spec.ts';
+import { EFFORTS, boardDefaults, type SpecSource } from './spec.ts';
 import { PACKAGE_ROOT } from './paths.ts';
 import type { Runtime } from './runtime/index.ts';
+
+/**
+ * The two predicates the listing prints, kept importable from here.
+ *
+ * They moved to `src/read.ts` with the rest of the read model — a rendered marker whose predicate
+ * lives in the CLI is the same "a second consumer re-derives it" problem one layer down — and are
+ * re-exported because this module is where everything that reads a board has always found them.
+ */
+export { producedNothing, declaredExports } from './read.ts';
 
 /**
  * `hkb` — the CLI.
@@ -45,122 +56,6 @@ import type { Runtime } from './runtime/index.ts';
  * Argument parsing is `node:util`'s `parseArgs` rather than a hand-rolled one — the retired CLI's
  * parser silently ate a value that began with two dashes, and there was no reason to inherit that.
  */
-
-const usage = (msg: string) => {
-  const e = new Error(msg) as Error & { exitCode: number };
-  e.exitCode = 2;
-  return e;
-};
-
-/**
- * The string a `--flag <value>` was actually given, or a refusal.
- *
- * **`String(values.x)` is the bug this exists to stop.** `parseArgs` runs here with `strict: false`,
- * and a bare `--flag` at the end of a line comes back as the BOOLEAN `true` — so `String(...)` turns
- * it into the word `true` and a non-empty guard waves it through. A bare `--check` was filed as the
- * shell command `true`: `hkb show` printed `check true [job]`, and every attempt of that Job passed
- * a check that verified nothing. That is a guard that is inert while looking present, which is the
- * failure this project keeps finding and the reason `--gate` one line over is written
- * `typeof values.gate === 'string'`.
- *
- * **A value that begins with a dash is refused too**, and it is the same bug one step along.
- * `parseArgs` under `strict: false` hands a string option *the next token*, whatever it is — so
- * `hkb new n --check --json` files the shell command `--json`, the check that judges every attempt
- * of that Job is a flag, and `--json` is silently not in effect either. Nothing legitimate is lost:
- * a shell line, a ref, a path and a comma-separated list all begin with something else, and a value
- * that really does start with a dash is reachable as `--check " -x"` or after `--`. This is the
- * third of the argv traps in `docs/wiki/gotchas/argv-traps.md`, and the first two do not cover it —
- * the option consumed a token, so nothing falls through as a stray positional to be caught.
- *
- * The empty string is NOT refused here — several flags mean something by it — so a caller that has
- * no use for one still has to say so. See `checkFlag`.
- */
-function given(raw: unknown, flag: string, clear?: string): string {
-  if (typeof raw !== 'string') {
-    throw usage(
-      `${flag} was given nothing — a bare ${flag} is not a value. Pass one after it, as in `
-      + `${flag} "…"${clear ? `, or ${flag} ${clear} to clear it` : ''}.`,
-    );
-  }
-  // Tested on the RAW value, before the trim: `--flag " -x"` is the escape the message below
-  // prescribes, and trimming first refused it with the same message — no spelling reached a value
-  // that really starts with a dash.
-  // FLAG-shaped: a dash followed by a letter, or two dashes. A brief that opens with a Markdown
-  // bullet (`- add a test`) and a negative number are values; `-x` and `--json` are the trap.
-  if (/^--?[A-Za-z]/.test(raw)) {
-    const v = raw.trim();
-    throw usage(
-      `${flag} was given \`${v}\`, which is a flag rather than a value — \`${flag} ${v}\` would file `
-      + `\`${v}\` as ${flag}'s value and drop ${v} itself. The argument parser hands a string option `
-      + `the next token whatever it is. Quote a value that really starts with a dash, with a space in `
-      + `front of it: ${flag} " ${v}".`,
-    );
-  }
-  return raw.trim();
-}
-
-/**
- * The same rule for a repeatable flag: every item is a string, and none of them is a flag.
- *
- * `--export`, `--result`, `--artifact`, `--input`, `--label`, `--allow-tool` and `--plugin-dir` are
- * `multiple: true`, so a bare one comes back as `[true]` rather than as `true` — which walked
- * straight past `typeof raw !== 'string'` and was filed as the literal path, name or tool `true`.
- * `hkb new x --export` declared an output called `true`, and the attempt failed for not producing
- * it. One helper, so a flag added later gets the guard by using it rather than by remembering.
- */
-function givenList(raw: unknown, flag: string): string[] {
-  if (raw === undefined) return [];
-  const items = Array.isArray(raw) ? raw : [raw];
-  return items.map((v) => given(v, flag));
-}
-
-/**
- * The completion check as a flag value, for `hkb new` and `hkb job set`.
- *
- * Almost everything is stored verbatim, because the controller reads an exit code and knows nothing
- * about the command (ADR-016 §3). Three shapes are not:
- *
- *   - **a bare `--check`, or one handed the next flag.** See `given`.
- *   - **a command longer than `CHECK_COMMAND_MAX_BYTES`.** `sh -c` passes the whole line as one
- *     argument and the kernel refuses one past `MAX_ARG_STRLEN`, so `spawn` throws `E2BIG` — every
- *     attempt of that Job would fail its check without the work being looked at. Refused where it
- *     is written rather than where it is run. See `src/check.ts`.
- *   - **`none` on `hkb new`.** Every other `--flag none` on this CLI clears a value, and on a *new*
- *     Job there is nothing to clear: the column is already null, which is what inheriting the
- *     board's default IS. Filing it as written files the literal command `none` — exit 127,
- *     `check_failed`, resumed and re-failed until the retries are gone: three paid sessions for a
- *     command that can never pass.
- *
- * On `hkb job set` it is not refused, because there `none` has the meaning it has everywhere else
- * on that verb: **put the column back to null, and inherit the board's default again**. That is
- * what `str()` one line down does for every other field, and what README's own sentence says. The
- * distinction is not a special case for `check`, it is the ordinary one between setting a value and
- * clearing one — a verb that files a row cannot clear a column that does not exist yet.
- *
- * `--check ""` is a VALUE on both, and a different one: no check, and do NOT inherit (`checkValue`
- * in `src/spec.ts`). The board keeps `none` too, for the same reason `hkb job set` does.
- */
-function checkFlag(raw: unknown, flag = '--check', clears = false): string | null {
-  const v = given(raw, flag);
-  if (v === 'none') {
-    if (clears) return null;
-    throw usage(
-      `${flag} none would file the literal shell command \`none\`, which exits 127 — every attempt `
-      + `would fail its check and burn a retry. A Job filed with no ${flag} already inherits the `
-      + `board's default, so leave ${flag} out for that. For a Job that runs NO check, and does not `
-      + `inherit the board's, use ${flag} "".`,
-    );
-  }
-  if (Buffer.byteLength(v, 'utf8') > CHECK_COMMAND_MAX_BYTES) {
-    throw usage(
-      `${flag} is ${Buffer.byteLength(v, 'utf8')} bytes, and the limit is ${CHECK_COMMAND_MAX_BYTES} — `
-      + 'a check runs as `sh -c <the whole line>`, and past the kernel\'s own argument limit it cannot '
-      + 'be started at all, so every attempt would fail on the command rather than on the work. Put it '
-      + `in a script the repository holds and name that: ${flag} "./scripts/verify.sh".`,
-    );
-  }
-  return v;
-}
 
 const HELP = `hkb — run one agent against one brief
 
@@ -371,48 +266,6 @@ function packageVersion(): string {
   return JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8')).version;
 }
 
-/**
- * What a Job left behind, and whether that is anything at all.
- *
- * `succeeded` means the session ended. Nothing in the machinery requires it to have produced
- * anything: `withProtocol` (`src/brief.ts`) *asks* for a pull request in prose, and only when the
- * Job is isolated; `nextPhase` decides the phase from the runtime's status alone. That separation is
- * deliberate — "I looked, and there is nothing to change" is a real outcome, and so is a Job that
- * runs in the operator's own checkout. But the absence has to be legible, or a board of fifty
- * succeeded Jobs where five produced nothing reads as uniform.
- *
- * Three things count, and they are ADR-008's own list. A **pull request** on any attempt. A
- * **declared export**, and a **declared result** — both of which count without being re-checked
- * here, because a declared output the run did not produce already fails the attempt
- * (`src/worktree.ts`, `src/results.ts`, `src/artifacts.ts`), so a Job that reached `succeeded`
- * having declared any of the three produced it by construction.
- *
- * Pure, and asked only of a Job that succeeded. A failed, cancelled or `done` Job producing nothing
- * is not news — marking those would be noise, which is how a signal stops being read.
- */
-export function producedNothing(
-  job: {
-    phase: string; pr: string | null; exports: string[];
-    results?: string[]; artifacts?: string[]; proposes?: string | null;
-  },
-): boolean {
-  if (job.phase !== 'succeeded') return false;
-  // A PROPOSING Job that reached `succeeded` had its proposal applied — the controller only writes
-  // that phase after filing the rows (`applyProposals`, `src/controller.ts`). Rows on the board are
-  // the most concrete output anything here produces, and calling it "produced nothing" was the
-  // complaint reading its own answer wrong.
-  if (job.proposes) return false;
-  return !job.pr
-    && job.exports.length === 0
-    && (job.results?.length ?? 0) === 0
-    && (job.artifacts?.length ?? 0) === 0;
-}
-
-/** A Job's declared exports, from the `Json?` column, defensively. */
-export function declaredExports(raw: unknown): string[] {
-  return Array.isArray(raw) ? raw.filter((e): e is string => typeof e === 'string') : [];
-}
-
 type Out = { json: boolean };
 function emit(out: Out, data: unknown, human: () => void) {
   if (out.json) process.stdout.write(JSON.stringify(data, null, 1) + '\n');
@@ -443,23 +296,6 @@ async function readBrief(values: Record<string, unknown>): Promise<string> {
   }
   throw usage('a Job needs a brief — pass --brief "…", --brief-file <path>, or --brief - to read stdin');
 }
-
-/**
- * The completion check under `--json`, in ONE shape wherever it appears.
- *
- * `hkb new --json` printed the RESOLVED check and `hkb show --json` printed the Job's raw column, so
- * the same Job answered `"npm test"` to one verb and `null` to the other — and a script that filed
- * work and then polled it saw a check appear out of nowhere. The resolved value is the one both
- * print, because it is the one that will run; `source` says which of the three levels answered, so
- * nothing is lost by not printing the column (`resolveSpec`, `src/spec.ts`).
- */
-/**
- * The check as the controller will RUN it. A proposing Job runs none whatever the board says
- * (`runsCheck` in the controller), so `--json` says null for it rather than a resolved command the
- * human line already qualifies away — the two verbs and the two forms answer the same.
- */
-const jsonCheck = (t: { value: string | null; from: string }, proposes?: string | null) =>
-  (proposes ? { value: null, source: 'proposes' } : { value: t.value, source: t.from });
 
 /** Who did an operator-initiated thing. The same shape a lease holder uses, minus the runtime. */
 const whoami = () => `${os.hostname()}/${process.pid}@cli`;
@@ -529,9 +365,6 @@ export async function resolveBoard(
   return { slug: path.basename(root), repoPath: root, known: false };
 }
 
-const PHASES = ['triage', 'pending', 'running', 'succeeded', 'failed', 'suspended', 'done', 'cancelled'] as const;
-type Phase = (typeof PHASES)[number];
-
 /** The two phases an operator writes, and the verb that writes each. */
 const BY_HAND = { done: 'done', cancel: 'cancelled' } as const;
 type ByHandVerb = keyof typeof BY_HAND;
@@ -599,56 +432,6 @@ export function describeDefaults(d: ReturnType<typeof boardDefaults>): string {
     d.workflow !== null ? `workflow=${d.workflow}` : null,
   ].filter((p): p is string => p !== null);
   return parts.length ? parts.join(' ') : '(none)';
-}
-
-const num = (v: unknown, flag: string): number | undefined => {
-  if (v === undefined) return undefined;
-  // A bare `--max-turns` is the boolean `true`, and `Number(true)` is 1 — a ceiling of one turn,
-  // filed silently. The same idiom `given` refuses for strings.
-  if (typeof v !== 'string') throw usage(`${flag} was given nothing — a bare ${flag} is not a number. Pass one after it.`);
-  if (v.trim().startsWith('-') && !/^-\d/.test(v.trim())) {
-    throw usage(`${flag} was given \`${v}\`, which is a flag rather than a number — the parser hands a flag the next token whatever it is.`);
-  }
-  const n = Number(v);
-  if (!Number.isFinite(n)) throw usage(`${flag} wants a number, got ${JSON.stringify(v)}`);
-  return n;
-};
-
-/** The word that clears a nullable spec field back to "ask the next level". Two verbs spell it. */
-const CLEARED = 'none';
-
-/**
- * A deadline flag, in **seconds** — the unit Kubernetes named `activeDeadlineSeconds` in.
- *
- * `undefined` when the flag is absent (the board's default answers) and `null` for the word `none`
- * (clear it), which is the shape every other clearable spec field uses. Everything else must be a
- * whole number of seconds greater than zero: Kubernetes says "value must be a positive integer",
- * and both refusals are worth having by name rather than as a Prisma error four layers down —
- * `--deadline 0` reads as "no deadline" to a person and would mean "already expired" to the
- * arithmetic, which is the most expensive way to be wrong here.
- */
-function seconds(v: unknown, flag: string): number | null | undefined {
-  if (v === undefined) return undefined;
-  if (typeof v === 'string' && v.trim() === CLEARED) return null;
-  const n = num(v, flag);
-  if (n === undefined) return undefined;
-  if (!Number.isInteger(n)) throw usage(`${flag} wants a whole number of seconds, got ${n} — Kubernetes' activeDeadlineSeconds is an integer and so is this.`);
-  // Above this a `setTimeout` delay exceeds 2^31 ms, which Node clamps to 1 — so the longest
-  // possible clock would abort every session the instant it started, with a TimeoutOverflowWarning
-  // nobody reads. Refused by name rather than left to be discovered as "my 30-day Job times out
-  // immediately". ~24.8 days.
-  const MAX = Math.floor((2 ** 31 - 1) / 1000);
-  if (n > MAX) {
-    throw usage(`${flag} wants at most ${MAX} seconds (~24 days) — above that the runtime's own timer overflows and fires immediately, got ${n}.`);
-  }
-  if (n <= 0) {
-    throw usage(
-      `${flag} wants a positive number of seconds, got ${n}. `
-      + `${n === 0 ? '0 does not mean "no deadline" — it means "already expired". ' : ''}`
-      + `Pass "${CLEARED}" to clear it and let the board answer.`,
-    );
-  }
-  return n;
 }
 
 const UNIT_MS: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 };
@@ -956,303 +739,48 @@ export async function main(argv: string[]): Promise<number> {
   switch (verb) {
     // ---------------------------------------------------------------- new
     case 'new': {
-      // A workflow is read BEFORE anything else happens — before the board is upserted, before a
-      // name is settled — because a `--from` that is not there must fail naming the path it looked
-      // for, with nothing created. It resolves against the board's REPOSITORY, never the cwd and
-      // never a worktree: the same fence as a guide and a plugin grant (`src/templates.ts`).
-      const tpl = values.from !== undefined ? readTemplate(scope.repoPath, given(values.from, '--from')) : null;
-      // The BOARD's default workflow — how work on this board finishes (ADR-017 decision 1).
+      // Parse, call, print — and nothing else. Everything between "the arguments are parsed" and
+      // "the row is printed" is `createJob` (`src/filing.ts`): the workflow read and its
+      // fill-what-is-absent rule, every declaration and its refusal by name, the proposing-Job
+      // rules, the row and the Event. What is left here is what only a terminal has — argv, and a
+      // brief that may be waiting on stdin.
       //
-      // Only when nobody said `--from`. With one, that workflow governs entirely: composing the two
-      // would mean a workflow author could not write a step that finishes differently from the
-      // board, and "the more specific thing wins" is the precedence rule everywhere else here.
-      //
-      // Not for a `--propose` Job either, and for the reason `withWorktree` exists in
-      // `src/brief.ts`: a proposing Job's whole output is one JSON file, so a brief that also ends
-      // in "commit it and open a pull request" is not an instruction a worker can follow. Measured
-      // once already, on the protocol this replaces.
-      //
-      // Read from the BOARD row rather than from `scope`, because the row is where the default is,
-      // and the board may not exist yet — filing the first Job in a repository creates it, and a
-      // board that does not exist has no default to apply.
-      let dflt: Template | null = null;
-      if (!tpl && !values.propose && !values['no-isolate']) {
-        const known = await db.board.findUnique({ where: { slug }, select: { defaultWorkflow: true } });
-        const wanted = known?.defaultWorkflow?.trim();
-        if (wanted) {
-          // Refused HERE, by name, with nothing created — the same rule `--from` follows. A board
-          // pointing at a workflow that is not in the repository is a mistake the operator can fix
-          // in one command, and discovering it at claim time would mean a Job that is missing the
-          // steps everything else on the board got.
-          try {
-            dflt = readTemplate(scope.repoPath, wanted);
-          } catch (e) {
-            throw usage(
-              `board ${slug} files every Job with the workflow \`${wanted}\`, and ${(e as Error).message}`
-              + ` Add the file, or point the board somewhere else: \`hkb boards set ${slug} --workflow <name>|none\`.`,
-            );
-          }
-          // A default workflow's body is appended to somebody else's brief, so there is nothing for
-          // a placeholder to be filled from — `--input` on the line belongs to the Job's own brief.
-          // Refused rather than passed through, because the literal text `{{page}}` in a worker's
-          // instructions is the one outcome nobody would have chosen.
-          const want = placeholders(dflt.brief);
-          if (want.length) {
-            throw usage(
-              `the workflow \`${dflt.name}\` is board ${slug}'s default, and its body refers to `
-              + `${want.map((n) => `\`{{${n}}}\``).join(', ')} — standing steps are appended to every brief filed here, `
-              + 'so there is nothing to fill them from. Write the steps without placeholders, or use it with '
-              + `\`hkb new --from ${dflt.name}\`, where the Job can declare the inputs.`,
-            );
-          }
-        }
-      }
-      // Whether the operator TYPED `--check`, read before the workflow fills the gaps below — after
-      // the fill, `values.check` no longer says which of the two it came from.
-      const checkTyped = values.check !== undefined;
-      if (tpl) {
-        // The whole precedence rule, and it is `src/spec.ts`'s grain: **the more specific value
-        // wins**, so a flag the operator typed outranks the file. Written as "fill what is absent"
-        // rather than as a merge, so a list flag REPLACES the workflow's list instead of appending
-        // to it — a `--allow-tool` that could only widen a workflow's surface would be a grant
-        // nobody could narrow.
-        for (const [k, v] of Object.entries(tpl.spec)) {
-          if ((values as Record<string, unknown>)[k] === undefined) (values as Record<string, unknown>)[k] = v;
-        }
-      }
-      // The board's default fills the same gaps the same way — the line wins, then the file, then
-      // the board's own `default*` columns, which `src/spec.ts` resolves later against whatever is
-      // still null. Only the BODY composes differently (see `withStandingSteps`); the spec half is
-      // `--from`'s rule exactly, because a default that could not be overridden on the line would be
-      // a ceiling, and a ceiling is a different kind of fact.
-      if (dflt) {
-        for (const [k, v] of Object.entries(dflt.spec)) {
-          if ((values as Record<string, unknown>)[k] === undefined) (values as Record<string, unknown>)[k] = v;
-        }
-      }
-      // A workflow names itself, so `hkb new --from draft-wiki-page` is a whole command. A name
-      // typed on the line still wins — it is the more specific value, exactly as a flag is.
-      const name = rest.join(' ').trim() || tpl?.name || '';
-      if (!name) throw usage('hkb new <name> — a Job needs a name');
-      // A triage item is a note, and a note that demanded a brief would not get written down. The
-      // name IS the brief until somebody decides what the work is, which is what `hkb queue` is for.
-      const triage = !!values.triage;
-      const wroteBrief = values.brief !== undefined || values['brief-file'] !== undefined;
-      // The workflow's body is the brief; `--brief` still overrides it, on the same rule as every
-      // other key. Ordered before the triage fallback so `--from` on a triage item is still briefed.
-      const brief = tpl && !wroteBrief ? tpl.brief
-        : triage && !wroteBrief ? name
-        : await readBrief(values);
-      const board = await db.board.upsert({
-        where: { slug },
-        update: {},
-        // A board created by filing work in a repository is pointed at that repository. Without it
-        // a machine-level daemon would have nowhere to cut the worktree.
-        create: { slug, repoPath: scope.repoPath },
-      });
-      // Every one of these goes through `given`/`givenList` rather than a cast, and that is the
-      // whole of closing the bare-flag idiom: a bare `--model` was stored as the boolean `true` and
-      // a bare `--export` as the path `true`, because `parseArgs` under `strict: false` makes a
-      // valueless option a boolean and a valueless REPEATABLE one a `[true]`. One flag at a time was
-      // how this got fixed for `--check` and missed everywhere else.
-      const model = values.model !== undefined ? (given(values.model, '--model') || null) : null;
-      const effort = values.effort !== undefined ? given(values.effort, '--effort') : undefined;
-      if (effort && !(EFFORTS as readonly string[]).includes(effort)) {
-        throw usage(`--effort must be one of ${EFFORTS.join('|')}, got ${effort}`);
-      }
-      // Checked here, at admission, rather than when the copy runs: an export path that escapes the
-      // worktree is an illegal request, and an illegal request should never become state. The same
-      // check runs again at copy time, because a row can arrive by other routes than this one.
-      const exports = givenList(values.export, '--export').map(checkExportPath);
-      // Checked at file time, before a worktree exists — a name that cannot be a filename or a JSON
-      // key is a fault in the spec, and finding it here costs nothing while finding it later costs
-      // a run.
-      const results = givenList(values.result, '--result').map(checkResultName);
-      // Same reasoning one medium over: a name that cannot be a single path segment is a fault in
-      // the spec, and finding it here costs nothing while finding it after a run costs the run.
-      const artifacts = givenList(values.artifact, '--artifact').map(checkArtifactName);
-      // The same fence again, for the same reason: a label that is not `key=value` in plain tokens
-      // is a fault in the spec, and a Job filed under a group nobody can name or select is worse
-      // than a refusal — it is a Job that is quietly not in the group its filer thinks it is in.
-      const labels = parseLabels(givenList(values.label, '--label'));
-      // Checked at file time for the same reason an export path is: a grant is resolved into an
-      // absolute path with no agent in the loop, so a path that was never legal must not become
-      // state. Null when the flag was absent, so the board's grant can answer; an EMPTY list is
-      // only reachable through `--plugin-dir ""` and means "grant this Job nothing".
-      const pluginPaths = values['plugin-dir'] !== undefined
-        ? givenList(values['plugin-dir'], '--plugin-dir').filter(Boolean).map(checkPluginPath)
-        : null;
-      // Checked at file time like every other declaration, and for the sharpest version of the same
-      // reason: this one names a file the BOARD will read with the operator's authority and put in
-      // front of a model. A source that was never legal must not become state.
-      let inputs = givenList(values.input, '--input').map(checkInputSpec);
-      // A workflow's placeholders, asked about here because `renderBrief` deliberately will not.
-      // Interpolation is opt-in — a Job that declares no input is left alone, so that a brief written
-      // before the feature existed still means what it says — and that opt-in is exactly wrong for a
-      // workflow, whose author opted in by writing `{{page}}`. Without this the Job would be filed
-      // with the literal text in its instructions and nothing would ever say so.
-      if (tpl && !inputs.length) {
-        const want = placeholders(brief);
-        if (want.length) {
-          throw usage(
-            `the workflow \`${tpl.name}\` needs ${want.map((n) => `\`{{${n}}}\``).join(', ')}, and this Job declares no inputs`
-            + ` — pass ${want.map((n) => `--input ${n}=value:…`).join(' ')}. Only \`value:\` inputs interpolate, because the`
-            + ' brief is instruction and a fetched source reaches the run as data.',
-          );
-        }
-      }
-      // The brief is rendered HERE, against the `value:` inputs only, so what the board stores is
-      // what the run is given — `hkb show` and the prompt cannot disagree. It applies to whichever
-      // way the brief arrived: `--brief`, `--brief-file` or stdin all land in one string above.
-      const supplied = new Map(
-        inputs.filter((i): i is { name: string; value: string } => 'value' in i).map((i) => [i.name, i.value]),
-      );
-      const rendered = renderBrief(brief, supplied, new Set(inputs.map((i) => i.name)));
-      // A value that went into the brief does not also arrive as a data block. Dropping it here
-      // rather than remembering it keeps the run path with one rule: everything in `inputs` is
-      // rendered, and nothing is rendered twice.
-      inputs = inputs.filter((i) => !rendered.used.has(i.name));
-      // The standing steps are NOT composed here, and that is the correction ADR-017's review forced.
-      // What the board's default workflow contributes at file time is its FRONTMATTER — the spec
-      // fields filled above — and nothing else. Its body reaches the worker at claim time, from the
-      // board as it is then (`src/controller.ts`), for three reasons this verb cannot fix on its
-      // own: `hkb queue <id> "…"` replaces a brief wholesale and would drop steps baked into it,
-      // a `--no-isolate` Job has no branch for them to talk about, and they belong AFTER the sandbox
-      // contract rather than before it. The refusals above still run here, where the operator is
-      // standing: a board pointing at a workflow that is not in the repository is worth catching
-      // before the Job exists, not on the pass that would have run it.
-      const briefText = rendered.text;
-      // A repo-relative path, checked at file time like every other declaration and for the same
-      // reason as an input's: it names a file the BOARD will read with the operator's authority and
-      // put in front of a model, so a path that was never legal must not become state. Undefined
-      // when the flag is absent, so the board's grant answers.
-      const guide = values.guide !== undefined ? (given(values.guide, '--guide') || null) : undefined;
-      if (guide) checkExportPath(guide);
-      // The completion check, stored verbatim. NOT validated beyond the two shapes that could never
-      // have been meant, and that is the whole design: the controller reads 0 / not-0 and knows
-      // nothing about what the command does (ADR-016 §3), so anything else hkb refused here would be
-      // hkb having an opinion about a shell line it does not run and cannot parse. Undefined when
-      // the flag is absent, so the board's default answers.
-      const check = values.check !== undefined ? checkFlag(values.check) : undefined;
-      let gate = values.gate !== undefined ? given(values.gate, '--gate') : undefined;
-      // A PROPOSING Job has nothing to check. It changes nothing in the tree — its whole output is
-      // `proposal.json`, read by the controller and applied only after a person approves it — so
-      // there is no behaviour for a command to judge and no state for it to judge in. Worse than
-      // useless: a failed check outranks the gate in `nextPhase`, so a red one (and on a proposing
-      // Job every one is red, because the tree is unchanged) sent the Job round the retry loop
-      // instead of suspending. Measured at the shipped defaults: three attempts, the same proposal
-      // stored three times, and not one Job ever filed. The controller refuses to run it either;
-      // this is the half that says so before the money is spent.
-      if (values.propose && values.check !== undefined) {
-        throw usage(
-          'a proposing Job has nothing to check — its output is the proposal, not a change to the '
-          + 'tree, so there is nothing for a command to judge. Drop the check '
-          + (tpl?.spec.check !== undefined && !checkTyped
-            ? `(\`check:\` in workflow ${tpl.name})`
-            : '(--check)')
-          + ', or drop --propose and file the work itself.',
-        );
-      }
-      if (values.gate !== undefined && !gate) throw usage('--gate needs the question a human is being asked, as in --gate "does this migration look right?"');
-      const rawBase = typeof values.base === 'string' ? values.base.trim() : undefined;
-      if (values.base !== undefined && !rawBase) throw usage('--base needs the ref to branch from, as in --base origin/kb-33-1 — leave it out for the repository\'s default branch');
-      // Checked here rather than only where git is called: a ref reaches git as a bare argv token,
-      // so one beginning with a dash is an option (`--upload-pack=…` runs a command). See `validRef`.
-      const base = rawBase === undefined ? undefined : checkRef(rawBase, '--base');
-      // Two flags that mean opposite things, typed together: --no-isolate runs in the current
-      // checkout, so there is no branch to cut from a base and nothing would ever read it. Refused
-      // rather than ignored — a spec field that is stored, printed and never honoured is the silent
-      // failure this project's fifth value forbids.
-      //
-      // A base arriving from the BOARD's default is deliberately NOT refused here. It is not a
-      // contradiction the filer wrote, and refusing would make one `--no-isolate` Job unfileable on
-      // such a board — there is no per-Job clear to escape with, and there cannot easily be one:
-      // `pick` in `src/spec.ts` reads a null column as *unset*, so a cleared value falls straight
-      // through to the board default again. That gap is shared by every board-defaulted field. What
-      // is fixed instead is the visible half: `hkb show` does not present a base to a Job that
-      // cannot use one.
-      if (base && values['no-isolate']) {
-        throw usage('--base and --no-isolate contradict each other: --no-isolate runs in the current checkout, so there is no branch to cut from a base. Drop one.');
-      }
-      // A proposing Job is a gated Job, and not by convention: ADR-011 applies nothing without an
-      // approval, so a proposal with no approver would be a proposal nothing ever reads. The
-      // operator's own question wins if they asked one; this is only the default, and the controller
-      // replaces it with the count once a proposal has actually been validated.
-      const proposes = values.propose ? 'jobs' : null;
-      if (proposes && !gate) gate = 'a proposal to review';
-      // Null when the flag was absent, so the board's default can answer. An EMPTY list is only
-      // reachable through `--allow-tools ""`, and it means what it says: no tools at all.
-      const allowedTools = values['allow-tool'] !== undefined
-        ? givenList(values['allow-tool'], '--allow-tool').filter(Boolean)
-        // `given`, never `String(...)`: a bare `--allow-tools` came back as the boolean `true` and
-        // was filed as a tool surface of exactly one tool, named `true` — a Job allowed to call
-        // nothing, which is the one narrowing that looks identical to a working one until it runs.
-        : values['allow-tools'] !== undefined
-          ? given(values['allow-tools'], '--allow-tools').split(',').map((t) => t.trim()).filter(Boolean)
-          : null;
-      const job = await db.job.create({
-        data: {
-          boardId: board.id, name, brief: briefText,
-          // Null rather than `[]` for a Job that declares nothing: "produces no file" and "produced
-          // none of the files it promised" are different facts, and only the second is a failure.
-          ...(exports.length ? { exports } : {}),
-          ...(results.length ? { results } : {}),
-          ...(artifacts.length ? { artifacts } : {}),
-          ...(inputs.length ? { inputs } : {}),
-          // Null rather than `{}` for an unlabelled Job, on the same rule as every other Json?
-          // column here: the absence of a value is what "nobody said" looks like.
-          ...(Object.keys(labels).length ? { labels } : {}),
-          ...(gate ? { gate } : {}),
-          ...(guide !== undefined ? { guide } : {}),
-          ...(check !== undefined ? { check } : {}),
-          // The ref this Job branches from, or nothing. NOT resolved here: `hkb new` may be filing
-          // the second step of a chain before the first has pushed the branch it names, and a
-          // check at file time would refuse the one workflow the field exists for. It is checked
-          // when the checkout is made, where a missing ref fails the Job by name (`src/controller.ts`).
-          ...(base ? { base } : {}),
-          ...(triage ? { phase: 'triage' as const } : {}),
-          proposes,
-          model,
-          effort: effort ?? null,
-          isolate: !values['no-isolate'],
-          allowedTools,
-          pluginPaths,
-          // Null, not a number, when the flag was not given. A Job that recorded 20 turns because
-          // nobody said otherwise would outrank its board's default for ever — "unset" staying
-          // legible is the whole reason these columns are nullable. See `src/spec.ts`.
-          maxTurns: num(values['max-turns'], '--max-turns') ?? null,
-          maxBudgetUsd: num(values['max-budget'], '--max-budget') ?? null,
-          maxRetries: num(values['max-retries'], '--max-retries') ?? null,
-          attemptDeadlineSeconds: seconds(values['attempt-deadline'], '--attempt-deadline'),
-          activeDeadlineSeconds: seconds(values.deadline, '--deadline'),
-        },
-      });
-      await db.event.create({
-        data: { kind: 'created', jobId: job.id, boardId: board.id, actor: whoami(), payload: { name, ...(triage ? { phase: 'triage' } : {}) } },
-      });
-      // RESOLVED, not the Job's own column. `check ?? null` printed nothing for a Job that
-      // inherits the board's — which is the configuration the README recommends, and precisely the
-      // "an attempt can fail on a command nobody printed" surprise this echo exists to prevent. The
-      // board row is already in hand, so this costs nothing and reads like `hkb show`.
-      const filedCheck = resolveSpec(job, board).check;
-      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports, results, artifacts, inputs, labels, proposes, check: jsonCheck(filedCheck, proposes), from: tpl?.name ?? null, standingSteps: dflt?.name ?? null }, () =>
-        console.log(`#${job.id} ${job.name}  [${job.phase}]  on ${slug}`
-          + (triage ? `  — noted, not queued. \`hkb queue ${job.id}\` when it is work` : '')
+      // The spec goes over under the FLAG NAMES, because that is the vocabulary a workflow file's
+      // frontmatter already uses and `hkb job set` already takes: one spelling of `max-budget`
+      // across three surfaces, and `hkb --help` is the reference for all of them.
+      const filed = await createJob(db, scope, {
+        ...values,
+        // `hkb new`'s name is every positional, joined — see `strayWords` for why the leftovers
+        // after a flag are refused rather than swept in here. Undefined when nothing was typed, so
+        // that a workflow's own `name:` can answer.
+        name: rest.join(' ').trim() || undefined,
+        // A PRODUCER, so `--brief -` cannot block on stdin for a `--from` that does not exist.
+        // Absent unless one of the two flags was given: what a Job with no brief falls back to —
+        // the workflow's body, the name of a triage note, or a refusal — is `createJob`'s rule.
+        brief: values.brief !== undefined || values['brief-file'] !== undefined
+          ? () => readBrief(values)
+          : undefined,
+      }, { by: whoami() });
+      const r = filed.row;
+      const check = r.check;
+      emit(out, r, () =>
+        console.log(`#${r.id} ${r.name}  [${r.phase}]  on ${r.board}`
+          + (r.phase === 'triage' ? `  — noted, not queued. \`hkb queue ${r.id}\` when it is work` : '')
           // Named because the Job no longer remembers: a workflow is expanded at file time and gone,
           // so this line is the only place the two are ever seen together.
-          + (tpl ? `\n  from workflow ${tpl.name}${tpl.description ? ` — ${tpl.description}` : ''}` : '')
+          + (filed.from ? `\n  from workflow ${filed.from.name}${filed.from.description ? ` — ${filed.from.description}` : ''}` : '')
           // Said out loud for the same reason: this brief is not only what was typed, and a worker
           // that is going to be told something the operator did not write should not be the first
           // to find out.
-          + (dflt ? `\n  finishes with ${dflt.name}${dflt.description ? ` — ${dflt.description}` : ''}  [board ${slug}]` : '')
-          + (exports.length ? `\n  must produce  ${exports.join(', ')}` : '')
-          + (results.length ? `\n  must report   ${results.join(', ')}` : '')
-          + (artifacts.length ? `\n  must hand over ${artifacts.join(', ')}` : '')
-          + (inputs.length ? `\n  is given      ${inputs.map((i) => `${i.name}=${describeSource(i)}`).join(', ')}` : '')
+          + (filed.standingSteps ? `\n  finishes with ${filed.standingSteps.name}${filed.standingSteps.description ? ` — ${filed.standingSteps.description}` : ''}  [board ${r.board}]` : '')
+          + (r.exports.length ? `\n  must produce  ${r.exports.join(', ')}` : '')
+          + (r.results.length ? `\n  must report   ${r.results.join(', ')}` : '')
+          + (r.artifacts.length ? `\n  must hand over ${r.artifacts.join(', ')}` : '')
+          + (r.inputs.length ? `\n  is given      ${r.inputs.map((i) => `${i.name}=${describeSource(i)}`).join(', ')}` : '')
           // Echoed back because a grouping nobody can see is a surprise — the same argument
           // `describeDefaults` makes for a board's defaults.
-          + (Object.keys(labels).length ? `\n  labels        ${describeLabels(labels)}` : '')
-          + (proposes ? `\n  proposes      Jobs — it writes \`${PROPOSAL_ARTIFACT}\` and waits for you to approve` : '')
+          + (Object.keys(r.labels).length ? `\n  labels        ${describeLabels(r.labels)}` : '')
+          + (r.proposes ? `\n  proposes      Jobs — it writes \`${PROPOSAL_ARTIFACT}\` and waits for you to approve` : '')
           // Echoed for the same reason the declared outputs are: it is half the completion
           // condition, and a Job whose attempt can fail on a command nobody printed is a surprise.
           // Traced like every other resolved value: the command and where it came from. An
@@ -1260,11 +788,11 @@ export async function main(argv: string[]): Promise<number> {
           // surprising of the two, and silence there reads as "nobody configured anything".
           // Never for a proposing Job: it runs none, so naming the board's command here would
           // promise a judgement nobody is going to make. See `hkb show`, which says the same.
-          + (proposes
+          + (r.proposes
             ? ''
-            : filedCheck.value
-              ? `\n  must pass     ${filedCheck.value}  [${filedCheck.from}]`
-              : filedCheck.value === ''
+            : check.value
+              ? `\n  must pass     ${check.value}  [${check.source}]`
+              : check.value === ''
                 ? '\n  must pass     nothing — this Job opts out of the board\'s check'
                 : '')));
       return 0;
@@ -1282,46 +810,10 @@ export async function main(argv: string[]): Promise<number> {
       }
       // Equality, ANDed, and parsed BEFORE the read: a malformed selector is a usage error, and an
       // empty listing is the one answer it must never give — that reads as "nothing matches".
-      //
-      // The filtering itself happens over the rows rather than in the `where`, because Prisma's
-      // JSON filters are PostgreSQL and MySQL only and SQLite cannot ask the question in SQL. This
-      // listing already reads its board in one query and shapes the rows in memory, so a selector
-      // is a `filter` over a read that was happening anyway (`src/labels.ts`).
       const selector = parseLabels(givenList(values.label, '--label'));
-      const jobs = await db.job.findMany({
-        where: { ...(all ? {} : { board: { slug } }), ...(phase ? { phase } : {}) },
-        orderBy: [{ board: { slug: 'asc' } }, { id: 'asc' }],
-        // The board is included whatever the scope, because `--json` carries it either way: a
-        // consumer that has to branch on the flags it passed is reading a shape, not a record.
-        //
-        // The attempts' pull requests come back with the listing rather than in a second query per
-        // row: a board-wide read already exists here, and "one board read per pass" is the rule
-        // this listing has always followed.
-        include: {
-          _count: { select: { attempts: true } },
-          board: { select: { slug: true } },
-          attempts: { select: { prUrl: true }, orderBy: { k: 'desc' } },
-        },
-      });
-      const rows = jobs.map((j) => {
-        const labels = jobLabels(j.labels);
-        const exports = declaredExports(j.exports);
-        const results = declaredExports(j.results);
-        const artifacts = declaredExports(j.artifacts);
-        const pr = j.attempts.find((a) => a.prUrl)?.prUrl ?? null;
-        return {
-          id: j.id, board: j.board.slug, name: j.name, phase: j.phase, attempts: j._count.attempts,
-          lastError: j.lastError, sessionId: j.lastSessionId,
-          // Carried on every row, whatever the phase, for the reason `hkb boards` carries its
-          // defaults either way: a consumer inferring absence from a missing key reads a shape,
-          // not a record.
-          pr, exports, results, artifacts, labels,
-          producedNothing: producedNothing({ phase: j.phase, pr, exports, results, artifacts, proposes: j.proposes }),
-        };
-        // Filtered on the built row rather than before it: the row is where a label has already
-        // been read defensively out of the column, and reading it twice to save shaping a handful
-        // of rows nobody will print would be the more expensive kind of thrift.
-      }).filter((r) => selects(r.labels, selector));
+      // The read model, emitted verbatim under `--json`. What is left in this verb is the table:
+      // the widths, the marker and the tail, which are a terminal's opinion about a screen.
+      const rows = await listJobs(db, { slug: all ? null : slug }, { phase, labels: selector });
       emit(out, rows, () => {
         // The selector is named back in the empty case, because "no jobs on default" when you asked
         // for one label is an answer to a question you did not ask.
@@ -1348,30 +840,12 @@ export async function main(argv: string[]): Promise<number> {
     case 'show': {
       const id = num(rest[0], 'hkb show <id>');
       if (!id) throw usage('hkb show <id> — which Job?');
-      const job = await db.job.findUnique({
-        where: { id },
-        include: { attempts: { orderBy: { k: 'asc' } }, lease: true, board: true },
-      });
-      if (!job) throw usage(`no Job #${id} — \`hkb ls\` shows what is on the board`);
-      // What this Job will run with, and where each value came from. The raw columns are on the
-      // object too, but most of them are null now, and a null `model` is not an answer to "which
-      // model does this run on" — the board may have answered it.
-      const spec = resolveSpec(job, job.board);
-      // `check` is the resolved one here, overriding the raw column the spread carries — the same
-      // object `hkb new --json` prints, so the two verbs cannot disagree about the command that
-      // will judge this Job. See `jsonCheck`. Every other raw column is left as it is: they are
-      // traced under `spec` alongside, and this is the one that was answering two ways.
-      // Where this Job's standing steps will come from — the BOARD's default workflow, read now,
-      // because that is when the controller reads it too. It used to be recovered from the stored
-      // brief, which was a record of what the board's default was on the day the Job was filed; the
-      // steps are composed at claim time now (`src/controller.ts`), so the honest answer to "what
-      // will this Job be told" is the board's answer today.
-      //
-      // Null for a proposing Job and for a `--no-isolate` one, which are the two populations the
-      // controller does not compose them for: printing a workflow name beside a Job that will never
-      // see it is the kind of quiet disagreement this line exists to prevent.
-      const steps = job.proposes || job.isolate === false ? null : (job.board?.defaultWorkflow?.trim() || null);
-      emit(out, { ...job, check: jsonCheck(spec.check, job.proposes), spec, standingSteps: steps }, () => {
+      // One object: the row, the board, the lease, the attempts, and the spec resolved with each
+      // field's source named (`src/read.ts`). `--json` is that object; everything below is the
+      // screen it makes.
+      const job = await showJob(db, id);
+      const { spec, standingSteps: steps } = job;
+      emit(out, job, () => {
         console.log(`#${job.id} ${job.name}`);
         // One board per machine, one Board per repository: a Job you did not expect is usually a
         // Job on a board you were not thinking about. Which board, and which checkout it will run
@@ -2089,36 +1563,11 @@ export async function main(argv: string[]): Promise<number> {
       }
       if (rest[0]) throw usage(`hkb boards has no subcommand "${rest[0]}" — try \`hkb boards\`, \`hkb boards add <slug>\`, \`hkb boards set <slug>\` or \`hkb boards rm <slug>\``);
 
-      const serving = await daemon.status();
-      const boards = await db.board.findMany({ orderBy: { slug: 'asc' }, include: { jobs: { select: { phase: true } } } });
-      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const rows = await Promise.all(boards.map(async (b) => {
-        const spend = await db.attempt.aggregate({
-          _sum: { costUsd: true },
-          where: { job: { boardId: b.id }, startedAt: { gte: since } },
-        });
-        const by = (ph: string) => b.jobs.filter((j) => j.phase === ph).length;
-        const d = serving.find((s) => s.slug === b.slug);
-        return {
-          board: b.slug,
-          repoPath: b.repoPath,
-          daemon: d?.running ? 'up' : 'down',
-          paused: !!b.pausedAt,
-          pending: by('pending'), running: by('running'),
-          succeeded: by('succeeded'), failed: by('failed'),
-          // Separate in the JSON, one column in the table. A consumer that wants to tell a merged
-          // Job from an abandoned one can; a reader counting what is left to do only needs to know
-          // that neither is.
-          done: by('done'), cancelled: by('cancelled'),
-          spent24h: spend._sum.costUsd ?? 0,
-          maxConcurrent: b.maxConcurrent,
-          dailyBudgetUsd: b.dailyBudgetUsd,
-          // Always in `--json`, set or not: a consumer that has to infer a missing default from a
-          // missing key is reading a shape rather than a record.
-          defaults: boardDefaults(b),
-          hasDefaults: hasDefaults(b),
-        };
-      }));
+      // Every board on this machine, in the shape `--json` prints: the counts by phase, the
+      // ceilings, the 24-hour spend and whether a daemon is serving it (`src/read.ts`). The table
+      // below is this verb's own — the widths and the continuation line are a terminal's
+      // opinion, and a second consumer wants the rows and none of that.
+      const rows = await boardSummaries(db);
       emit(out, rows, () => {
         if (!rows.length) return console.log('no boards yet — `hkb new` inside a repository creates one');
         const w = Math.max(5, ...rows.map((r) => r.board.length));

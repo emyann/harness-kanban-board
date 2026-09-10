@@ -233,6 +233,14 @@ meet one in the git history, that is what it was.
   quotes (`strayWords`, `src/hkb.ts`). Refused for the verbs that join positionals into prose — the
   name, a brief, a reason, a note — because those absorb it silently; allowed for verbs taking a
   fixed number, where `hkb watch --board other 999` is a real invocation (*gotchas/argv-traps*).
+- **Read model** — the three questions any consumer of a board asks, as functions rather than as
+  verb bodies: `boardSummaries`, `listJobs`, `showJob` (`src/read.ts`). The object each returns **is**
+  what `--json` prints, emitted verbatim, which is what stops two surfaces re-deriving one answer
+  and disagreeing (*architecture/the-seam*).
+- **Filing** — creating a Job: `createJob(db, scope, spec, { by })` (`src/filing.ts`; `hkb new`).
+  `spec` is keyed by the CLI's flags without the dashes, because a workflow file's frontmatter keys
+  are those same names — one vocabulary, so a value from a file and a value from a line take the
+  same parse and the same refusal (*architecture/the-seam*).
 - **Spec edit** — changing what a filed Job will run *as*, rather than where it is in its life
   (`setJobSpec`, `src/job-spec.ts`; `hkb job set`). A closed list of settable fields, `phase`,
   `proposes` and `isolate` refused by name, a lease refused outright, and every change on the Event

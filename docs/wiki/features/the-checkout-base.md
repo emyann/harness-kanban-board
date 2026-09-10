@@ -9,7 +9,7 @@ covers:
   - path: src/worktree.ts
     sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
   - path: src/spec.ts
-    sha: 5f549ec7407fcf1af8d80266ad35b9e90ab1620a
+    sha: 52a014761b40dc1c364976bb772713febf321641
   - path: src/controller.ts
     sha: 43770041da29adc6333f351e74a701673102f9d9
   - path: src/rebase.ts
@@ -24,7 +24,7 @@ related:
     architecture/job-kind,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: 48b5ee1
+generated_at_commit: a72ec46
 last_refreshed: 2026-09-09
 ---
 

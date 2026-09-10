@@ -7,14 +7,14 @@ audience: [dev]
 read_when: "adding a flag, adding a verb that joins positionals, or wondering why a value arrived as one word — or as the word `true`, or as another flag"
 covers:
   - path: src/hkb.ts
-    sha: ca8e6b1d5396b3506c01828c247249ed12590c54
+    sha: c5bf853a6a8fccc112329751df26917009055a2e
 related:
   [
     architecture/transitions,
     features/workflow-templates,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: 48b5ee1
+generated_at_commit: a72ec46
 last_refreshed: 2026-09-09
 ---
 
@@ -156,7 +156,7 @@ whether it allows*). It reached three verbs at once, because all three shared th
 
 **The rule this leaves:** never `String(values.x)`. Test the type — `typeof values.x === 'string'`
 — which is what `--gate` had always done one line away from the bug, and refuse by name. `given`
-(`src/hkb.ts`) is that test in one place, and the flags that were reading their value with
+(`src/flags.ts`) is that test in one place, and the flags that were reading their value with
 `String(...)` now go through it.
 
 **And a REPEATABLE flag is `[true]`, not `true`.** `multiple: true` wraps it, so a bare `--export`,
@@ -182,7 +182,7 @@ is *not in effect*, because it was eaten: the operator asked for machine output 
 
 `unknownFlags` cannot see it (both flags are declared) and `strayWords` cannot either (the token was
 consumed, so nothing fell through as a positional). What catches it is the value's own shape:
-`given` (`src/hkb.ts`) refuses a **flag-shaped** value — a dash followed by a letter, or two dashes
+`given` (`src/flags.ts`) refuses a **flag-shaped** value — a dash followed by a letter, or two dashes
 — on every flag that shares it. Not every leading dash: a brief that opens with a Markdown bullet
 (`--brief "- add a test"`) and a negative number are values, and a first version refused the bullet.
 

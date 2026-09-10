@@ -15,8 +15,8 @@ covers:
   - path: prisma/schema.prisma
     sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
   - path: src/hkb.ts
-    sha: ca8e6b1d5396b3506c01828c247249ed12590c54
-generated_at_commit: 48b5ee1
+    sha: c5bf853a6a8fccc112329751df26917009055a2e
+generated_at_commit: a72ec46
 last_refreshed: 2026-09-09
 related:
   [
@@ -153,7 +153,7 @@ One consequence of the apply being the controller's: **`hkb retry` refuses a pro
 has been filed.** The next pass would find the same approval, re-file rows the unique key already
 refuses, and finish the Job again without ever running the worker — a retry that quietly does
 nothing. Retrying it before the approval, or after a refused proposal, works normally
-(`src/hkb.ts`).
+(`retryJob`, `src/transitions.ts`).
 
 `--propose` implies a gate, and not by convention: nothing is applied without an approval, so a
 proposing Job with no approver would propose into a board where nobody is ever asked. The operator's

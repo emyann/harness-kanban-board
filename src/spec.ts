@@ -251,6 +251,25 @@ export function resolveSpec(
   };
 }
 
+/**
+ * The completion check under `--json`, in ONE shape wherever it appears.
+ *
+ * `hkb new --json` printed the RESOLVED check and `hkb show --json` printed the Job's raw column, so
+ * the same Job answered `"npm test"` to one verb and `null` to the other — and a script that filed
+ * work and then polled it saw a check appear out of nowhere. The resolved value is the one both
+ * print, because it is the one that will run; `source` says which of the three levels answered, so
+ * nothing is lost by not printing the column.
+ *
+ * A proposing Job runs none whatever the board says (`runsCheck` in the controller), so this says
+ * null for it rather than a resolved command the human line already qualifies away — the two verbs
+ * and the two forms answer the same.
+ *
+ * Here rather than in either caller, because it is the pair `src/filing.ts` and `src/read.ts` must
+ * not disagree about, and a shape kept in one of two consumers is a shape the other one copies.
+ */
+export const jsonCheck = (t: Traced<string | null>, proposes?: string | null) =>
+  (proposes ? { value: null, source: 'proposes' } : { value: t.value, source: t.from });
+
 /** Whether a board says anything at all. `hkb boards` only prints a defaults line when it does. */
 export function hasDefaults(b: BoardDefaults): boolean {
   return b.defaultModel != null || b.defaultEffort != null || b.defaultMaxTurns != null

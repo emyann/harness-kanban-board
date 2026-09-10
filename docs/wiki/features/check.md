@@ -7,20 +7,20 @@ audience: [dev]
 read_when: "a Job failed as `check_failed`, you are adding anything that runs before/beside/after the agent, or you are about to change what makes an attempt succeed"
 covers:
   - path: src/hkb.ts
-    sha: ca8e6b1d5396b3506c01828c247249ed12590c54
+    sha: c5bf853a6a8fccc112329751df26917009055a2e
   - path: src/check.ts
     sha: d5d2e273d51d281992cfa4dbb34e92458150e0d2
   - path: src/controller.ts
     sha: 43770041da29adc6333f351e74a701673102f9d9
   - path: src/spec.ts
-    sha: 5f549ec7407fcf1af8d80266ad35b9e90ab1620a
+    sha: 52a014761b40dc1c364976bb772713febf321641
   - path: src/brief.ts
     sha: a56db1e2f49d60c695034ecd14f73c5c258cce85
   - path: src/templates.ts
     sha: 84e68dad2edc226425dfb0b8880e9765b2628686
   - path: prisma/schema.prisma
     sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
-generated_at_commit: 48b5ee1
+generated_at_commit: a72ec46
 last_refreshed: 2026-09-09
 related:
   [
@@ -63,9 +63,9 @@ framework. The kubelet reads a container's exit code without knowing what the co
 and this is the same relationship — which is what keeps the Job kind dumb (`architecture/job-kind`).
 
 That is also why nothing validates the command at file time beyond the shapes that could never
-have been meant (`src/hkb.ts`, `hkb new`/`hkb job set`/`hkb boards set`): hkb cannot have an
+have been meant (`src/flags.ts`, for `hkb new`/`hkb job set`/`hkb boards set` alike): hkb cannot have an
 opinion about a shell line it does not parse. What *is* refused, by name and pointing at the fix
-(`given` and `checkFlag`, `src/hkb.ts`):
+(`given` and `checkFlag`, `src/flags.ts`):
 
 - **a bare `--check`.** `parseArgs` runs with `strict: false`, so a trailing flag with no value
   comes back as the boolean `true`, and `String(true)` filed the shell command `true` — which

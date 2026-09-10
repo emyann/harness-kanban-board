@@ -9,7 +9,7 @@ covers:
   - path: bin/hkb.ts
     sha: 698dd0e673a442929b7314d6bb409f87f89b8251
   - path: src/hkb.ts
-    sha: ca8e6b1d5396b3506c01828c247249ed12590c54
+    sha: c5bf853a6a8fccc112329751df26917009055a2e
   - path: src/controller.ts
     sha: 43770041da29adc6333f351e74a701673102f9d9
   - path: src/daemon.ts
@@ -48,7 +48,7 @@ related:
     decisions/adr-009-retiring-the-first-system,
     decisions/adr-011-proposals-not-board-access,
   ]
-generated_at_commit: 48b5ee1
+generated_at_commit: a72ec46
 last_refreshed: 2026-09-09
 ---
 
@@ -66,6 +66,7 @@ seam or 36 CLI verbs is describing code that is gone.
 | | |
 |---|---|
 | `bin/hkb.ts` → `src/hkb.ts` | the CLI: parse, resolve a board, run one verb, print |
+| `src/filing.ts`, `src/read.ts`, `src/transitions.ts` | what a verb calls: file a Job, read the board, move a Job's phase — so a second consumer needs no CLI (*architecture/the-seam*) |
 | `prisma/schema.prisma` + `src/db.ts` | the board — one SQLite file, one memoized client handle |
 | `src/controller.ts` | `reconcile()` — one level-triggered pass over one board |
 | `src/daemon.ts` | that pass on a timer, detached, over *every* board |
@@ -142,7 +143,7 @@ and joins them to a Job by **branch name** — `kb-<jobId>-<k>`, which `src/work
 has to remember it. The worker opens its own *draft* PR and a human merges; `succeeded` means the session
 ended, not that the work is good — and not, on its own, that anything was produced. Nothing in the
 machinery *requires* a pull request, so `hkb ls` marks a succeeded Job that opened none and declared no
-outputs as **produced nothing** (`producedNothing`, `src/hkb.ts`). It is stated rather than judged: "I
+outputs as **produced nothing** (`producedNothing`, `src/read.ts`). It is stated rather than judged: "I
 looked, and there is nothing to change" is a real outcome, and so is a `--no-isolate` Job.
 
 A Job can also declare its outputs, which is how it stops being coupled to a commit at all
@@ -220,7 +221,7 @@ not ask, but you should know". Hermes' structured handoff is the second layer al
 and guarantees nothing, because a downstream reader cannot rely on a key existing.
 
 Those three are what a Job with nothing to commit produces. `hkb ls` marks a succeeded Job that opened no
-pull request and declared none of them as **produced nothing** (`producedNothing`, `src/hkb.ts`); with a
+pull request and declared none of them as **produced nothing** (`producedNothing`, `src/read.ts`); with a
 result or an artifact declared, the same Job says what it found instead.
 
 ## The gate — the one place a Job waits for a person

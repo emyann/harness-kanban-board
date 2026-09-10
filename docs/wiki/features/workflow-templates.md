@@ -9,7 +9,7 @@ covers:
   - path: src/templates.ts
     sha: 84e68dad2edc226425dfb0b8880e9765b2628686
   - path: src/hkb.ts
-    sha: ca8e6b1d5396b3506c01828c247249ed12590c54
+    sha: c5bf853a6a8fccc112329751df26917009055a2e
   - path: src/inputs.ts
     sha: 140cf48b8b323742a57e3e604b6853f829c72b6c
   - path: prisma/schema.prisma
@@ -24,7 +24,7 @@ related:
     concepts/ceilings,
     features/proposals,
   ]
-generated_at_commit: 48b5ee1
+generated_at_commit: a72ec46
 last_refreshed: 2026-09-09
 ---
 
@@ -92,7 +92,7 @@ Two keys are not flags and are allowed anyway — `name` and `description` (`src
 `name` is *checked, not used*: `--from` finds a workflow by its filename, so a `name:` that
 disagrees is a file somebody copied and never renamed, and it is refused
 (`src/templates.ts:267-272`). `description` is the line a person reads when choosing between
-workflows, and `hkb new` prints it back (`src/hkb.ts:966`).
+workflows, and `hkb new` prints it back (`src/hkb.ts:771`).
 
 ### The grammar is two lines long
 
@@ -179,9 +179,9 @@ works if the directory itself was never excluded.
 ## Expanded at file time, then gone
 
 `hkb new --from` reads and validates the workflow **before the board is upserted and before a name
-is settled** (`src/hkb.ts:577`), so a workflow that is not there fails naming the path it looked for
+is settled** (`createJob`, `src/filing.ts:128`), so a workflow that is not there fails naming the path it looked for
 with nothing created. It then fills in every flag the command line did not set
-(`src/hkb.ts:597-606`), and the Job is created by the ordinary `hkb new` path — same validation, same
+(`src/filing.ts:184-186`), and the Job is created by the ordinary `hkb new` path — same validation, same
 columns, same events.
 
 **Nothing downstream knows a file was involved.** The controller, the runtime and `hkb show` see a
@@ -192,8 +192,8 @@ Job with values on it. Two consequences worth stating:
    cannot disagree with the prompt.
 2. `hkb show`'s spec trace reports every templated value as coming from `job`, because it did: the
    expansion happened at file time, and `resolveSpec` (`src/spec.ts`) resolves what is on the row.
-   The workflow's name is printed by `hkb new` (`src/hkb.ts:966`) and carried in its `--json` as
-   `from` (`src/hkb.ts:729`), which is the only place the two are ever seen together.
+   The workflow's name is printed by `hkb new` (`src/hkb.ts:771`) and carried in its `--json` as
+   `from` (`src/filing.ts:413`), which is the only place the two are ever seen together.
 
 ### Precedence: the flag you typed wins
 
@@ -206,9 +206,9 @@ appending to it**. Appending would make a workflow's grant impossible to *narrow
 only ever widen the surface its template chose, which is the wrong direction for a guard.
 
 The workflow's own `name:` becomes the Job's name when none is given
-(`src/hkb.ts:797`), so `hkb new --from draft-wiki-page` is a whole command; a name typed on the line
+(`src/filing.ts:200`), so `hkb new --from draft-wiki-page` is a whole command; a name typed on the line
 still wins, being the more specific value. `--brief` likewise overrides the body
-(`src/hkb.ts:614-619`).
+(`src/filing.ts:211-215`).
 
 ### A board's default workflow: how work here FINISHES
 
@@ -293,7 +293,7 @@ and the argument in its docblock).
 existed still means what it says. That opt-in is exactly wrong for a workflow, whose author opted in
 by writing `{{page}}` — without a check, `hkb new --from` with no `--input` would file a Job with the
 literal text `{{page}}` in its instructions and nothing would ever say so. So `hkb new` asks first
-and refuses, naming the placeholders and the flags that supply them (`src/hkb.ts:658-667`,
+and refuses, naming the placeholders and the flags that supply them (`src/filing.ts:265-273`,
 `placeholders` at `src/templates.ts:347`).
 
 ## The dogfood
@@ -345,4 +345,4 @@ having spent $1.56 and produced nothing. A workflow is where that lesson can be 
   gap and not a bug in `withStandingSteps`.
 - **One workflow per Job.** `--from` is not repeatable, deliberately: two workflows would need a rule
   for which one wins per key, and "the flag you typed wins over the file" is the only precedence
-  worth asking anyone to hold (`src/hkb.ts:518-522`).
+  worth asking anyone to hold (`src/hkb.ts:518-521`).
