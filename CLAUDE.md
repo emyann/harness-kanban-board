@@ -4,8 +4,8 @@
 The board is SQLite at **`~/.hkb/board.db`** behind Prisma — one board per machine with a **Board row per
 repository**, the way one cluster holds a namespace per project. Workers run on the Claude Agent SDK, and GitHub is
 the forge. `HKB_DATABASE_URL` points at a different board.
-The first and only workload kind is a **Job** — one agent, one brief, run to completion (ADR-007); the kanban DAG is
-a second kind that does not exist yet.
+The machinery's only workload kind is a **Job** — one agent, one brief, run to completion (ADR-007). The board's
+first kind now exists beside it: **`Run`/`Step`**, which sequences Jobs and nothing else (`src/runs.ts`).
 Read `README.md` for the model before changing behaviour.
 
 ## Values (in priority order)
@@ -55,13 +55,14 @@ that fails when the flag stops working (`test/workspace.live.test.ts` is the pat
 - `bin/hkb.ts` the entry point · `src/hkb.ts` the verbs
 - `prisma/schema.prisma` the board · `src/db.ts` the one client handle · `src/db-url.ts` where it lives ·
   `src/schema.ts` create-and-migrate on first touch, and the refusal to open a newer board
-- `src/controller.ts` the Job kind's reconcile pass · `src/daemon.ts` that pass on a timer, detached ·
-  `src/limits.ts` the ceilings · `src/liveness.ts` whether a lease holder is still running
-- `src/admission.ts` the `PreToolUse` gate that injects worktree isolation and refuses the two ways off the
-  `pre-push` hook · `src/push.ts` that hook, and which branch it admits · `src/pre-push.ts` its entry point ·
-  `src/worktree.ts` the checkout ·
-  `src/brief.ts` the sandbox contract · `src/templates.ts` a workflow, and a board's default one ·
-  `src/spec.ts` how a Job's spec resolves · `src/pulls.ts` the forge read ·
+- **The Job kind** — `src/controller.ts` its reconcile pass · `src/daemon.ts` that pass on a timer, detached ·
+  `src/limits.ts` the ceilings · `src/liveness.ts` whether a lease holder is still running ·
+  `src/workspaces.ts` the workspace's name and its TTL · `src/transitions.ts` the writes a person makes
+- **The board's kind** — `src/runs.ts` `Run`/`Step`, ordering and nothing else · `src/pass.ts` the composition,
+  and the ONLY file that may import both controllers (`test/boundary.test.ts` asserts it)
+- `src/admission.ts` the `PreToolUse` gate · `src/brief.ts` what a worker is told ·
+  `src/templates.ts` a workflow, and a board's default one · `src/filing.ts` `createJob`, the one door
+  into the Job table · `src/spec.ts` how a Job's spec resolves · `src/read.ts` the read model ·
   `src/paths.ts` where the package is, in either layout
 - `src/runtime/` the runtime seam (`claude.ts` the Agent SDK, `fake.ts` for tests that spend nothing)
 - `src/generated/` the Prisma client — **committed**, because the tarball has no `prisma generate`

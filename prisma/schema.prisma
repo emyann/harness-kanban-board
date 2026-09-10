@@ -106,6 +106,7 @@ model Board {
   id    Int    @id @default(autoincrement())
   slug  String @unique
   jobs  Job[]
+  runs  Run[]
 
   /// The repository this board's Jobs run in, as an absolute path on this machine.
   ///
@@ -466,6 +467,24 @@ model Job {
   proposedByK     Int?
   proposalIndex   Int?
 
+  /// The Step this Job carries out, or null for the Jobs nobody sequenced — which is nearly all of
+  /// them.
+  ///
+  /// **The owner reference, and it lives on the CHILD**, the way `metadata.ownerReferences` does and
+  /// the way `proposedByJobId` above already does. Putting it here rather than a `jobId` on `Step` is
+  /// what makes `reconcileRuns` idempotent without a transaction: the second pass over the same ready
+  /// Step tries to create a second Job carrying the same `stepId`, and `@unique` refuses it. That is
+  /// the rule the three columns above are already written to — *a constraint that refuses beats logic
+  /// that has to be right* — and it is the one thing a parent-side pointer could not give, because a
+  /// duplicate Job gets a fresh id and no constraint would see it.
+  ///
+  /// `onDelete: SetNull`, not Cascade: `hkb rm` on a Job is the operator saying "this run of the work
+  /// is gone", and the Step is a *declaration* that outlives it. The next pass sees a Step with no Job
+  /// and files another — which is what a level-triggered controller is for, and what deleting a Pod
+  /// out from under a Job does in Kubernetes.
+  stepId          Int?  @unique
+  step            Step? @relation(fields: [stepId], references: [id], onDelete: SetNull)
+
   attempts Attempt[]
   lease    Lease?
   events   Event[]
@@ -682,4 +701,70 @@ model Event {
 
   @@index([jobId, id])
   @@index([boardId, id])
+}
+
+/// A sequenced piece of work — the second kind, and the first thing on this board that is not a Job.
+///
+/// ADR-018 draws the line this sits on: hkb-the-machinery is one kind, `Job`, whose whole contract
+/// is *cut a workspace, run one agent session under limits, record what happened, clean up*. Ordering
+/// is not in it and `batch/v1` has no field for it either. So ordering becomes a kind of its own with
+/// a controller of its own, built **on** the Job kind — `tekton.dev` on `batch/v1` — and `src/runs.ts`
+/// is that controller. Nothing in `src/controller.ts` knows either of these tables exists.
+///
+/// A `Run` holds no status. Whether it is finished is a question about its Steps' Jobs, and SQLite
+/// can join for it — which is the whole reason the answer is not copied here. Tekton learned that
+/// one the expensive way and reversed it in v0.45 (TEP-0100): `PipelineRun.status.taskruns` held a
+/// copy of every child's status, so every child transition rewrote the parent, and what replaced it
+/// was `childReferences` — a reference, deliberately without even the child's pass/fail bit.
+model Run {
+  id      Int   @id @default(autoincrement())
+  boardId Int
+  board   Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  /// What the run is for, in a person's words. Every Job it files is named from this.
+  name  String
+  steps Step[]
+
+  createdAt DateTime @default(now())
+
+  @@index([boardId])
+}
+
+/// One step of a run: a name, and what must succeed before it.
+///
+/// **Four columns of consequence, and no fifth.** There is no `model`, no `brief`, no budget and no
+/// tool surface here, because none of them changes what a reconcile pass *decides*: the controller
+/// hands them over unread at the moment it files the Job, and the place they are already written is
+/// `.hkb/workflows/<name>.md`, whose frontmatter has 21 keys (`src/templates.ts`) and whose body is
+/// the brief. A field the controller hands over without reading is not a decision input, and storing
+/// it would only mean two places to edit it and one of them stale.
+///
+/// So `name` is the workflow's name — the step *is* the file — and that is why v1 needs no file
+/// format at all.
+model Step {
+  id    Int @id @default(autoincrement())
+  runId Int
+  run   Run @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  /// The workflow this step runs: `.hkb/workflows/<name>.md`, read at file time and gone.
+  ///
+  /// Unique within the run because `after` names siblings by name rather than by id — the ids do
+  /// not exist when the run is cut. This is exactly why `Job.after` was the wrong shape and this one
+  /// is not (`docs/workflow-study.md` §2): a name is ambiguous globally and precise inside an owner.
+  name String
+
+  /// The names of the sibling steps that must succeed first. `[]` — the default — is ready at once,
+  /// so the first step of a run needs no special case anywhere.
+  ///
+  /// **The only column any reconcile pass reads on every pass**, which is what earns it a column at
+  /// all. `batch/v1` has nothing like it; Tekton's `PipelineTask.runAfter` is the analogue, and it
+  /// lives in a separate API group with a separate controller for the same reason this does.
+  after Json @default("[]")
+
+  /// The Job carrying this step out, by the owner reference on the Job itself. Null while it has
+  /// not been filed, which is the gap `reconcileRuns` acts on.
+  job Job?
+
+  @@unique([runId, name])
+  @@index([runId])
 }

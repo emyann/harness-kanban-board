@@ -56,7 +56,9 @@ export const ModelName = {
   Job: 'Job',
   Attempt: 'Attempt',
   Lease: 'Lease',
-  Event: 'Event'
+  Event: 'Event',
+  Run: 'Run',
+  Step: 'Step'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -145,6 +147,7 @@ export const JobScalarFieldEnum = {
   proposedByJobId: 'proposedByJobId',
   proposedByK: 'proposedByK',
   proposalIndex: 'proposalIndex',
+  stepId: 'stepId',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt',
   finishedAt: 'finishedAt'
@@ -207,6 +210,26 @@ export const EventScalarFieldEnum = {
 export type EventScalarFieldEnum = (typeof EventScalarFieldEnum)[keyof typeof EventScalarFieldEnum]
 
 
+export const RunScalarFieldEnum = {
+  id: 'id',
+  boardId: 'boardId',
+  name: 'name',
+  createdAt: 'createdAt'
+} as const
+
+export type RunScalarFieldEnum = (typeof RunScalarFieldEnum)[keyof typeof RunScalarFieldEnum]
+
+
+export const StepScalarFieldEnum = {
+  id: 'id',
+  runId: 'runId',
+  name: 'name',
+  after: 'after'
+} as const
+
+export type StepScalarFieldEnum = (typeof StepScalarFieldEnum)[keyof typeof StepScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -221,6 +244,13 @@ export const NullableJsonNullValueInput = {
 } as const
 
 export type NullableJsonNullValueInput = (typeof NullableJsonNullValueInput)[keyof typeof NullableJsonNullValueInput]
+
+
+export const JsonNullValueInput = {
+  JsonNull: JsonNull
+} as const
+
+export type JsonNullValueInput = (typeof JsonNullValueInput)[keyof typeof JsonNullValueInput]
 
 
 export const JsonNullValueFilter = {

@@ -1,20 +1,20 @@
 ---
 title: The Job kind and its controller
-summary: The first and only workload kind — one agent, one brief, run to completion — with a Kubernetes-shaped mapping (Job/Pod/Lease/Namespace) and a single reconcile pass that is safe to run repeatedly, interrupt, or run concurrently with another host.
+summary: The machinery's only workload kind — one agent, one brief, run to completion — with a Kubernetes-shaped mapping (Job/Pod/Lease/Namespace) and a single reconcile pass that is safe to run repeatedly, interrupt, or run concurrently with another host.
 category: architecture
 kind: explanation
 audience: [dev]
 read_when: "adding a workload kind, changing retry or lease behaviour, or wondering why the DAG is not in the core"
 covers:
   - path: prisma/schema.prisma
-    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
+    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
   - path: src/controller.ts
     sha: 6563f3234641037e46504688115ac5ed4b76cf1b
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
   - path: src/workspaces.ts
     sha: b709212e781376f570a613907a209648dab91526
-generated_at_commit: 62135e9
+generated_at_commit: 26055f1
 last_refreshed: 2026-09-10
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control, features/check, architecture/transitions]
 ---

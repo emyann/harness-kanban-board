@@ -5,7 +5,7 @@ import { openBoard } from './db.ts';
 import { boardDir } from './db-url.ts';
 
 export { boardDir };
-import { reconcile } from './controller.ts';
+import { pass } from './pass.ts';
 import { basename as pathBasename } from 'node:path';
 import {
   BUILT_IN_TTL_SECONDS, collectable, existingWorkspaces, removeWorkspace,
@@ -380,7 +380,7 @@ export async function loop(deps: LoopDeps): Promise<number> {
           });
         }
 
-        const report = await reconcile({
+        const report = await pass({
           runtime: deps.runtime,
           cwd: deps.cwd,
           board: b.slug,
@@ -392,6 +392,16 @@ export async function loop(deps: LoopDeps): Promise<number> {
           onEvent: (l) => log(boards.length > 1 ? `[${b.slug}] ${l}` : l),
         });
         announce(`refused:${b.slug}`, report.refused ? `refused  ${b.slug}: ${report.refused}` : null);
+        // A run that cannot go on, said ONCE. The stalled list is recomputed every pass — a step
+        // behind a failed predecessor, or one whose workflow file was deleted — so logging it per
+        // tick would be the runaway `src/workspaces.ts` was rewritten to end. `announce` is exactly
+        // the answer to that and was already the answer for `refused` and `kept`: log on change,
+        // stay quiet otherwise, and say so again when it changes back. Without this the only kind of
+        // failure this feature can produce was invisible in the mode the daemon actually runs in,
+        // which is the one thing hkb's fifth value does not allow.
+        announce(`stalled:${b.slug}`, report.runs.stalled.length
+          ? `stalled  ${b.slug}: ${report.runs.stalled.map((t) => `run ${t.run} \`${t.step}\` ${t.why}`).join('; ')}`
+          : null);
 
         // ---- collect the workspaces of Jobs that have finished: `ttlSecondsAfterFinished`, and
         // nothing else (`src/workspaces.ts`).

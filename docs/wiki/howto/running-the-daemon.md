@@ -7,16 +7,16 @@ audience: [dev]
 read_when: "installing hkb on a machine that should keep reconciling without somebody logged in at a terminal"
 covers:
   - path: src/daemon.ts
-    sha: 3de5966ef5a47b7e7c7f0ecc0e6fc7c2b238dc76
+    sha: 22f946c6625de1f566d4301e098873050b23ac12
   - path: src/workspaces.ts
     sha: b709212e781376f570a613907a209648dab91526
   - path: src/hkb.ts
-    sha: c06820804f259a976336c80742b3068586df9d84
+    sha: eb759e566ef71b11caa34cc0945a6e2ae30958cf
   - path: src/runtime/claude.ts
     sha: e3afb9de9e34d90f222e7bf9865cbad39e99044b
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
-generated_at_commit: 62135e9
+generated_at_commit: 2b8902f
 last_refreshed: 2026-09-10
 related: [architecture/the-loop, architecture/job-kind, decisions/adr-007-workload-scheduler, decisions/adr-018-the-boundary]
 ---
@@ -182,6 +182,21 @@ tail -f ~/.hkb/hkb.log       # launchd, or a detached `hkb up`
 
 `hkb up --status` exits 1 when no board is being served (`src/hkb.ts:1281`), so it
 doubles as a health check in a script.
+
+### What the loop says, and what it says only once
+
+Most of a tick is silent. The lines that appear are the ones that **changed**:
+a board it cannot lead, a refusal from a ceiling, a workspace git would not take
+back, and a **run that cannot go on** — a step behind a failed predecessor, or
+one whose workflow file was deleted after the run was cut. All four go through
+one helper that remembers the last thing it said for that key and stays quiet
+until the answer differs (`src/daemon.ts`), which is what lets a standing fact be
+reported at all: a reconciler recomputes it every tick, so logging it per pass
+would fill the file with one sentence.
+
+The consequence worth knowing: **a stalled run is announced once.** If you start
+tailing the log after it happened you will not see it — `hkb run` in the
+foreground recomputes and prints the current list, which is the way to ask.
 
 If your unit sets `Environment=HKB_DATABASE_URL=...`, remember that it moves the
 log directory with the board (`src/db-url.ts:26-29`) — and that your shell,

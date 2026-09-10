@@ -1281,8 +1281,13 @@ test('hkb ls says so when a succeeded Job produced nothing, and stays quiet when
   const line = (id: number) => out.split('\n').find((l) => l.includes(`#${id}`)) ?? '';
   assert.match(line(empty.id), /produced nothing/, 'the absence is on the row, not only in `hkb show`');
   assert.doesNotMatch(line(shipped.id), /produced nothing/, 'and a Job that shipped is not accused of it');
-  assert.match(out, /1 of 2 succeeded Jobs? .*declared no outputs\./,
+  assert.match(out, /1 of 2 succeeded Jobs? declared no outputs and left nothing behind\./,
     'and the count is the aggregate the finding asked for');
+  // The line used to read "produced no pull request and declared no outputs", which stopped being
+  // true at ADR-018: `producedNothing` no longer asks a forge anything, so the sentence was naming
+  // a check nobody runs. Asserted rather than merely fixed, because a stale message is exactly the
+  // kind of thing that survives a demolition by not being in anybody's test.
+  assert.doesNotMatch(out, /pull request/);
 
   const rows = json((await hkb('ls', '--board', 'produced-nothing', '--json')).out) as
     { id: number; exports: string[]; producedNothing: boolean }[];
@@ -2491,4 +2496,44 @@ test('a deadline resolves job > board > built-in, and none clears it back', asyn
   assert.equal(b.spec.attemptDeadlineSeconds.value, 1800);
   assert.equal(b.spec.attemptDeadlineSeconds.from, 'built-in');
   assert.equal(b.spec.activeDeadlineSeconds.value, null, 'and no Job-wide deadline ships');
+});
+
+/**
+ * `hkb new --steps` — the run-cutting shape of the filing verb.
+ *
+ * Both halves are refusals the review found missing: the verb accepted every Job flag beside
+ * `--steps` and silently dropped it, and `--json` emitted two incompatible shapes with nothing to
+ * tell them apart. Neither would have failed a test, which is why neither had one.
+ */
+test('cutting a run refuses the flags it cannot honour, by name', async () => {
+  const root = scratchRepo('runs-cli');
+  fs.mkdirSync(path.join(root, '.hkb', 'workflows'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.hkb', 'workflows', 'implement.md'), '---\nname: implement\n---\n\nDo it.\n');
+  await hkb('boards', 'add', 'runs-cli', '--repo', root);
+
+  // A run's spec IS its steps' workflow files, so there is nothing for these to act on. Dropping
+  // them silently is the failure; the message must name each one and say where it belongs.
+  await assert.rejects(
+    () => hkb('new', 'the parser', '--steps', 'implement', '--model', 'opus', '--brief', 'x', '--board', 'runs-cli'),
+    (e: Error & { exitCode?: number }) =>
+      e.exitCode === 2
+      && /`--brief`, `--model`/.test(e.message)      // named, both of them, sorted
+      && /\.hkb\/workflows/.test(e.message),         // and told where they belong instead
+    'a flag that does nothing with --steps was accepted and dropped',
+  );
+
+  // Nothing was created by the refusal.
+  const before = json((await hkb('ls', '--board', 'runs-cli', '--json')).out) as unknown[];
+  assert.equal(before.length, 0);
+
+  // The two shapes `hkb new --json` can emit are distinguishable without guessing.
+  const run = json((await hkb('new', 'the parser', '--steps', 'implement', '--board', 'runs-cli', '--json')).out) as
+    { kind: string; id: number; steps: { name: string; after: string[] }[] };
+  assert.equal(run.kind, 'run', 'a consumer cannot tell a Run id from a Job id without this');
+  assert.deepEqual(run.steps, [{ name: 'implement', after: [] }]);
+
+  const job = json((await hkb('new', 'a plain job', '--brief', 'x', '--board', 'runs-cli', '--json')).out) as
+    { kind?: string; phase: string };
+  assert.equal(job.kind, undefined, 'the Job shape is unchanged');
+  assert.equal(job.phase, 'pending');
 });

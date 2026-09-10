@@ -21,7 +21,7 @@ workspace, runs one session under limits, records what happened and cleans up
 
 ## `hkb` — the workload scheduler
 
-The first and only workload kind is a **Job**: one agent, one brief, run to completion, in a workspace of its
+The machinery's only workload kind is a **Job**: one agent, one brief, run to completion, in a workspace of its
 own. The Job kind's whole contract is *cut a workspace, run one agent session under limits, record what
 happened, clean up* — it has never heard of a branch, a pull request, a review or a card.
 
@@ -30,7 +30,8 @@ push, open a **draft** pull request, let a human review and merge. The rule for 
 worker is that the machinery must refuse on it afterwards, and hkb refuses on none of those
 ([ADR-017](docs/wiki/decisions/adr-017-the-workflow-is-content.md),
 [ADR-018](docs/wiki/decisions/adr-018-the-boundary.md)).
-The kanban DAG, cards that depend on cards, is a *second kind that does not exist yet*.
+Ordering is the *second kind*, and it now exists: **`Run`/`Step`**, a controller of its own that creates Jobs
+(`hkb new <name> --steps a,b`). The kanban DAG proper — cards that depend on cards — is still ahead of it.
 
 The board is **`~/.hkb/board.db`** — SQLite behind Prisma, one board per machine with a **Board row per
 repository**, the way one cluster holds a namespace per project. It is created and migrated the first time
@@ -568,36 +569,38 @@ by name, each with its own reason.
 A worktree is a fresh checkout of a commit, so two things are true of it and both matter: uncommitted work in
 your tree is invisible inside it, and **gitignored files do not come across**. A repository whose tests need a
 gitignored `.env` therefore passes for you and fails in a worker. Declare what to carry across in
-`.worktreeinclude` — [docs/wiki/features/worktree-includes.md](docs/wiki/features/worktree-includes.md).
+`.worktreeinclude` — which is **Claude Code's**, not hkb's. hkb had reimplemented it under the same
+filename, having invented it twice independently, and ADR-018 deleted hkb's copy rather than keeping
+two: <https://code.claude.com/docs/en/worktrees>.
 
 Worktrees are expensive (a worker installs the target repository's dependency tree to run its tests), so they
 are reclaimed by a sweep on the daemon's tick rather than at the end of a run: "safe to delete" is a state a
 worktree enters later, when its pull request lands.
 
-### The base, and keeping the branch on it
+### How work chains: runs and steps
 
-**`--base <ref>` says where a Job's branch starts.** It defaults to the repository's default branch,
-which is what every Job got when this was a constant. Pointing it at an earlier Job's branch —
-`hkb new "review it" --base kb-33-1` — starts the work from where that one finished, and that is how
-work chains: a coding Job's output *is* a branch, so the branch is the connector. A plain name is
-tried as written and then as `origin/<name>`, so it keeps working after the sweep has taken the
-earlier checkout and its local branch. A ref that names nothing fails the Job as `no_input` before a
-session is bought. `hkb boards set <slug> --base <ref>` says it once for a whole board.
+**`hkb new "the parser" --steps implement,review`** cuts a *run*: one row per step, each waiting on the
+one before it. Nothing is filed by cutting it — the first Job appears on the next pass, and the second
+only once the first has **succeeded**. `hkb ls --label run=<id>` follows it.
 
-It is a **ref, never a reference to another Job**. `--base job:33` would be an ordering edge between
-workloads with a readiness question attached, and that was rejected rather than deferred
-(`docs/workflow-study.md` §2); ordering belongs to a second kind whose controller creates Jobs. A ref
-is a fact about a checkout and schedules nothing — filing step two before step one has pushed simply
-fails, loudly, and you file it again.
+A step **is** a workflow file: `--steps implement,review` means `.hkb/workflows/implement.md` and then
+`.hkb/workflows/review.md`. So a step's model, budget, tool surface, gate and whole instruction are
+already expressible, in the file, and the only thing sequencing had to add to the database was *what
+comes after what*. That is the whole design — [ADR-018](docs/wiki/decisions/adr-018-the-boundary.md)
+and [docs/is-a-step-data.md](docs/is-a-step-data.md).
 
-A checkout is cut from that base, and the base branch is **fetched first** — so a Job filed a minute
-after a pull request landed starts from a base that contains it. The base keeps moving while the work runs, so
-after a successful run hkb replays the branch onto the base as it is then and pushes the result with
-`--force-with-lease` if the worker had already pushed. A branch that cannot be put on the base ends the attempt
-as `conflicted` and keeps its checkout, with the commands that finish it by hand; a remote that could not be
-*reached* is said out loud and fails nothing, and a pull request somebody has taken out of draft is left alone
-entirely. The worker is asked to rebase before it finishes, which makes all of it a no-op in the common case —
-[docs/wiki/features/rebase-and-verify.md](docs/wiki/features/rebase-and-verify.md).
+Ordering lives on the **Step**, never on the Job. `--base job:33` — an ordering edge hung off a
+workload with a readiness question attached — was rejected rather than deferred
+(`docs/workflow-study.md` §2), and `Job.base` itself is gone: a workspace is cut from the repository's
+default branch, always, which is what `gh pr create` defaults to. A branch is a fact about a checkout
+and schedules nothing.
+
+What v1 deliberately cannot do, so you are not left guessing: no conditionals, no fan-out, no
+`finally`, no supervision of a set, and **nothing flows along an edge** — a successor is filed because
+its predecessor succeeded, not because of anything it produced. Each is a known shape with known prior
+art, and each gets built against a real workflow rather than designed against an imagined one —
+[docs/wiki/features/runs-and-steps.md](docs/wiki/features/runs-and-steps.md).
+
 
 ### How it maps
 

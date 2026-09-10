@@ -15,7 +15,7 @@ covers:
   - path: src/controller.ts
     sha: 6563f3234641037e46504688115ac5ed4b76cf1b
   - path: prisma/schema.prisma
-    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
+    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
   - path: src/results.ts
     sha: a67f369f7e0806ea8fe10d6def7105ff2a65e131
   - path: src/artifacts.ts
@@ -25,7 +25,7 @@ covers:
   - path: src/exports.ts
     sha: afa23e85d0df61d1d0d91587d425df2ad7a872a0
 related: [decisions/adr-007-workload-scheduler, decisions/adr-018-the-boundary, architecture/job-kind, architecture/the-loop]
-generated_at_commit: 62135e9
+generated_at_commit: 26055f1
 last_refreshed: 2026-09-10
 ---
 

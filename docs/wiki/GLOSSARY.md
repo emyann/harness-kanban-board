@@ -132,9 +132,11 @@ meet one in the git history, that is what it was.
   `no_input` before the runtime is called. A source naming another Job's output is refused — that is an
   ordering edge (*decisions/adr-007-workload-scheduler*). Restriction comes from pairing it with a
   narrowed **tool surface**, not from the injection itself.
-- **Kind** — a workload's schema plus the controller that advances it. `Job` is the first and only
-  one (`prisma/schema.prisma`, `src/controller.ts`); a new kind means a new controller, not just new
-  data (*architecture/job-kind*).
+- **Kind** — a workload's schema plus the controller that advances it. There are **two**: `Job`, the
+  machinery's only one (`prisma/schema.prisma`, `src/controller.ts`), and `Run`/`Step`, the board's
+  (`src/runs.ts`, *features/runs-and-steps*). A new kind means a new controller, not just new data —
+  and the dependency runs one way: the board uses core primitives, the core never names a board
+  concept (*decisions/adr-018-the-boundary*).
 - **Label** — a `key=value` pair on a Job, stored as a string→string map in `Job.labels` and selected
   on with `hkb ls --label k=v` — equality only, ANDed across repeats (`src/labels.ts`;
   *features/labels*). A map rather than a tag list so `workflow=release` and `step=draft` compose.
@@ -252,6 +254,17 @@ meet one in the git history, that is what it was.
   an agent is a Job; a review is a Job with a reviewer's brief and a read-only tool surface; a step with
   no agent is an *effect*. What makes two steps different is a different tool surface, model,
   repository or trust level — study §5's criterion, adopted by *decisions/adr-017-the-workflow-is-content*.
+  Now also a **table** (`prisma/schema.prisma`): a name, its `after` edges, and nothing else — the
+  spec stays in the workflow file the name points at (*features/runs-and-steps*).
+- **Run** — the board's kind: a named sequence of Steps, holding no status of its own
+  (`prisma/schema.prisma`, `src/runs.ts`). Cut by `hkb new <name> --steps a,b`, which creates rows and
+  files nothing; the Jobs appear one pass at a time as each step's turn comes
+  (*features/runs-and-steps*). Not to be confused with `hkb run`, which is one reconcile pass in the
+  foreground.
+- **Ready** — a Step whose Job does not exist yet and every one of whose `after` names points at a
+  sibling that **succeeded** or was marked **done**. Decided by `readyNow`, a pure function over the
+  run's rows (`src/runs.ts`); a step that can never become ready without a person is **stalled**, which
+  is a different word because it calls for a different action.
 - **Transition** — a Job moving between phases because a *person* decided (`src/transitions.ts`:
   queue, triage, approve, reject, retry, done/cancel, remove), as opposed to the moves the
   controller makes by observing. Each is a lookup, a set of refusals and a group of writes that
@@ -304,7 +317,8 @@ meet one in the git history, that is what it was.
   the keys are `hkb new`'s flags, so one vocabulary documents both (`src/templates.ts`;
   *features/workflow-templates*). The file templates ONE Job — a *step* — not an ordering between
   several; the multi-step thing a developer calls their workflow is *decisions/adr-017-the-workflow-is-content*'s
-  object, and the run that sequences its steps does not exist yet.
+  object, and `Run`/`Step` is what sequences them (*features/runs-and-steps*) — a step's name IS a
+  workflow's name, so the two meanings meet at the filename.
 - **Workload** — a unit of work hkb takes and executes. A workload has a *kind*; the kanban DAG and a
   propose-approve grooming pass are two further shapes, neither of which exists as code
   (*decisions/adr-007-workload-scheduler*).

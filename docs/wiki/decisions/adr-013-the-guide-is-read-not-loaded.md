@@ -21,8 +21,8 @@ covers:
   - path: src/spec.ts
     sha: a83486dc8471b6e0358af03bafba75fa363c4032
   - path: prisma/schema.prisma
-    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
-generated_at_commit: 62135e9
+    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
+generated_at_commit: 26055f1
 last_refreshed: 2026-09-10
 related:
   [

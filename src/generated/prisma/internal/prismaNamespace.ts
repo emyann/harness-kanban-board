@@ -402,7 +402,9 @@ export const ModelName = {
   Job: 'Job',
   Attempt: 'Attempt',
   Lease: 'Lease',
-  Event: 'Event'
+  Event: 'Event',
+  Run: 'Run',
+  Step: 'Step'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -418,7 +420,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "board" | "controller" | "job" | "attempt" | "lease" | "event"
+    modelProps: "board" | "controller" | "job" | "attempt" | "lease" | "event" | "run" | "step"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -866,6 +868,154 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    Run: {
+      payload: Prisma.$RunPayload<ExtArgs>
+      fields: Prisma.RunFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.RunFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RunPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.RunFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RunPayload>
+        }
+        findFirst: {
+          args: Prisma.RunFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RunPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.RunFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RunPayload>
+        }
+        findMany: {
+          args: Prisma.RunFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RunPayload>[]
+        }
+        create: {
+          args: Prisma.RunCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RunPayload>
+        }
+        createMany: {
+          args: Prisma.RunCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.RunCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RunPayload>[]
+        }
+        delete: {
+          args: Prisma.RunDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RunPayload>
+        }
+        update: {
+          args: Prisma.RunUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RunPayload>
+        }
+        deleteMany: {
+          args: Prisma.RunDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.RunUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.RunUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RunPayload>[]
+        }
+        upsert: {
+          args: Prisma.RunUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RunPayload>
+        }
+        aggregate: {
+          args: Prisma.RunAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateRun>
+        }
+        groupBy: {
+          args: Prisma.RunGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.RunGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.RunCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.RunCountAggregateOutputType> | number
+        }
+      }
+    }
+    Step: {
+      payload: Prisma.$StepPayload<ExtArgs>
+      fields: Prisma.StepFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.StepFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StepPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.StepFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StepPayload>
+        }
+        findFirst: {
+          args: Prisma.StepFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StepPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.StepFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StepPayload>
+        }
+        findMany: {
+          args: Prisma.StepFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StepPayload>[]
+        }
+        create: {
+          args: Prisma.StepCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StepPayload>
+        }
+        createMany: {
+          args: Prisma.StepCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.StepCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StepPayload>[]
+        }
+        delete: {
+          args: Prisma.StepDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StepPayload>
+        }
+        update: {
+          args: Prisma.StepUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StepPayload>
+        }
+        deleteMany: {
+          args: Prisma.StepDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.StepUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.StepUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StepPayload>[]
+        }
+        upsert: {
+          args: Prisma.StepUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$StepPayload>
+        }
+        aggregate: {
+          args: Prisma.StepAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateStep>
+        }
+        groupBy: {
+          args: Prisma.StepGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.StepGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.StepCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.StepCountAggregateOutputType> | number
+        }
+      }
+    }
   }
 } & {
   other: {
@@ -975,6 +1125,7 @@ export const JobScalarFieldEnum = {
   proposedByJobId: 'proposedByJobId',
   proposedByK: 'proposedByK',
   proposalIndex: 'proposalIndex',
+  stepId: 'stepId',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt',
   finishedAt: 'finishedAt'
@@ -1037,6 +1188,26 @@ export const EventScalarFieldEnum = {
 export type EventScalarFieldEnum = (typeof EventScalarFieldEnum)[keyof typeof EventScalarFieldEnum]
 
 
+export const RunScalarFieldEnum = {
+  id: 'id',
+  boardId: 'boardId',
+  name: 'name',
+  createdAt: 'createdAt'
+} as const
+
+export type RunScalarFieldEnum = (typeof RunScalarFieldEnum)[keyof typeof RunScalarFieldEnum]
+
+
+export const StepScalarFieldEnum = {
+  id: 'id',
+  runId: 'runId',
+  name: 'name',
+  after: 'after'
+} as const
+
+export type StepScalarFieldEnum = (typeof StepScalarFieldEnum)[keyof typeof StepScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -1051,6 +1222,13 @@ export const NullableJsonNullValueInput = {
 } as const
 
 export type NullableJsonNullValueInput = (typeof NullableJsonNullValueInput)[keyof typeof NullableJsonNullValueInput]
+
+
+export const JsonNullValueInput = {
+  JsonNull: JsonNull
+} as const
+
+export type JsonNullValueInput = (typeof JsonNullValueInput)[keyof typeof JsonNullValueInput]
 
 
 export const JsonNullValueFilter = {
@@ -1303,6 +1481,8 @@ export type GlobalOmitConfig = {
   attempt?: Prisma.AttemptOmit
   lease?: Prisma.LeaseOmit
   event?: Prisma.EventOmit
+  run?: Prisma.RunOmit
+  step?: Prisma.StepOmit
 }
 
 /* Types for Logging */

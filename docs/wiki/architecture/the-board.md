@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "adding a column, deciding whether something belongs on the Job or the Attempt, writing a migration, or explaining why a board refuses to open"
 covers:
   - path: prisma/schema.prisma
-    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
+    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
   - path: src/schema.ts
     sha: ee1920b789eb96be121c8bba20cc92e452ddf818
   - path: src/db.ts
@@ -16,7 +16,7 @@ covers:
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/spec.ts
     sha: a83486dc8471b6e0358af03bafba75fa363c4032
-generated_at_commit: 62135e9
+generated_at_commit: 26055f1
 last_refreshed: 2026-09-10
 related:
   [
@@ -47,6 +47,16 @@ related:
 | `Lease` | who holds a Job **right now**, and until when | `jobId` |
 | `Controller` | which daemon leads one board | `boardId` |
 | `Event` | what happened, in order | `id` |
+| `Run` | a sequenced piece of work — a name and an owner, holding no status of its own | `id` |
+| `Step` | one step of a run: a name and what must succeed first | `(runId, name)` |
+
+`Run` and `Step` are the **board's** kind, not the machinery's, and they sit in the same file as
+`batch/v1`'s tables for the reason Tekton's CRDs sit in the same etcd as Kubernetes': what separates
+two kinds is an API group, a controller and a one-way dependency, all of which fit in one SQLite file
+(*decisions/adr-018-the-boundary*, *features/runs-and-steps*). Note what is **not** on either: no
+`phase`. A step's phase is its Job's, reached by joining `Job.stepId` — a mirror would be rewritten
+on every child transition, which is the write amplification Tekton removed from `PipelineRun` in
+v0.45.
 
 `Board.repoPath` is the fact that keeps the daemon honest: one daemon serves every board, so
 *"wherever the operator was standing"* stopped being a definition of anything, and the repository a
