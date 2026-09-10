@@ -1388,7 +1388,13 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // Terminal and not retried: the same runtime gives the same answer next time, and a retry
         // would run unisolated again. It is `no_input` in the sense `no_input` already carries — the
         // fault is in the machinery around the run, not in the work — and a human has to look.
-        ? { phase: 'failed', outcome: 'no_input', resumable: false, lastError: isolationShortfall }
+        // **`resumable: true`, and that is the correction that matters.** The first version of this
+        // guard was terminal and dropped the session — so a completed run whose `init` message never
+        // arrived (a resume is the case to fear) lost both the attempt AND the transcript of work
+        // that had really happened in a real workspace. Refusing to TRUST an unverified run is
+        // right; destroying what it did is not. The session is kept, `hkb retry` continues it, and
+        // no declared output is recorded from a tree we could not identify.
+        ? { phase: 'failed', outcome: 'no_input', resumable: true, lastError: isolationShortfall }
         : inputShortfall
         // Terminal, and not retried, for the reason a missing declared OUTPUT is not: the same read
         // fails identically next time. `hkb retry` is the deliberate second go, once a human has read

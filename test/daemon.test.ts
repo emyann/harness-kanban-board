@@ -638,6 +638,12 @@ test('the tick collects a finished Job\'s workspace once its TTL has elapsed', a
   assert.deepEqual(
     collectable([{ id: 3, finishedAt: null, phase: 'suspended', resumable: false }], anHourLater, 0), [],
     'nor one waiting on a person');
+  // A workspace whose Job row is gone — `hkb rm`, the normal way to tidy — is collectable at once.
+  // Without it the checkout matches no Job, `collectable` returns nothing, and a whole repository
+  // leaks for ever.
+  assert.deepEqual(
+    collectable([{ id: 6, finishedAt: new Date(0), phase: 'gone', resumable: false }], anHourLater, 0),
+    [6], 'and a Job that no longer exists cannot want its workspace back');
   assert.deepEqual(
     collectable([{ ...done, id: 4, resumable: true }], anHourLater, 0), [],
     'and NOT one a retry would resume into — `max_budget` ends `failed` keeping its session, so '

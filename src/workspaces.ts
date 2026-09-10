@@ -132,10 +132,13 @@ export type Swept = { name: string; removed: boolean; why: string };
 /**
  * Take one workspace back.
  *
- * Two calls, and the order matters: the runtime holds a `git worktree lock` on a workspace for the
- * length of the run and releases it at the end, but a run killed mid-flight leaves the lock behind —
- * so the unlock is attempted first and its failure is not interesting (a workspace that was never
- * locked is the common case).
+ * **The lock is honoured, not cleared.** The runtime holds a `git worktree lock` for the length of a
+ * run and releases it at the end, and its own periodic sweep releases one left by a process that
+ * died. An earlier version unlocked unconditionally before removing — which meant the lock protected
+ * nothing: a Job row reading finished while something was still standing in the tree (a foreground
+ * `hkb run` in a second process, an operator resuming the session by hand) would have had the
+ * checkout taken out from under it. A locked workspace is one somebody is using; `git worktree
+ * remove` refuses it, and being refused is reported.
  *
  * **Never `--force`.** git's own refusal is the safety net that replaces `heldWork`: a tree holding
  * uncommitted or untracked work is refused, and refused is *reported*, not worked around. Everything
@@ -149,7 +152,6 @@ export function removeWorkspace(root: string, dir: string): Swept {
     spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', timeout: 20_000 });
 
   const name = path.basename(dir);
-  git(['worktree', 'unlock', dir]);
   const gone = git(['worktree', 'remove', dir]);
   if (gone.status === 0) return { name, removed: true, why: '' };
 
@@ -158,6 +160,11 @@ export function removeWorkspace(root: string, dir: string): Swept {
   // is there, so a workspace a previous pass or the operator removed must not be reported for ever.
   if (/is not a working tree|No such file or directory/i.test(why)) {
     return { name, removed: true, why: '' };
+  }
+  // A locked workspace says so plainly, because "still in use" and "git refused" send an operator
+  // to different places — the first resolves itself, the second wants a look.
+  if (/locked working tree|is locked/i.test(why)) {
+    return { name, removed: false, why: `${why} — something is still using it` };
   }
   return { name, removed: false, why: why.slice(0, 200) };
 }

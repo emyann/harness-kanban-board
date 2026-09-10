@@ -416,9 +416,18 @@ export async function loop(deps: LoopDeps): Promise<number> {
           // CLAUDE.md: no per-Job calls when a board-wide one exists.
           const present = repo ? existingWorkspaces(repo) : [];
           if (repo && present.length) {
-            const finished = await db.job.findMany({
+            const rows = await db.job.findMany({
               where: { boardId: b.id, id: { in: present.map((w) => w.jobId) } },
               select: { id: true, finishedAt: true, phase: true, lastSessionId: true },
+            });
+            // A workspace whose Job ROW IS GONE is collectable outright, and `hkb rm` is why: it is
+            // the normal way to tidy a finished Job, it deletes the row, and without this the whole
+            // checkout it left would match nothing and leak for ever. There is nothing left that
+            // could want it — no phase to be unfinished, no session to resume — so the TTL has
+            // nothing to measure and the answer is immediate.
+            const known = new Map(rows.map((r) => [r.id, r]));
+            const finished = present.map((w) => known.get(w.jobId) ?? {
+              id: w.jobId, finishedAt: new Date(0), phase: 'gone', lastSessionId: null,
             });
             // **`hkb retry` is what resumes, and it acts on a FAILED Job.** A Job the operator
             // cancelled or marked done keeps its session id too, and so does one out of retries —

@@ -111,14 +111,14 @@ test('the Job kind runs no git, apart from collecting the workspace it asked for
   const gitCalls = [...daemon.matchAll(/execFileSync\('git', \[([^\]]*)\]/g)].map((m) => m[1]);
   assert.deepEqual(gitCalls, ["'rev-parse', '--short', 'HEAD'"],
     'the daemon may ask git what hkb itself is running, and nothing else');
-  // And the exception is exactly as narrow as it claims: two subcommands, both about taking a
-  // workspace back, neither of them about the work inside it.
+  // And the exception is exactly as narrow as it claims: two subcommands, neither of them about the
+  // work inside a tree. `list` is the board-wide enumeration the sweep starts from — without it the
+  // sweep would try to remove a workspace per finished Job per tick, for ever — and `remove` takes
+  // one back. There is deliberately no `unlock`: a locked workspace is one somebody is using, and
+  // clearing the lock before removing would make the lock protect nothing.
   const ws = read('workspaces.ts').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
   const subcommands = [...ws.matchAll(/'worktree', '(\w+)'/g)].map((m) => m[1]).sort();
-  // `list` is the board-wide enumeration the sweep starts from — without it the sweep would try to
-  // remove a workspace per finished Job per tick, for ever. `remove` and `unlock` take one back.
-  // Nothing here reads or writes the WORK inside a tree, which is the property being pinned.
-  assert.deepEqual([...new Set(subcommands)], ['list', 'remove', 'unlock']);
+  assert.deepEqual([...new Set(subcommands)], ['list', 'remove']);
   assert.doesNotMatch(ws, /--force/, 'and it never forces: git\'s own refusal is the safety net');
 });
 
