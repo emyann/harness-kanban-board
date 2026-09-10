@@ -391,3 +391,7 @@ history.
 ## 2026-09-10 — refreshed decisions/adr-018-the-boundary (the ask measured in both modes: AskUserQuestion reaches canUseTool with its full options, deny+message answers in-session, deny+interrupt parks for $0.001 keeping the session id, and a resume of that id continues it — plus the trap that such a stop reports error_during_execution)
 
 ## 2026-09-10 — refreshed decisions/adr-018-the-boundary (the park trap measured precisely: terminal_reason is aborted_streaming, the SAME value as the operator's stop, so statusOf gives timed_out and the Job SPINS rather than merely mislabelling; the fix is write-at-ask-time, classify from our own record above nextPhase, and spend no retry — podFailurePolicy's DisruptionTarget/Ignore in miniature)
+
+## 2026-09-10 — archived features/rebase-and-verify, features/the-checkout-base and features/worktree-includes (all three describe machinery the git protocol took with it: the controller no longer rebases, Job.base is gone, and `.worktreeinclude` is the harness's feature rather than hkb's reimplementation of it) — ADR-018
+
+## 2026-09-10 — refreshed architecture/job-kind (the workspace is DECLARED and the runtime provisions it, per-Job naming is what makes a resume land in the right tree, ttlSecondsAfterFinished replaces the inspect-the-tree sweep, the sandbox contract is gone with the protocol, and `conflicted` is now historical) — ADR-018
