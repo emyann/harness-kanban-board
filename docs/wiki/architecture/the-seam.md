@@ -7,13 +7,13 @@ audience: [dev]
 read_when: "building a second consumer, adding a verb that files or reads a Job, or wondering why a module takes `max-budget` rather than `maxBudgetUsd`"
 covers:
   - path: src/filing.ts
-    sha: aa84f191ae28864eabba58b653770395a7e3d400
+    sha: 0f3b2043e35e05772670b7d0dfaad14865720d0b
   - path: src/read.ts
-    sha: 14c3d61506848315fe84e71c8e04180edf9a1781
+    sha: 8e9e5a3c617874e4edf0475c733db05c306cddd2
   - path: src/flags.ts
-    sha: e941ef4ec92b34acc24bcd65a0ce9fb80c317100
+    sha: 7140df95e7457ce3f2ed4fe3fe38e19476728dd1
   - path: src/hkb.ts
-    sha: c5bf853a6a8fccc112329751df26917009055a2e
+    sha: 5dc47f4b0e302d2eba5ca1d0895104f4f6e00bcb
   - path: src/spec.ts
     sha: 52a014761b40dc1c364976bb772713febf321641
 related:
@@ -24,7 +24,7 @@ related:
     gotchas/argv-traps,
     architecture/the-board,
   ]
-generated_at_commit: a72ec46
+generated_at_commit: 5279b8a
 last_refreshed: 2026-09-09
 ---
 
@@ -75,11 +75,21 @@ surface would be a grant nobody could narrow.
 
 ### The brief is a producer, not a string
 
-`spec.brief` may be `() => Promise<string>`, and the CLI always passes one, because `--brief -`
-blocks until EOF on stdin. Reading it before the workflow is found turns `hkb new x --from typo
---brief -` from an instant refusal into a process that never returns. The same shape and the same
-reason as `queueJob` and `setJobSpec` — the read happens at the one point that knows the guards
-passed (`src/filing.ts`).
+`spec.brief` may be `() => Promise<string>`, because `--brief -` blocks until EOF on stdin. Reading
+it before the guards turns `hkb new x --from typo --brief -` from an instant refusal into a process
+that never returns. Same shape and same reason as `queueJob` and `setJobSpec`.
+
+**The CLI does not always pass one**, and that is load-bearing rather than an omission: `hkb new`
+passes `brief: undefined` unless `--brief` or `--brief-file` was given (`src/hkb.ts`), which is what
+lets `createJob` fall through to a workflow's body or a triage note's own name. `throwNoBrief` is
+the reachable end of that chain, not dead code.
+
+The read happens **immediately before the two side effects** — the board upsert and the Job insert —
+so every refusal that can be made without it is. It did not always: the producer and the upsert both
+ran above the declaration guards, so `hkb new x --brief - --export ../outside.md` blocked on stdin
+for a refusal that needed nothing from stdin, and a refused filing left a `Board` row behind. One
+refusal legitimately follows the read and cannot be hoisted — a workflow's unfilled `{{placeholder}}`
+is a fact about text nobody has read yet.
 
 ### What stayed in the verb
 

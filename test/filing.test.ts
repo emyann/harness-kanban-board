@@ -251,3 +251,50 @@ test('the CLI no longer holds a `db.job.create` — ADR-015 rule, checked rather
   assert.equal(src.includes('db.job.create'), false,
     'filing a Job belongs to src/filing.ts — `hkb new` parses, calls createJob, and prints');
 });
+
+// ---------------------------------------------------------------- what the review of #431 found
+
+test('a refused filing leaves NO board behind — an illegal request never becomes state', async () => {
+  // `db.board.upsert` ran above every declaration guard, so one mistyped `hkb new` in a fresh
+  // repository added a board to `hkb boards` and to every machine-wide daemon pass, for ever.
+  // The existing "never becomes state" case ran against a board that already existed, so it could
+  // only ever catch half of this.
+  await assert.rejects(
+    () => createJob(db, { slug: 'ghost-board', repoPath: scope.repoPath }, { name: 'x', brief: 'b', export: ['../outside.md'] } as never, { by: 't' }),
+    /escapes the worktree/,
+  );
+  assert.equal(await db.board.findUnique({ where: { slug: 'ghost-board' } }), null, 'no board was created');
+});
+
+test('a doomed filing does not block on stdin for a refusal that needs nothing from it', async () => {
+  // `hkb new x --brief - --export ../outside.md` used to wait for EOF and then refuse for a reason
+  // known before a byte was read. The producer records whether it was called.
+  let read = false;
+  const producer = async () => { read = true; return 'b'; };
+  await assert.rejects(
+    () => createJob(db, scope, { name: 'y', brief: producer, export: ['../outside.md'] } as never, { by: 't' }),
+    /escapes the worktree/,
+  );
+  assert.equal(read, false, 'the brief was never read');
+});
+
+test('the ranges that `hkb job set` refuses are refused at filing too', async () => {
+  // A Job could be FILED with a spec that could never be SET. A $0 or negative cap is not inert: it
+  // resolves through `pick` (non-null wins) and every attempt dies on budget naming no cause.
+  for (const [flag, value, pattern] of [
+    ['max-budget', '0', /dollars above zero/],
+    ['max-budget', '-5', /dollars above zero/],
+    ['max-turns', '0', /1 or more/],
+    ['max-turns', '1.5', /whole number of turns/],
+    ['max-retries', '-2', /0 or more/],
+  ] as [string, string, RegExp][]) {
+    await assert.rejects(
+      () => createJob(db, scope, { name: 'r', brief: 'b', [flag]: value } as never, { by: 't' }),
+      pattern,
+      `--${flag} ${value}`,
+    );
+  }
+  // And the legal edges still file: 0 retries is "one attempt, do not retry".
+  const ok = await createJob(db, scope, { name: 'edges', brief: 'b', 'max-retries': '0', 'max-budget': '0.01' } as never, { by: 't' });
+  assert.equal(ok.row.id > 0, true);
+});

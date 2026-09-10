@@ -7,7 +7,7 @@ import { checkPluginPath } from './plugins.ts';
 import { checkInputSpec, renderBrief, type InputSpec } from './inputs.ts';
 import { readTemplate, placeholders, type Template } from './templates.ts';
 import { EFFORTS, resolveSpec, jsonCheck } from './spec.ts';
-import { checkFlag, given, givenList, num, seconds, usage, type Flagged } from './flags.ts';
+import { RANGES, checkFlag, given, givenList, inRange, num, seconds, usage, type Flagged } from './flags.ts';
 
 /**
  * Filing a Job — the other half of ADR-015's failing test.
@@ -54,7 +54,9 @@ export type FilingScope = { slug: string; repoPath: string | null };
  *
  * A producer because reading one can block: `hkb new --brief -` waits for EOF on stdin, and reading
  * it before the workflow has been found turns a `--from` typo from an instant refusal into a
- * process that never returns. It is called below, after the refusals that cost nothing.
+ * process that never returns. It is called immediately before the two side effects below — the
+ * board upsert and the insert — so every refusal that can be made without reading stdin is. The one
+ * exception is a workflow's unfilled placeholder, which is a fact about text nobody has read yet.
  */
 export type Brief = string | (() => Promise<string>);
 
@@ -140,8 +142,21 @@ export async function createJob(
   // Read from the BOARD row rather than from `scope`, because the row is where the default is,
   // and the board may not exist yet — filing the first Job in a repository creates it, and a
   // board that does not exist has no default to apply.
+  //
+  // **`--from` is NOT excluded here, and that is a correction.** It used to be: the reasoning was
+  // that a workflow governs entirely, so a board default would stop an author writing a step that
+  // finishes differently. That reasoning was about the SPEC and the BRIEF, both of which a workflow
+  // still governs. The standing steps are a third thing, and since ADR-017's review moved them to
+  // claim time the controller composes them for every isolated non-proposing Job — it has no idea a
+  // template was involved, because a template is expanded and gone by then (`src/controller.ts`).
+  //
+  // So excluding `--from` here did not stop the composition; it only made `hkb new --json` report
+  // `standingSteps: null` about a Job that gets them, while `hkb show --json` on the same row said
+  // otherwise. Two answers to one question, from the two verbs this module exists to keep in step.
+  // Restoring the old intent needs the Job to REMEMBER its workflow, which is #45's lineage column;
+  // until then the honest thing is to report what will actually happen.
   let dflt: Template | null = null;
-  if (!tpl && !values.propose && !values['no-isolate']) {
+  if (!values.propose && !values['no-isolate']) {
     const known = await db.board.findUnique({ where: { slug }, select: { defaultWorkflow: true } });
     const wanted = known?.defaultWorkflow?.trim();
     if (wanted) {
@@ -208,18 +223,6 @@ export async function createJob(
   // other key. Ordered before the triage fallback so `--from` on a triage item is still briefed.
   // The producer is called HERE and nowhere earlier: everything above can refuse without reading a
   // byte of stdin.
-  const brief = tpl && !wroteBrief ? tpl.brief
-    : triage && !wroteBrief ? name
-    : typeof wrote === 'function' ? await wrote()
-    : typeof wrote === 'string' ? wrote
-    : throwNoBrief();
-  const board = await db.board.upsert({
-    where: { slug },
-    update: {},
-    // A board created by filing work in a repository is pointed at that repository. Without it
-    // a machine-level daemon would have nowhere to cut the worktree.
-    create: { slug, repoPath: scope.repoPath },
-  });
   // Every one of these goes through `given`/`givenList` rather than a cast, and that is the
   // whole of closing the bare-flag idiom: a bare `--model` was stored as the boolean `true` and
   // a bare `--export` as the path `true`, because `parseArgs` under `strict: false` makes a
@@ -261,27 +264,13 @@ export async function createJob(
   // before the feature existed still means what it says — and that opt-in is exactly wrong for a
   // workflow, whose author opted in by writing `{{page}}`. Without this the Job would be filed
   // with the literal text in its instructions and nothing would ever say so.
-  if (tpl && !inputs.length) {
-    const want = placeholders(brief);
-    if (want.length) {
-      throw usage(
-        `the workflow \`${tpl.name}\` needs ${want.map((n) => `\`{{${n}}}\``).join(', ')}, and this Job declares no inputs`
-        + ` — pass ${want.map((n) => `--input ${n}=value:…`).join(' ')}. Only \`value:\` inputs interpolate, because the`
-        + ' brief is instruction and a fetched source reaches the run as data.',
-      );
-    }
-  }
+
   // The brief is rendered HERE, against the `value:` inputs only, so what the board stores is
   // what the run is given — `hkb show` and the prompt cannot disagree. It applies to whichever
   // way the brief arrived: `--brief`, `--brief-file` or stdin all land in one string above.
   const supplied = new Map(
     inputs.filter((i): i is { name: string; value: string } => 'value' in i).map((i) => [i.name, i.value]),
   );
-  const rendered = renderBrief(brief, supplied, new Set(inputs.map((i) => i.name)));
-  // A value that went into the brief does not also arrive as a data block. Dropping it here
-  // rather than remembering it keeps the run path with one rule: everything in `inputs` is
-  // rendered, and nothing is rendered twice.
-  inputs = inputs.filter((i) => !rendered.used.has(i.name));
   // The standing steps are NOT composed here, and that is the correction ADR-017's review forced.
   // What the board's default workflow contributes at file time is its FRONTMATTER — the spec
   // fields filled above — and nothing else. Its body reaches the worker at claim time, from the
@@ -291,7 +280,6 @@ export async function createJob(
   // contract rather than before it. The refusals above still run here, where the operator is
   // standing: a board pointing at a workflow that is not in the repository is worth catching
   // before the Job exists, not on the pass that would have run it.
-  const briefText = rendered.text;
   // A repo-relative path, checked at file time like every other declaration and for the same
   // reason as an input's: it names a file the BOARD will read with the operator's authority and
   // put in front of a model, so a path that was never legal must not become state. Undefined
@@ -350,8 +338,10 @@ export async function createJob(
   // replaces it with the count once a proposal has actually been validated.
   const proposes = values.propose ? 'jobs' : null;
   if (proposes && !gate) gate = 'a proposal to review';
-  // Null when the flag was absent, so the board's default can answer. An EMPTY list is only
-  // reachable through `--allow-tools ""`, and it means what it says: no tools at all.
+  // Null when the flag was absent, so the board's default can answer. An EMPTY list means what it
+  // says — no tools at all — and BOTH spellings reach it: `--allow-tools ""` and `--allow-tool ""`,
+  // since `givenList` returns `['']` and `.filter(Boolean)` empties it. Worth naming both, because
+  // anyone auditing how a zero-tool Job gets filed will otherwise check only the plural.
   const allowedTools = values['allow-tool'] !== undefined
     ? givenList(values['allow-tool'], '--allow-tool').filter(Boolean)
     // `given`, never `String(...)`: a bare `--allow-tools` came back as the boolean `true` and
@@ -360,6 +350,47 @@ export async function createJob(
     : values['allow-tools'] !== undefined
       ? given(values['allow-tools'], '--allow-tools').split(',').map((t) => t.trim()).filter(Boolean)
       : null;
+  // ---- the two side effects, and NOTHING refuses after this point.
+  //
+  // Both used to run up here, above every declaration guard, and both broke a rule this function
+  // states about itself. Reading the brief first meant `hkb new x --brief - --export ../outside.md`
+  // blocked on stdin waiting for EOF, then refused for a reason that needed nothing from stdin —
+  // the docstring's "after the refusals that cost nothing" was true of exactly one refusal out of
+  // eleven. And upserting the board first meant a refused filing LEFT A BOARD ROW BEHIND: one
+  // mistyped `hkb new` in a fresh repository added a board to `hkb boards` and to every
+  // machine-wide daemon pass for ever, which is the "an illegal request should never become state"
+  // rule written three lines below where it was being broken.
+  const brief = tpl && !wroteBrief ? tpl.brief
+    : triage && !wroteBrief ? name
+    : typeof wrote === 'function' ? await wrote()
+    : typeof wrote === 'string' ? wrote
+    : throwNoBrief();
+  if (tpl && !inputs.length) {
+    const want = placeholders(brief);
+    if (want.length) {
+      throw usage(
+        `the workflow \`${tpl.name}\` needs ${want.map((n) => `\`{{${n}}}\``).join(', ')}, and this Job declares no inputs`
+        + ` — pass ${want.map((n) => `--input ${n}=value:…`).join(' ')}. Only \`value:\` inputs interpolate, because the`
+        + ' brief is instruction and a fetched source reaches the run as data.',
+      );
+    }
+  }
+  // Rendered here rather than above, because it consumes the brief the producer just returned.
+  // The placeholder refusal it can raise is the one exception to "nothing refuses after this
+  // point" — and it cannot be hoisted, since it is a fact about text nobody has read yet.
+  const rendered = renderBrief(brief, supplied, new Set(inputs.map((i) => i.name)));
+  // A value that went into the brief does not also arrive as a data block. Dropping it here
+  // rather than remembering it keeps the run path with one rule: everything in `inputs` is
+  // rendered, and nothing is rendered twice.
+  inputs = inputs.filter((i) => !rendered.used.has(i.name));
+  const briefText = rendered.text;
+  const board = await db.board.upsert({
+    where: { slug },
+    update: {},
+    // A board created by filing work in a repository is pointed at that repository. Without it
+    // a machine-level daemon would have nowhere to cut the worktree.
+    create: { slug, repoPath: scope.repoPath },
+  });
   const job = await db.job.create({
     data: {
       boardId: board.id, name, brief: briefText,
@@ -390,9 +421,9 @@ export async function createJob(
       // Null, not a number, when the flag was not given. A Job that recorded 20 turns because
       // nobody said otherwise would outrank its board's default for ever — "unset" staying
       // legible is the whole reason these columns are nullable. See `src/spec.ts`.
-      maxTurns: num(values['max-turns'], '--max-turns') ?? null,
-      maxBudgetUsd: num(values['max-budget'], '--max-budget') ?? null,
-      maxRetries: num(values['max-retries'], '--max-retries') ?? null,
+      maxTurns: inRange(values['max-turns'], '--max-turns', ...RANGES['max-turns']) ?? null,
+      maxBudgetUsd: inRange(values['max-budget'], '--max-budget', ...RANGES['max-budget']) ?? null,
+      maxRetries: inRange(values['max-retries'], '--max-retries', ...RANGES['max-retries']) ?? null,
       attemptDeadlineSeconds: seconds(values['attempt-deadline'], '--attempt-deadline'),
       activeDeadlineSeconds: seconds(values.deadline, '--deadline'),
     },

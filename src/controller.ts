@@ -6,6 +6,8 @@ import {
 } from './worktree.ts';
 import { rebaseNote, rebaseOntoBase, rebaseShortfall, type RebaseResult } from './rebase.ts';
 import { prForBranch } from './pulls.ts';
+// The read model's own predicates, imported so a second copy cannot drift from the printed one.
+import { declaredExports, producedNothing } from './read.ts';
 import { installPushHook } from './push.ts';
 import { readTemplate, withStandingSteps } from './templates.ts';
 import {
@@ -201,18 +203,6 @@ function budgetAdvice(maxBudgetUsd?: number): string {
     + 'or file a smaller brief. The session is kept, so that retry resumes rather than starting cold.';
 }
 
-/**
- * The paths a Job declared, read back out of its JSON column.
- *
- * Defensive about the shape because a Json column is not a type: `hkb new --export` validates every
- * path before it is stored, but nothing stops a hand-written row, and a malformed declaration must
- * not take the reconcile pass down with it. An entry that is not a usable path is dropped here and
- * refused again by `checkExportPath` if it somehow survives.
- */
-function declaredExports(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((v): v is string => typeof v === 'string' && v.trim() !== '').map((v) => v.trim());
-}
 
 /** What a Job that declared an output and did not produce it owes the operator. */
 function missingOutputs(id: number, missing: string[]): string {
@@ -1245,7 +1235,13 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
             select: {
               id: true, name: true, phase: true, exports: true, results: true, artifacts: true,
               _count: { select: { attempts: true } },
-              attempts: { select: { prUrl: true, outcome: true }, orderBy: { k: 'desc' }, take: 1 },
+              // Every attempt, not just the newest. `producedNothing` asks whether this Job EVER
+              // opened a pull request; taking one row answered a narrower question, so a Job that
+              // opened one on attempt 1 and had a later attempt without one read as "produced
+              // nothing" to a worker while `hkb ls` said otherwise. The board input is small and
+              // this is one query per pass.
+              attempts: { select: { prUrl: true, outcome: true }, orderBy: { k: 'desc' } },
+              proposes: true,
             },
           });
           const rows: BoardRow[] = others.map((o) => ({
@@ -1254,9 +1250,19 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
             phase: o.phase,
             attempts: o._count.attempts,
             lastOutcome: o.attempts[0]?.outcome ?? null,
-            producedNothing: o.phase === 'succeeded' && !o.attempts[0]?.prUrl
-              && !declaredExports(o.exports).length && !declaredExports(o.results).length
-              && !declaredExports(o.artifacts).length,
+            // The SAME predicate the CLI prints, imported rather than restated. It was restated
+            // here, and the two copies had drifted twice over: this one had no `proposes` term, so
+            // a succeeded proposer was rendered to a worker as "produced nothing" while `hkb ls`
+            // disagreed, and it read only the newest attempt. A second consumer re-deriving this is
+            // the failure `src/read.ts` exists to end — including when the second consumer is us.
+            producedNothing: producedNothing({
+              phase: o.phase,
+              pr: o.attempts.find((a) => a.prUrl)?.prUrl ?? null,
+              exports: declaredExports(o.exports),
+              results: declaredExports(o.results),
+              artifacts: declaredExports(o.artifacts),
+              proposes: o.proposes,
+            }),
           }));
           readInputs.push({ name: want.name, source, text: renderBoard(rows) });
           continue;

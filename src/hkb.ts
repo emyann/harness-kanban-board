@@ -13,7 +13,7 @@ import {
 } from './transitions.ts';
 import { describeChange, setJobSpec, type Settable } from './job-spec.ts';
 import { createJob } from './filing.ts';
-import { boardSummaries, listJobs, showJob, PHASES, type Phase } from './read.ts';
+import { boardSummary, boardSummaries, listJobs, showJob, PHASES, type Phase } from './read.ts';
 import {
   checkFlag, given, givenList, num, seconds, usage,
 } from './flags.ts';
@@ -40,7 +40,6 @@ import type { Runtime } from './runtime/index.ts';
  * lives in the CLI is the same "a second consumer re-derives it" problem one layer down — and are
  * re-exported because this module is where everything that reads a board has always found them.
  */
-export { producedNothing, declaredExports } from './read.ts';
 
 /**
  * `hkb` — the CLI.
@@ -801,7 +800,9 @@ export async function main(argv: string[]): Promise<number> {
     // ---------------------------------------------------------------- ls
     case 'ls': {
       const phase = values.phase as Phase | undefined;
-      if (phase && !PHASES.includes(phase)) throw usage(`--phase must be one of ${PHASES.join('|')}`);
+      // NOT checked here. `listJobs` refuses an unknown phase in its own words, and two wordings
+      // for one refusal is the drift this extraction exists to stop — one layer further down than
+      // the drift it was written for.
       // Two ways to say which board, meaning opposite things. Letting one silently win would make
       // the same command line list one board or all of them depending on an order nobody can see.
       const all = !!values.all;
@@ -1567,7 +1568,10 @@ export async function main(argv: string[]): Promise<number> {
       // ceilings, the 24-hour spend and whether a daemon is serving it (`src/read.ts`). The table
       // below is this verb's own — the widths and the continuation line are a terminal's
       // opinion, and a second consumer wants the rows and none of that.
-      const rows = await boardSummaries(db);
+      // `--board` answers here now. `boardSummary` existed with no caller — `hkb boards --board hkb`
+      // printed the whole machine and the function that would have answered it sat one module over,
+      // written and tested. A rung that is possible and already built is not a workflow to document.
+      const rows = named ? [await boardSummary(db, named)] : await boardSummaries(db);
       emit(out, rows, () => {
         if (!rows.length) return console.log('no boards yet — `hkb new` inside a repository creates one');
         const w = Math.max(5, ...rows.map((r) => r.board.length));

@@ -9,7 +9,7 @@ covers:
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
-    sha: 43770041da29adc6333f351e74a701673102f9d9
+    sha: 55cb278593ae0b3d0692712e4fcff643c29e4a4e
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/worktree.ts
@@ -18,7 +18,7 @@ covers:
     sha: 18849fb4775cabb4c5d65784f506d61d90c66f1f
   - path: prisma/schema.prisma
     sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
-generated_at_commit: 48b5ee1
+generated_at_commit: 5279b8a
 last_refreshed: 2026-09-09
 related: [architecture/the-loop, architecture/the-board, architecture/job-kind, concepts/ceilings]
 ---

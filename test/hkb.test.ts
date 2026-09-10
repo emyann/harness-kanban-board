@@ -1211,9 +1211,11 @@ test('hkb version prints the package version, and opens no board doing it', () =
  * produce something, and the listing must actually print the marker — a predicate nothing renders is
  * the silently-inert guard this project has shipped three times.
  */
-const {
-  producedNothing, declaredExports, describeDefaults, strayWords, unknownFlags,
-} = await import('../src/hkb.ts');
+// The two predicates come from the read model, which is where they live — the CLI re-exported them
+// for a while purely so this line could keep saying `../src/hkb.ts`, which is a compatibility shim
+// in production code for a test import path.
+const { producedNothing, declaredExports } = await import('../src/read.ts');
+const { describeDefaults, strayWords, unknownFlags } = await import('../src/hkb.ts');
 
 test('producedNothing refuses every Job that left something behind', () => {
   const bare = { phase: 'succeeded', pr: null, exports: [] as string[] };
@@ -1956,14 +1958,30 @@ test('a Job the controller will not compose steps for is not told it has them', 
   assert.equal(json((await hkb('show', String(here.id), '--board', 'suite-repo', '--json')).out).standingSteps, null);
 });
 
-test('--from governs entirely: a Job filed from a workflow gets no standing steps', async () => {
-  // Composing the two would mean a workflow author could not write a step that finishes differently
-  // from the board — and "the more specific thing wins" is the rule the rest of this file follows.
+test('--from governs the spec and the brief — but the board still says how work here FINISHES', async () => {
+  // This used to assert `standingSteps: null` on the reasoning that "the more specific thing wins".
+  // That rule is right about the two things a workflow supplies — its frontmatter fills the spec and
+  // its body IS the brief, both asserted below — and wrong about the third. Since ADR-017's review
+  // moved standing steps to claim time, the controller composes them for every isolated
+  // non-proposing Job and cannot see that a template was involved, because a template is expanded
+  // and gone. So the old assertion described a Job that does not exist: `hkb new --json` said null
+  // while the worker got the steps, and `hkb show --json` on the same row said so.
+  //
+  // Reporting the truth is also the better BEHAVIOUR, which is what settles it. This repository's
+  // own `draft-wiki-page.md` has no push step; a Job filed from it with the board's steps suppressed
+  // would commit, reply, and land as `succeeded — produced nothing` with a worktree nothing
+  // reclaims. That is the exact regression ADR-017's review caught one card earlier.
   const j = json((await hkb('new', 'from a workflow', '--from', 'paged', '--board', 'suite-repo', '--json')).out) as { id: number; standingSteps: string | null };
-  assert.equal(j.standingSteps, null);
+  assert.equal(j.standingSteps, 'finishing', 'what the controller will actually compose');
   const row = await db.job.findUniqueOrThrow({ where: { id: j.id } });
   assert.equal(row.brief, 'Draft the page.', 'the workflow`s own body, and nothing appended to it');
   assert.equal(row.guide, 'README.md', 'from `paged`, not from the board`s default');
+  // And the two verbs agree, which is the whole point of the module this card extracted.
+  assert.equal(
+    json((await hkb('show', String(j.id), '--board', 'suite-repo', '--json')).out).standingSteps,
+    j.standingSteps,
+    '`hkb new` and `hkb show` must not answer differently about one Job',
+  );
 });
 
 test('a proposing Job gets none either — its whole output is a file, and it commits nothing', async () => {

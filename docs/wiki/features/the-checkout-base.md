@@ -11,7 +11,7 @@ covers:
   - path: src/spec.ts
     sha: 52a014761b40dc1c364976bb772713febf321641
   - path: src/controller.ts
-    sha: 43770041da29adc6333f351e74a701673102f9d9
+    sha: 55cb278593ae0b3d0692712e4fcff643c29e4a4e
   - path: src/rebase.ts
     sha: 5b0df395ad3a5c5a8b2bad44a782d40e92d40d28
   - path: prisma/schema.prisma
@@ -24,7 +24,7 @@ related:
     architecture/job-kind,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: a72ec46
+generated_at_commit: 5279b8a
 last_refreshed: 2026-09-09
 ---
 

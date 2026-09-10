@@ -9,16 +9,16 @@ covers:
   - path: src/limits.ts
     sha: 18849fb4775cabb4c5d65784f506d61d90c66f1f
   - path: src/controller.ts
-    sha: 43770041da29adc6333f351e74a701673102f9d9
+    sha: 55cb278593ae0b3d0692712e4fcff643c29e4a4e
   - path: prisma/schema.prisma
     sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
   - path: src/spec.ts
     sha: 52a014761b40dc1c364976bb772713febf321641
   - path: src/hkb.ts
-    sha: c5bf853a6a8fccc112329751df26917009055a2e
+    sha: 5dc47f4b0e302d2eba5ca1d0895104f4f6e00bcb
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
-generated_at_commit: a72ec46
+generated_at_commit: 5279b8a
 last_refreshed: 2026-09-09
 related: [architecture/the-board, architecture/the-loop, architecture/job-kind, concepts/leases-and-liveness]
 ---
@@ -179,7 +179,7 @@ All three live on the `Board` — the namespace — because they are already per
 | budget | `dailyBudgetUsd`, null = no ceiling | `hkb boards set <slug> --daily-budget <usd>\|none` (`src/hkb.ts:1493-1500`) | raise it, or wait for a run or the window (`src/limits.ts:87-97`) |
 
 Two edges worth knowing. `--max-concurrent 0` **drains** a board without stopping it — a distinct
-state from the kill switch, and a deliberate one (`prisma/schema.prisma:127`, `src/hkb.ts:1244-1248`).
+state from the kill switch, and a deliberate one (`prisma/schema.prisma:127`, and the `--max-concurrent` block in `hkb boards set`).
 And `--daily-budget` accepts the literal `none` to clear the ceiling, because "no ceiling" and "a
 ceiling of zero" are different configurations (`src/hkb.ts:1494-1500`).
 

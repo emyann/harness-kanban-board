@@ -103,18 +103,18 @@ export type BoardSummary = Awaited<ReturnType<typeof boardSummaries>>[number];
  * waiting-on-a-person count a column of their own in the table and in `hkb up --status` is #57.
  */
 export async function boardSummaries(db: Db, slug?: string, now = Date.now()) {
-  const serving = await daemon.status(slug);
+  // `now` passed through, not just used below. `daemon.status` takes one and uses it for
+  // `controllerIsLive`, `uptimeMs`, `since` and its OWN spend window — so calling it without meant
+  // half of every returned row was computed against the wall clock while the other half honoured
+  // the injected one. A row that is internally inconsistent is worse than one that is simply late,
+  // and it is non-deterministic in exactly the tests this parameter was added for.
+  const serving = await daemon.status(slug, now);
   const boards = await db.board.findMany({
     where: slug ? { slug } : {},
     orderBy: { slug: 'asc' },
     include: { jobs: { select: { phase: true } } },
   });
-  const since = new Date(now - 24 * 60 * 60 * 1000);
-  return Promise.all(boards.map(async (b) => {
-    const spend = await db.attempt.aggregate({
-      _sum: { costUsd: true },
-      where: { job: { boardId: b.id }, startedAt: { gte: since } },
-    });
+  return boards.map((b) => {
     const by = (ph: string) => b.jobs.filter((j) => j.phase === ph).length;
     const d = serving.find((s) => s.slug === b.slug);
     return {
@@ -131,7 +131,13 @@ export async function boardSummaries(db: Db, slug?: string, now = Date.now()) {
       // Job from an abandoned one can; a reader counting what is left to do only needs to know
       // that neither is.
       done: by('done'), cancelled: by('cancelled'),
-      spent24h: spend._sum.costUsd ?? 0,
+      // From `daemon.status`, which already computed it board-wide in one query above — this used
+      // to be a per-board `aggregate`, which is CLAUDE.md value 3's "no per-Job calls when a
+      // board-wide one exists" one level up, and this function's own docstring's "one read per
+      // board". It also re-implemented the window as `now - 24h` inline instead of `windowStart`
+      // (`src/limits.ts`), so the gate's window and the status window could silently drift apart
+      // and disagree about the same board.
+      spent24h: d?.spent24h ?? 0,
       maxConcurrent: b.maxConcurrent,
       dailyBudgetUsd: b.dailyBudgetUsd,
       // Always in `--json`, set or not: a consumer that has to infer a missing default from a
@@ -139,7 +145,7 @@ export async function boardSummaries(db: Db, slug?: string, now = Date.now()) {
       defaults: boardDefaults(b),
       hasDefaults: hasDefaults(b),
     };
-  }));
+  });
 }
 
 /**

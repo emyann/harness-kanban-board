@@ -194,3 +194,36 @@ export function checkFlag(raw: unknown, flag = '--check', clears = false): strin
   }
   return v;
 }
+
+/**
+ * A number with a range, refused by name — the guard `hkb new` did not have.
+ *
+ * `num` above parses and deliberately does not judge: its own comment says the range is the
+ * caller's rule. The trouble was that one caller had no rule. `hkb job set` and `hkb boards set`
+ * both refuse `--max-budget 0`, a negative, and a fractional `--max-turns`; filing accepted all of
+ * them, so a Job could be FILED with a spec that could never be SET — and a $0 or negative cap is
+ * not inert, it resolves through `pick` (`src/spec.ts`, which compares against null rather than
+ * truthiness) and is handed to the runtime, where every attempt dies on budget with nothing naming
+ * the cause.
+ *
+ * One helper rather than a third copy of the predicate, because three copies of a rule is how the
+ * three verbs came to disagree in the first place.
+ */
+export function inRange(
+  v: unknown,
+  flag: string,
+  ok: (n: number) => boolean,
+  wants: string,
+): number | undefined {
+  const n = num(v, flag);
+  if (n === undefined) return undefined;
+  if (!ok(n)) throw usage(`${flag} wants ${wants}, got ${n}`);
+  return n;
+}
+
+/** The three ranges, written once so `new`, `job set` and `boards set` cannot drift apart. */
+export const RANGES = {
+  'max-turns': [(n: number) => Number.isInteger(n) && n >= 1, 'a whole number of turns, 1 or more'],
+  'max-budget': [(n: number) => n > 0, 'dollars above zero'],
+  'max-retries': [(n: number) => Number.isInteger(n) && n >= 0, 'a whole number of retries, 0 or more'],
+} as const satisfies Record<string, readonly [(n: number) => boolean, string]>;
