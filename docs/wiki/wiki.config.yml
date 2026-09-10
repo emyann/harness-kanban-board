@@ -95,6 +95,9 @@ pages:
   - slug: decisions/adr-017-the-workflow-is-content
     summary: "hkb's records were all written from the machinery outward and none from the product inward, so the thing hkb exists for — a developer's own workflow, *implement → open a PR → review → notify*, authored as data and shown as a diagram — is nowhere a worker or a reviewer can read it, and four parts of the code and the record have drifted against it. This writes it down and names the drift."
     status: seeded
+  - slug: decisions/adr-018-the-boundary
+    summary: "Every session re-argues where the line between hkb-the-machinery and hkb-the-board falls, and every session the code ends up conflating them again — so this writes the line down as a rule with a test, records the measurements that fix where it falls, and answers the two questions that keep reopening it: whether the product needs its own store (no) and what the runtime actually provides (much more than hkb had assumed)."
+    status: seeded
   - slug: features/watch
     summary: "The third question about the board, after \"what is true now\" and \"what happened\": tell me when something happens. Cursors rather than state, woken by the filesystem rather than polled, and resumable because an id never expires."
     status: seeded

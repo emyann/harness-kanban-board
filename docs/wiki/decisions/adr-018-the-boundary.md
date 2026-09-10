@@ -11,10 +11,14 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/runtime/index.ts
+    sha: 97a047f6055dc1dba1689f2e0fd09e0a574bb4df
   - path: src/runtime/claude.ts
+    sha: 54d9896f11384fa0de1ddfcb34745750568506aa
   - path: prisma/schema.prisma
+    sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
   - path: src/controller.ts
-generated_at_commit: ceebb1a
+    sha: 456ffbc1b5d82177b8769cf86bc22ea8b3ea6e70
+generated_at_commit: 06b4a7c
 last_refreshed: 2026-09-10
 related:
   [
