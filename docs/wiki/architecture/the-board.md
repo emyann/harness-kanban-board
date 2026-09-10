@@ -15,8 +15,8 @@ covers:
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/spec.ts
-    sha: 5f549ec7407fcf1af8d80266ad35b9e90ab1620a
-generated_at_commit: 1a75d0b
+    sha: 52a014761b40dc1c364976bb772713febf321641
+generated_at_commit: a72ec46
 last_refreshed: 2026-09-09
 related:
   [

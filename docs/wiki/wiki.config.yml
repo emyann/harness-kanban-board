@@ -62,6 +62,9 @@ pages:
   - slug: architecture/transitions
     summary: "A Job's phase moves for two reasons with two owners: the controller observes, and a person decides. The second half had no module and lived inside the CLI's switch, which is the ADR-015 test that failed. What a transition actually is, why the actor became a parameter, and what is still trapped."
     status: seeded
+  - slug: architecture/the-seam
+    summary: "ADR-015's test asked whether a web board could be built without touching src/hkb.ts. Transitions moved first; this is the other two answers — createJob, and the three read-model functions whose returned object IS what --json prints. Why the input is flag-shaped, why the renderers stayed behind, and what is still in the switch."
+    status: seeded
   - slug: architecture/the-board
     summary: "The schema as a model: what a row of each table means, why the spec columns are nullable, what is frozen onto an Attempt at claim time and why, and the self-bootstrapping migration path."
     status: seeded

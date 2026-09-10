@@ -11,17 +11,18 @@ covers:
   - path: src/job-spec.ts
     sha: a18d68df2e5e1f3859baa9fe0c992ab6dfaf9cdf
   - path: src/hkb.ts
-    sha: ca8e6b1d5396b3506c01828c247249ed12590c54
+    sha: 5dc47f4b0e302d2eba5ca1d0895104f4f6e00bcb
   - path: prisma/schema.prisma
     sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
 related:
   [
     decisions/adr-015-machinery-and-consumer,
+    architecture/the-seam,
     architecture/job-kind,
     decisions/adr-010-the-human-gate,
     architecture/the-board,
   ]
-generated_at_commit: 48b5ee1
+generated_at_commit: 5279b8a
 last_refreshed: 2026-09-09
 ---
 
@@ -115,10 +116,12 @@ refusal path, to say whose it is.
 
 ## What this does not move, and it matters
 
-**Filing a Job is not here.** `hkb new` still holds `db.job.create` inside the switch, and it is a
-different shape of problem: ~190 lines of it are argument parsing, template expansion and input
-resolution, which is genuinely the CLI's job. What a second consumer needs from it is the small
-part at the end. That extraction is a `fileJob(db, spec)` and it has not been done.
+**Filing a Job is not here** — it is `createJob` in `src/filing.ts`, and reading the board is
+`src/read.ts`. Both moved after this page was written, on the same rule and with the same evidence;
+*architecture/the-seam* is the page that owns them. Filing turned out to be a different shape of
+problem: what a second consumer needs is not the small part at the end but the precedence rule
+itself, because a workflow file's keys are the CLI's flags and a fill that ran after the conversion
+would be two code paths for one vocabulary.
 
 **Editing a Job's spec is a sibling, not a transition.** `hkb job set` changes what a Job will run
 *as* rather than where it is in its life, and it lives in `src/job-spec.ts` for that reason — a
@@ -145,8 +148,10 @@ two things depending on which verb was typed.
 `board_removed` remain in the switch. They are a different object's lifecycle, and they should move
 on the same rule when they are next touched.
 
-So the honest status of ADR-015's test: a second consumer can now *drive* a Job through its whole
-life and *edit* its spec without touching `src/hkb.ts`. It cannot yet *create* one.
+So the honest status of ADR-015's test at the time of this page: a second consumer could *drive* a
+Job through its whole life and *edit* its spec without touching `src/hkb.ts`, and could not yet
+*create* one. Creating and reading landed next — *architecture/the-seam* carries the current
+status.
 
 ## How the tests changed, and what that shows
 

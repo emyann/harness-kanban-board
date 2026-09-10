@@ -9,16 +9,16 @@ covers:
   - path: src/limits.ts
     sha: 18849fb4775cabb4c5d65784f506d61d90c66f1f
   - path: src/controller.ts
-    sha: 43770041da29adc6333f351e74a701673102f9d9
+    sha: 55cb278593ae0b3d0692712e4fcff643c29e4a4e
   - path: prisma/schema.prisma
     sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
   - path: src/spec.ts
-    sha: 5f549ec7407fcf1af8d80266ad35b9e90ab1620a
+    sha: 52a014761b40dc1c364976bb772713febf321641
   - path: src/hkb.ts
-    sha: ca8e6b1d5396b3506c01828c247249ed12590c54
+    sha: 5dc47f4b0e302d2eba5ca1d0895104f4f6e00bcb
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
-generated_at_commit: 48b5ee1
+generated_at_commit: 5279b8a
 last_refreshed: 2026-09-09
 related: [architecture/the-board, architecture/the-loop, architecture/job-kind, concepts/leases-and-liveness]
 ---
@@ -58,7 +58,7 @@ The refusal that survives the loop is the pass's **outcome**, not something it d
 `ReconcileReport.refused` and on an `Event` of kind `refused`, and is deliberately *not* narrated
 through `onEvent` — because the daemon asks this same question every 45s and only logs the answer
 when it changes, and one narrated line silently undid that dedup (`src/controller.ts:635-647`). The
-CLI renders it as one `refused: …` line (`src/hkb.ts:905`).
+CLI renders it as one `refused: …` line (`src/hkb.ts:1099`).
 
 ## Why the gate has no I/O in it
 
@@ -82,7 +82,7 @@ worker would strand its worktree, while one that declines to start another is on
 
 State the price plainly: **a board taken past its ceiling by work already admitted is not clawed
 back.** Stopping a board leaves the run in flight alone, and `hkb stop` says so in as many words
-(`src/hkb.ts:1201-1202`; `prisma/schema.prisma:113-114`). Lowering `dailyBudgetUsd` mid-flight does not
+(`src/hkb.ts:1256-1258`; `prisma/schema.prisma:113-114`). Lowering `dailyBudgetUsd` mid-flight does not
 reach into a running attempt either — the cap was handed to the runtime at spawn and nothing re-reads
 it (`prisma/schema.prisma:466-469`). The ceiling binds admissions, not executions.
 
@@ -148,7 +148,7 @@ nothing outside it asks (`prisma/schema.prisma:485-489`).
 The frozen number also pays off away from the gate: `hkb retry` refuses to re-queue a budget-capped
 Job under a cap that is not larger, and it compares against what the failed attempt *actually ran
 under* rather than today's resolution — the two differ when the board was raised after the failure,
-and there the retry genuinely buys something (`src/hkb.ts:989-1011`).
+and there the retry genuinely buys something (`retryJob`, `src/transitions.ts:322-342`).
 
 **A known over-charge, in the safe direction:** an orphaned attempt whose holder died still has no
 `endedAt`, so it is counted as committed until the reclaim at the top of the next pass closes it
@@ -174,14 +174,14 @@ All three live on the `Board` — the namespace — because they are already per
 
 | Ceiling | Column | Operator command | In the refusal |
 |---|---|---|---|
-| stopped | `pausedAt`/`pausedBy` | `hkb stop` / `hkb start` (`src/hkb.ts:1411-1438`) | `` `hkb start` to resume `` (`src/limits.ts:69`) |
-| concurrency | `maxConcurrent`, default 1 | `hkb boards set <slug> --max-concurrent <n>` (`src/hkb.ts:1435-1441`) | raise it, or wait for a run to finish (`src/limits.ts:77-78`) |
-| budget | `dailyBudgetUsd`, null = no ceiling | `hkb boards set <slug> --daily-budget <usd>\|none` (`src/hkb.ts:1442-1450`) | raise it, or wait for a run or the window (`src/limits.ts:87-97`) |
+| stopped | `pausedAt`/`pausedBy` | `hkb stop` / `hkb start` (`src/hkb.ts:1238-1262`) | `` `hkb start` to resume `` (`src/limits.ts:69`) |
+| concurrency | `maxConcurrent`, default 1 | `hkb boards set <slug> --max-concurrent <n>` (`src/hkb.ts:1486-1491`) | raise it, or wait for a run to finish (`src/limits.ts:77-78`) |
+| budget | `dailyBudgetUsd`, null = no ceiling | `hkb boards set <slug> --daily-budget <usd>\|none` (`src/hkb.ts:1493-1500`) | raise it, or wait for a run or the window (`src/limits.ts:87-97`) |
 
 Two edges worth knowing. `--max-concurrent 0` **drains** a board without stopping it — a distinct
-state from the kill switch, and a deliberate one (`prisma/schema.prisma:127`, `src/hkb.ts:1437-1440`).
+state from the kill switch, and a deliberate one (`prisma/schema.prisma:127`, and the `--max-concurrent` block in `hkb boards set`).
 And `--daily-budget` accepts the literal `none` to clear the ceiling, because "no ceiling" and "a
-ceiling of zero" are different configurations (`src/hkb.ts:1444-1448`).
+ceiling of zero" are different configurations (`src/hkb.ts:1494-1500`).
 
 ## The fourth ceiling, and it is the only one that is not the board's
 
@@ -241,7 +241,7 @@ had a flag at all — `Job.timeoutMs` was non-nullable with a database default, 
 change a Job's wall clock was `update Job set timeoutMs` in SQL.
 
 `--max-budget` on `hkb boards set` is **not** a ceiling despite the neighbouring flags: it writes
-`defaultMaxBudgetUsd`, a default a Job may override (`src/hkb.ts:1362`,
+`defaultMaxBudgetUsd`, a default a Job may override (`src/hkb.ts:1418`,
 `prisma/schema.prisma:130-135`). The per-Job cap resolves three deep — the Job's own value, the
 board's default, then the built-in $1 (`src/spec.ts:83-87`, `src/spec.ts:181`).
 
@@ -266,10 +266,10 @@ starting cold (`src/controller.ts:278-281`).
 ## For ops
 
 - `hkb up --status` prints, per board, `STOPPED …` if the kill switch is set, then
-  `limits  <n> of <m> slots running, $X of $Y spent in 24h` (`src/hkb.ts:1283-1292`). Those are the
+  `limits  <n> of <m> slots running, $X of $Y spent in 24h` (`src/hkb.ts:1291-1300`). Those are the
   same four facts a refusal cites (`src/daemon.ts:166-184`).
 - "The daemon is up but nothing is claimed" is answered by that line before it is answered anywhere
-  else — a stopped board with a healthy daemon otherwise reads as fine (`src/hkb.ts:1281-1285`).
+  else — a stopped board with a healthy daemon otherwise reads as fine (`src/hkb.ts:1291-1294`).
 - The status line reports **spent**, not the projection the gate actually charges, so a board can be
   refused on budget while its status shows headroom. Filed in `FINDINGS.md`.
 - `hkb log` carries a `refused` event per refusal, with the same prose

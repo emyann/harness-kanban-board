@@ -13,16 +13,16 @@ covers:
   - path: src/worktree.ts
     sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
   - path: src/controller.ts
-    sha: 43770041da29adc6333f351e74a701673102f9d9
+    sha: 55cb278593ae0b3d0692712e4fcff643c29e4a4e
   - path: src/brief.ts
     sha: a56db1e2f49d60c695034ecd14f73c5c258cce85
   - path: src/hkb.ts
-    sha: ca8e6b1d5396b3506c01828c247249ed12590c54
+    sha: 5dc47f4b0e302d2eba5ca1d0895104f4f6e00bcb
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: prisma/schema.prisma
     sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
-generated_at_commit: 48b5ee1
+generated_at_commit: 5279b8a
 last_refreshed: 2026-09-09
 related: [decisions/adr-008-declared-outputs, decisions/adr-011-proposals-not-board-access, features/proposals, features/worktree-includes, architecture/job-kind, architecture/the-board]
 ---
@@ -105,7 +105,7 @@ a worker to summarise something it was asked to hand over whole (`src/brief.ts:1
 ## The refusals, and when they fire
 
 All three names are checked at **declaration time**, in `hkb new`, before any worktree
-exists (`src/hkb.ts:570-580`). An illegal request should never become state, and finding
+exists (`createJob`, `src/filing.ts:236-247`). An illegal request should never become state, and finding
 the fault at file time costs nothing while finding it at collection time costs a whole
 run. The export check runs a second time at copy time, because a row can arrive by routes
 other than the CLI (`src/worktree.ts:537`).
@@ -189,7 +189,7 @@ artifact's value *is* the file, so nothing else holds it (`src/artifacts.ts:177-
 size is walked and recorded: it is the only warning an operator gets that a board is
 filling up (`src/artifacts.ts:152-175`), and `hkb show` prints both the sizes and the
 directory, since an artifact is the one output whose location a human has to be told
-(`src/hkb.ts:859-867`).
+(`src/hkb.ts:1030-1031`).
 
 Both collection directories live under the board's own directory —
 `boardDir()/results/<jobId>-<k>` and `boardDir()/artifacts/<jobId>-<k>`
@@ -226,14 +226,14 @@ than a code (`src/results.ts:158-169`, `src/artifacts.ts:209-215`).
 **A Job that succeeded having declared nothing and opened no pull request** is the other
 case, and it is not a failure. `producedNothing` is a pure predicate over a Job's already
 known fields — phase, a PR on any attempt, the three declaration columns, and whether it
-proposes (`src/hkb.ts:254-270`). It re-checks nothing, because a Job that reached
+proposes (`producedNothing`, `src/read.ts:63-79`). It re-checks nothing, because a Job that reached
 `succeeded` having declared any of the three produced it by construction — the collection
 block would have failed it otherwise. Being pure is what lets it be tested exhaustively as
 a *refusal*: the test enumerates every kind of thing that counts as having left something
 behind and asserts each one turns the answer off (`test/hkb.test.ts`, `producedNothing`).
 `hkb ls` renders it as a suffix on the row and one summary line, stated and not judged —
 "I looked and there is nothing to change" is a real outcome; what is not acceptable is
-that it reads exactly like a Job that shipped a pull request (`src/hkb.ts:705-716`).
+that it reads exactly like a Job that shipped a pull request (`src/hkb.ts:827-833`).
 
 ## The gap that closed: the worktree no longer implies a pull request
 

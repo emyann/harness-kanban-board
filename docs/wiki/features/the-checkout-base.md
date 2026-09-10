@@ -9,9 +9,9 @@ covers:
   - path: src/worktree.ts
     sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
   - path: src/spec.ts
-    sha: 5f549ec7407fcf1af8d80266ad35b9e90ab1620a
+    sha: 52a014761b40dc1c364976bb772713febf321641
   - path: src/controller.ts
-    sha: 43770041da29adc6333f351e74a701673102f9d9
+    sha: 55cb278593ae0b3d0692712e4fcff643c29e4a4e
   - path: src/rebase.ts
     sha: 5b0df395ad3a5c5a8b2bad44a782d40e92d40d28
   - path: prisma/schema.prisma
@@ -24,7 +24,7 @@ related:
     architecture/job-kind,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: 48b5ee1
+generated_at_commit: 5279b8a
 last_refreshed: 2026-09-09
 ---
 

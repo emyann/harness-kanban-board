@@ -24,6 +24,8 @@ related:
     decisions/adr-011-proposals-not-board-access,
     architecture/overview,
     architecture/job-kind,
+    architecture/transitions,
+    architecture/the-seam,
     decisions/adr-017-the-workflow-is-content,
   ]
 ---
@@ -102,6 +104,11 @@ are next touched. That is not a criticism of them; it is the rule doing its job.
 > it — decision 5 said the seam should fall out of ordinary work rather than be guessed, and that is
 > what happened. What still fails the test above is **creating** a Job: `hkb new` holds
 > `db.job.create` inside the switch behind ~190 lines of argument parsing.
+>
+> Done on 2026-09-09: creating a Job is `src/filing.ts` and reading the board is `src/read.ts`
+> (*architecture/the-seam*), so the test above now passes for a Job. What remains inside the switch
+> is a **board's** own lifecycle — `boards add`, `boards set`, `boards rm`, `stop`, `start` — which
+> is the next thing to move on the same rule, when it is next touched.
 
 **The naming is unresolved, and this record does not resolve it.** "hkb" currently names the
 machinery, the CLI and the product at once. Kubernetes has `kubernetes`/`kubectl`/Argo; hkb has one
