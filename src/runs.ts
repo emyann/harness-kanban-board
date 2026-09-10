@@ -60,8 +60,23 @@ type Db = ReturnType<typeof openBoard>;
  */
 const SATISFIED = new Set(['succeeded', 'done']);
 
-/** The phases a predecessor can never leave on its own. A successor behind one waits for a person. */
-const TERMINAL_UNSATISFIED = new Set(['failed', 'cancelled']);
+/**
+ * The phases a predecessor cannot leave on its own, with the words for each.
+ *
+ * `failed` and `cancelled` are the terminal ones. **`triage` is here too**, and it is the one that
+ * would otherwise hang a run in silence: a workflow carrying `triage: true` files its Job into the
+ * inbox, which is never claimed until somebody types `hkb queue` — *"noticed, not decided"* is a
+ * perfectly good thing for a step to be, and an indefinite one.
+ *
+ * `suspended` is deliberately absent. It also waits on a person, but it is already the loudest thing
+ * a pass reports (`report.suspended`, its own list, printed as "N waiting for you"), so naming it
+ * here would be the same fact twice under two names.
+ */
+const NEEDS_A_PERSON: Record<string, string> = {
+  failed: 'failed',
+  cancelled: 'was cancelled',
+  triage: 'is in the inbox and will not run until somebody queues it',
+};
 
 /** One step, as the readiness question needs to see it: a name, its edges, and its Job if it has one. */
 export type StepState = {
@@ -111,8 +126,17 @@ export function stepAfter(raw: unknown): string[] {
  */
 export function readyNow<S extends StepState>(steps: S[]): S[] {
   const byName = new Map(steps.map((s) => [s.name, s]));
+  // The steps something downstream has already acted on. `Job.stepId` is `SetNull`, so `hkb rm` on
+  // one of a run's Jobs leaves its Step unfiled — which is what makes a deleted Job come back, and
+  // is right while the run is still going. It is WRONG once a successor has been filed: re-running
+  // `implement` under a `review` that already succeeded buys a session that changes nothing
+  // downstream, and ordinary board tidying on a finished run would do it. A step whose successor
+  // has moved on is done being ready, whatever happened to its own Job.
+  const movedOn = new Set<string>();
+  for (const s of steps) if (s.job) for (const n of s.after) movedOn.add(n);
   return steps.filter((s) => {
     if (s.job) return false;
+    if (movedOn.has(s.name)) return false;
     return s.after.every((n) => {
       const prev = byName.get(n);
       return !!prev?.job && SATISFIED.has(prev.job.phase);
@@ -146,8 +170,8 @@ export function stalled(steps: StepState[]): Stalled[] {
       const prev = byName.get(n);
       if (!prev) {
         out.push({ step: s.name, why: `waits for \`${n}\`, which is not a step of this run` });
-      } else if (prev.job && TERMINAL_UNSATISFIED.has(prev.job.phase)) {
-        out.push({ step: s.name, why: `waits for \`${n}\`, which ${prev.job.phase}` });
+      } else if (prev.job && NEEDS_A_PERSON[prev.job.phase]) {
+        out.push({ step: s.name, why: `waits for \`${n}\`, which ${NEEDS_A_PERSON[prev.job.phase]}` });
       }
     }
   }
@@ -317,17 +341,38 @@ export async function reconcileRuns(
           // needs is in that file, and a value repeated here would be a second place to edit it.
           from: step.name,
           name: stepJobName(run.name, step.name),
+        }, {
+          by: opts.by ?? 'runs',
+          forStep: step.id,
           // The human half of the ownership. Kubernetes conflates these in
           // `batch.kubernetes.io/job-name`; hkb cannot, because nothing in a controller may read a
           // label (`src/labels.ts`) — so `stepId` owns and these two only group. `hkb ls --label
           // run=<id>` is what makes fifty rows readable, and it needed no new verb.
-          label: [`run=${run.id}`, `step=${step.name}`],
-        }, { by: opts.by ?? 'runs', forStep: step.id });
+          //
+          // Through `opts` rather than as a `label:` in the spec, because a list flag REPLACES a
+          // workflow's list rather than appending to it — passing them as spec silently discarded
+          // any `label:` the step's own workflow carried, which the same file keeps when it is used
+          // by `hkb new --from`. Two behaviours for one file is the drift this avoids.
+          labels: { run: String(run.id), step: step.name },
+        });
         report.filed.push(filed.row.id);
       } catch (e) {
-        // The unique key doing its job — an earlier pass filed this step. Nothing to say about it:
-        // the row it would have created is already there, which is the outcome that was wanted.
-        if ((e as { code?: string }).code === 'P2002') continue;
+        // The unique key doing its job — an earlier pass filed this step. **Confirmed by re-reading
+        // the step, not by parsing the error**: `Job` carries a second unique index (the proposal
+        // triple), so `P2002` alone does not say which constraint fired, and the field that would
+        // lives in driver-adapter internals (`meta.driverAdapterError.cause.constraint.fields` under
+        // Prisma 7 — measured, not documented, and not a thing a controller should depend on).
+        //
+        // **The fallthrough is unreachable today, and deliberately kept.** `createJob` sets `stepId`
+        // and no other unique column, and any Job holding a step's id makes that step read as filed
+        // — so a collision here can only be a duplicate, and the re-read can only confirm it
+        // (`test/runs.test.ts` pins both halves). It costs one query on a path that is already rare,
+        // and it turns an argument into a check: the day `createJob` sets a second unique column,
+        // this reports the step stalled instead of silently dropping it for ever, with no edit here.
+        if ((e as { code?: string }).code === 'P2002') {
+          const now = await db.step.findUnique({ where: { id: step.id }, include: { job: { select: { id: true } } } });
+          if (now?.job) continue;
+        }
         // **Everything else stalls this step and nothing else**, and that is the shape of it that
         // matters. Filing can genuinely fail: the workflow file was deleted after the run was cut,
         // its body has a placeholder nothing can fill, a declaration in it is malformed. Left to

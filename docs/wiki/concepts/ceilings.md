@@ -15,10 +15,10 @@ covers:
   - path: src/spec.ts
     sha: a83486dc8471b6e0358af03bafba75fa363c4032
   - path: src/hkb.ts
-    sha: 34ab3eea05412ec969d728978076d2634efdb1c5
+    sha: eb759e566ef71b11caa34cc0945a6e2ae30958cf
   - path: src/daemon.ts
-    sha: 4c8ba70c686f4876addbe4a9c079c6ba0fa36a2b
-generated_at_commit: 26055f1
+    sha: 22f946c6625de1f566d4301e098873050b23ac12
+generated_at_commit: 2b8902f
 last_refreshed: 2026-09-10
 related: [architecture/the-board, architecture/the-loop, architecture/job-kind, concepts/leases-and-liveness]
 ---

@@ -7,15 +7,15 @@ audience: [dev]
 read_when: "sequencing work, adding a field to Step, wondering why the Run controller cannot see a lease, or about to put ordering on Job"
 covers:
   - path: src/runs.ts
-    sha: 09ac35b9374b8aea9f9757af62585888938c9156
+    sha: d482ef36f2d4c1d1ca04679490a7143e4fcd4d10
   - path: src/pass.ts
     sha: a179f059c5bf4e5703b40a0f2a7704fd2c226ef5
   - path: prisma/schema.prisma
     sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
   - path: src/filing.ts
-    sha: 8f04eb76130291b1bf89174799cf5ba1c23955e3
+    sha: a3c67c49d8fc5b46e0caac0894bc52d10ca22a17
 related: [decisions/adr-018-the-boundary, features/workflow-templates, features/proposals, features/labels, architecture/job-kind]
-generated_at_commit: 26055f1
+generated_at_commit: 2b8902f
 last_refreshed: 2026-09-10
 ---
 
@@ -90,11 +90,19 @@ Five ways to be un-ready, and no branch in the code names any of them individual
   satisfied. This is the direction that matters: a miss read as *"no predecessor"* would be
   indistinguishable from an empty `after`, and would file the whole run at once;
 - **a cycle** — every step in it waits for a sibling that is itself unfiled, so none is ready and the
-  run stops. No traversal, no visited set.
+  run stops. No traversal, no visited set;
+- **a step whose successor already has a Job.** `Job.stepId` is `SetNull`, so `hkb rm` on one of a
+  run's Jobs leaves its Step unfiled — right while the run is going, wrong once something downstream
+  has moved on. Without this clause, ordinary board tidying on a *finished* run re-runs its first
+  step and buys a session that changes nothing.
 
 An empty `after` is ready (`[].every()` is true), so the first step of a run needs no special case
 anywhere. `stalled()` is the other half: the steps that will never become ready without a person, so
-that *waiting* and *stuck* get different words — they need different actions.
+that *waiting* and *stuck* get different words — they need different actions. It names a predecessor
+that `failed`, one that was `cancelled`, and one sitting in `triage`, which is the quiet one: a
+workflow carrying `triage: true` files its Job into the inbox, where nothing claims it until somebody
+types `hkb queue`. `suspended` is deliberately absent — it waits on a person too, but a pass already
+reports it as its own list.
 
 ## Where it runs, and the seam that must not close
 
@@ -124,11 +132,19 @@ syntax, no new frontmatter grammar, no file format — argument order **is** the
 **is** a workflow file. Every refusal happens before anything is created: a missing workflow, a
 repeated step, a name that could not become the label `step=<name>`.
 
+Every other `hkb new` flag is **refused by name** alongside `--steps`. A run has no spec of its own —
+each step takes its own from the workflow file it names — so `--model` or `--brief` here has nothing
+to act on, and accepting one silently would be the failure this CLI refuses everywhere else. Under
+`--json` the run shape carries `kind: "run"`, because its `id` is a Run id and a consumer resolving it
+against the Job table would otherwise get a wrong answer rather than an error.
+
 Nothing is filed by cutting a run. Rows eager, Jobs lazy — `JobSpec.suspend`'s shape. The first Job
 appears on the next pass. `hkb ls --label run=<id>` follows it, which needed no new verb: every Job a
 step files carries `run=<id>` and `step=<name>`. Kubernetes conflates ownership and grouping in
 `batch.kubernetes.io/job-name`; hkb cannot, because **nothing in a controller may read a label**
-(`src/labels.ts`) — so `stepId` owns and the labels only group.
+(`src/labels.ts`) — so `stepId` owns and the labels only group. They are merged *after* the workflow's
+own `label:` rather than replacing it, so one file labels the same way whether it is used as a step or
+by `hkb new --from`.
 
 ## What v1 deliberately cannot do
 
@@ -150,9 +166,10 @@ Named here so the next person does not have to work out whether it was an oversi
 - **No supervision.** *"If this one dies, cancel its siblings"* is death-triggered and often
   backward; a DAG edge cannot express it. It belongs as a Run-level policy field, next to `after`,
   the way Tekton puts `finally` and `retries` inside the pipeline kind.
-- **A stalled run is silent in the daemon.** `stalled()` is recomputed every pass and deliberately
-  writes no Event — a level-triggered reconciler that logged a standing fact would log it for ever.
-  The foreground `hkb run` prints it; a detached daemon does not.
+- **A stalled run writes no Event.** `stalled()` is recomputed every pass, so persisting it would
+  write the same row for ever. It is *reported* instead: the foreground `hkb run` prints it, and the
+  daemon logs it through `announce`, which says a standing fact once and again only when it changes
+  — the same mechanism `refused:<slug>` and `kept:<name>` already use.
 
 ## Gotcha: why a value cannot yet cross an edge
 

@@ -2,7 +2,7 @@ import type { openBoard } from './db.ts';
 import { checkExportPath } from './exports.ts';
 import { checkResultName } from './results.ts';
 import { checkArtifactName } from './artifacts.ts';
-import { parseLabels } from './labels.ts';
+import { MAX_LABELS, parseLabels } from './labels.ts';
 import { checkPluginPath } from './plugins.ts';
 import { checkInputSpec, renderBrief, type InputSpec } from './inputs.ts';
 import { readTemplate, placeholders, type Template } from './templates.ts';
@@ -117,7 +117,7 @@ export async function createJob(
   db: Db,
   scope: FilingScope,
   spec: FilingSpec,
-  opts: { by: string; forStep?: number },
+  opts: { by: string; forStep?: number; labels?: Record<string, string> },
 ): Promise<Filed> {
   // A copy, because the fills below write into it. A caller's object is theirs.
   const values: Record<string, unknown> = { ...spec };
@@ -247,7 +247,15 @@ export async function createJob(
   // The same fence again, for the same reason: a label that is not `key=value` in plain tokens
   // is a fault in the spec, and a Job filed under a group nobody can name or select is worse
   // than a refusal — it is a Job that is quietly not in the group its filer thinks it is in.
-  const labels = parseLabels(givenList(values.label, '--label'));
+  // Merged AFTER the parse rather than appended to its input, and the caller's win. A controller
+  // filing a step knows facts the workflow cannot — which run this is, which step — and a workflow
+  // that happened to say `label: run=something` must not be able to refuse the filing or misgroup
+  // the row. Appending to `parseLabels`' input would do exactly that: it refuses a key given twice
+  // with two values. The cap is re-checked because merging can cross it.
+  const labels = { ...parseLabels(givenList(values.label, '--label')), ...(opts.labels ?? {}) };
+  if (Object.keys(labels).length > MAX_LABELS) {
+    throw usage(`that is ${Object.keys(labels).length} labels, over the cap of ${MAX_LABELS} — a label groups a Job, it does not carry its data.`);
+  }
   // Checked at file time for the same reason an export path is: a grant is resolved into an
   // absolute path with no agent in the loop, so a path that was never legal must not become
   // state. Null when the flag was absent, so the board's grant can answer; an EMPTY list is

@@ -9,11 +9,11 @@ covers:
   - path: src/labels.ts
     sha: 10ab4cd1a9170ef5426c135cbaf74ddedf979863
   - path: src/hkb.ts
-    sha: 34ab3eea05412ec969d728978076d2634efdb1c5
+    sha: eb759e566ef71b11caa34cc0945a6e2ae30958cf
   - path: src/read.ts
     sha: 6225a35a96f1896a1457385bda9eb9d0868490c0
   - path: src/filing.ts
-    sha: 8f04eb76130291b1bf89174799cf5ba1c23955e3
+    sha: a3c67c49d8fc5b46e0caac0894bc52d10ca22a17
   - path: prisma/schema.prisma
     sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
   - path: src/templates.ts
@@ -26,7 +26,7 @@ related:
     features/workflow-templates,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: 26055f1
+generated_at_commit: 2b8902f
 last_refreshed: 2026-09-10
 ---
 
@@ -123,6 +123,24 @@ Labels are also a workflow key (`label: [workflow=release, step=draft]` in
 `src/templates.ts`'s `TEMPLATE_KEYS`), because the format's one rule is that **the keys are the
 flags** (*features/workflow-templates*) — which is also the shape that makes "every Job from this
 workflow carries `workflow=<name>`" a thing an author can write once.
+
+## The one caller that supplies labels of its own
+
+`reconcileRuns` files a Job per ready step and labels it `run=<id>` and `step=<name>`
+(`src/runs.ts`), which is what makes `hkb ls --label run=<id>` the way to follow a run — no new verb
+was needed for it. Two things about that are deliberate:
+
+- **They arrive through `createJob`'s `opts`, not as a `label:` in its spec.** A list flag *replaces*
+  a workflow's list rather than appending to it, so passing them as spec silently discarded any
+  `label:` the step's own workflow carried — the same file would then label differently depending on
+  whether it was used as a step or by `hkb new --from`. Merged after the parse, both survive.
+- **The controller's win a collision**, and the merge happens after `parseLabels` for that reason: a
+  workflow that happened to say `label: run=something` must not be able to refuse the filing (a key
+  given twice with two values is refused) or misgroup the row.
+
+This is not a controller *reading* a label — the rule below is intact. `Job.stepId` is what owns the
+row; the labels only group it, which is the split Kubernetes does not need because
+`batch.kubernetes.io/job-name` does both.
 
 ## What a label deliberately does not do
 

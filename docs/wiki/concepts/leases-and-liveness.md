@@ -11,14 +11,14 @@ covers:
   - path: src/controller.ts
     sha: 6563f3234641037e46504688115ac5ed4b76cf1b
   - path: src/daemon.ts
-    sha: 4c8ba70c686f4876addbe4a9c079c6ba0fa36a2b
+    sha: 22f946c6625de1f566d4301e098873050b23ac12
   - path: src/limits.ts
     sha: 18849fb4775cabb4c5d65784f506d61d90c66f1f
   - path: prisma/schema.prisma
     sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
   - path: src/workspaces.ts
     sha: b709212e781376f570a613907a209648dab91526
-generated_at_commit: 26055f1
+generated_at_commit: 2b8902f
 last_refreshed: 2026-09-10
 related: [architecture/the-loop, architecture/the-board, architecture/job-kind, concepts/ceilings]
 ---

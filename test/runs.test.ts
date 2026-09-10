@@ -49,6 +49,9 @@ fs.mkdirSync(path.join(cwd, '.hkb', 'workflows'), { recursive: true });
   wf('review', `---\nname: review\ndescription: read the thing\nno-isolate: true\n---\n\nRead it.\n`);
   // A workflow whose body has an unfilled placeholder. Nothing a run can supply, on purpose.
   wf('needy', `---\nname: needy\n---\n\nLook at {{page}} and say what is wrong.\n`);
+  // Carries a label of its own, and files into the inbox rather than the queue.
+  wf('tagged', `---\nname: tagged\nlabel: [tier=fast]\n---\n\nDo it.\n`);
+  wf('noticed', `---\nname: noticed\ntriage: true\n---\n\nSomebody should look at this.\n`);
   g('add', '-A');
   g('commit', '-qm', 'base');
 }
@@ -304,4 +307,85 @@ test('a step whose workflow has an unfilled placeholder is refused, not filled b
   assert.equal(await db.job.count({ where: { step: { runId: ok.id } } }), 1,
     'a healthy run behind a broken one was not filed');
   assert.equal(report.filed.length, 1);
+});
+
+// ------------------------------------------------------------------ what the review found
+
+test('a step whose successor already moved on is not re-filed when its own Job is removed', async () => {
+  const mine = await freshBoard();
+  const run = await cutRun(db, mine, { name: 'finished', steps: ['implement', 'review'] }, { by: 'test' });
+  await passToRest({ runtime: fakeRuntime(), cwd, board: mine.slug });
+  const steps = await db.step.findMany({ where: { runId: run.id }, orderBy: { id: 'asc' }, include: { job: true } });
+  assert.equal(steps[1].job?.phase, 'succeeded', 'the run did not finish');
+
+  // Ordinary board tidying on a FINISHED run. `Job.stepId` is SetNull, so step 1 goes back to
+  // unfiled — and the pass must not read that as "do it again", because `review` already ran and
+  // re-running `implement` under it buys a session that changes nothing.
+  await db.job.delete({ where: { id: steps[0].job!.id } });
+  const report = await reconcileRuns(db, { board: mine.slug, cwd });
+  assert.deepEqual(report.filed, [], 'removing a finished run\'s first Job re-ran the step');
+
+  // Still true of the pure function on its own, which is where the rule lives.
+  assert.deepEqual(readyNow([S('implement'), S('review', ['implement'], 'succeeded')]).map((x) => x.name), []);
+  // And the mid-run case is unchanged: nothing downstream has a Job, so it does come back.
+  assert.deepEqual(readyNow([S('implement'), S('review', ['implement'])]).map((x) => x.name), ['implement']);
+});
+
+test('a step waiting on a predecessor in the inbox says so — it is a wait on a person, not a run', async () => {
+  const mine = await freshBoard();
+  const run = await cutRun(db, mine, { name: 'noticed run', steps: ['noticed', 'implement'] }, { by: 'test' });
+  const first = await reconcileRuns(db, { board: mine.slug, cwd });
+  assert.equal(first.filed.length, 1);
+  const filed = await db.job.findUniqueOrThrow({ where: { id: first.filed[0] } });
+  assert.equal(filed.phase, 'triage', 'the workflow`s triage: true did not reach the Job');
+
+  const report = await reconcileRuns(db, { board: mine.slug, cwd });
+  assert.equal(report.filed.length, 0);
+  assert.deepEqual(report.stalled, [{
+    run: run.id, step: 'implement',
+    why: 'waits for `noticed`, which is in the inbox and will not run until somebody queues it',
+  }], 'a run hung behind the inbox reported nothing');
+});
+
+test('a step keeps the labels its own workflow carries, and cannot overwrite the run`s', async () => {
+  const mine = await freshBoard();
+  const run = await cutRun(db, mine, { name: 'tagged run', steps: ['tagged'] }, { by: 'test' });
+  const report = await reconcileRuns(db, { board: mine.slug, cwd });
+  const job = await db.job.findUniqueOrThrow({ where: { id: report.filed[0] } });
+  assert.deepEqual(job.labels, { tier: 'fast', run: String(run.id), step: 'tagged' },
+    'the workflow`s own label was discarded by the controller`s');
+});
+
+/**
+ * The invariant the P2002 handling rests on.
+ *
+ * `reconcileRuns` treats a unique-constraint violation from `createJob` as "an earlier pass already
+ * filed this step" — but it CONFIRMS that by re-reading the step rather than by trusting the error
+ * code, because `Job` carries a second unique index (the proposal triple) and `P2002` alone does not
+ * say which one fired. Today the confirmation can only ever succeed: `createJob` sets `stepId` and
+ * nothing else unique, and any Job holding a step`s id makes that step read as filed. So the branch
+ * that reports a *different* collision is unreachable by construction, and this test pins the two
+ * facts that make it so — the day either stops holding, the re-read starts earning its keep.
+ */
+test('a step with a Job reads as filed, which is why a stepId collision can only mean a duplicate', async () => {
+  const mine = await freshBoard();
+  const run = await cutRun(db, mine, { name: 'invariant', steps: ['implement'] }, { by: 'test' });
+  const filed = (await reconcileRuns(db, { board: mine.slug, cwd })).filed[0];
+
+  // 1. The Job the step filed is the step`s Job — the relation, not a convention.
+  const step = await db.step.findFirstOrThrow({ where: { runId: run.id }, include: { job: true } });
+  assert.equal(step.job?.id, filed);
+
+  // 2. A second Job for that same step is refused by the database, and by THIS constraint.
+  const board = await db.board.findUniqueOrThrow({ where: { slug: mine.slug } });
+  await assert.rejects(
+    () => db.job.create({ data: { boardId: board.id, name: 'second', brief: 'x', stepId: step.id } }),
+    (e: { code?: string }) => e.code === 'P2002',
+    'Job.stepId is no longer unique, and reconcileRuns is no longer idempotent',
+  );
+
+  // 3. And the pass absorbs it silently rather than reporting the run stuck.
+  const again = await reconcileRuns(db, { board: mine.slug, cwd });
+  assert.deepEqual(again.filed, []);
+  assert.deepEqual(again.stalled, [], 'a duplicate was reported to the operator as a problem');
 });

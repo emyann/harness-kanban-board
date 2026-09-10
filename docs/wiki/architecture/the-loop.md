@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "changing the daemon, the reclaim rule, or anything that decides whether a lease may be taken"
 covers:
   - path: src/daemon.ts
-    sha: 4c8ba70c686f4876addbe4a9c079c6ba0fa36a2b
+    sha: 22f946c6625de1f566d4301e098873050b23ac12
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
@@ -20,7 +20,7 @@ covers:
     sha: 730324bea5aa0fe083bc5fb7244c06ce20a54c2c
   - path: src/workspaces.ts
     sha: b709212e781376f570a613907a209648dab91526
-generated_at_commit: 26055f1
+generated_at_commit: 2b8902f
 last_refreshed: 2026-09-10
 related: [architecture/job-kind, architecture/runtime-layer, decisions/adr-007-workload-scheduler, decisions/adr-016-the-pod-spec-is-the-map, concepts/leases-and-liveness, features/check]
 ---

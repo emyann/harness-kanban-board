@@ -15,10 +15,10 @@ covers:
   - path: prisma/schema.prisma
     sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
   - path: src/hkb.ts
-    sha: 34ab3eea05412ec969d728978076d2634efdb1c5
+    sha: eb759e566ef71b11caa34cc0945a6e2ae30958cf
   - path: src/workspaces.ts
     sha: b709212e781376f570a613907a209648dab91526
-generated_at_commit: 26055f1
+generated_at_commit: 2b8902f
 last_refreshed: 2026-09-10
 related:
   [

@@ -733,9 +733,28 @@ export async function main(argv: string[]): Promise<number> {
       // surface of a run is this flag; there is no file format, because a step IS a workflow file
       // and argument order IS the chain (`src/runs.ts`).
       if (values.steps !== undefined) {
+        // **Refused by name, not ignored.** A run's spec is its steps' workflow files — that is the
+        // whole design — so there is nothing here for `--model`, `--brief` or `--max-budget` to act
+        // on. Accepting and dropping them is the silent failure this CLI refuses everywhere else
+        // (`unknownFlags`, `strayWords`, `--all` against `--board`), and it is worse here because
+        // the flag that was dropped is one the operator could put in the workflow file instead.
+        const RUN_FLAGS = new Set(['steps', 'board', 'json', 'help']);
+        const ignored = Object.keys(values).filter((k) => !RUN_FLAGS.has(k)).sort();
+        if (ignored.length) {
+          throw usage(
+            `${ignored.map((f) => `\`--${f}\``).join(', ')} ${ignored.length === 1 ? 'does' : 'do'} nothing with `
+            + '`--steps`: a run has no spec of its own, and each step takes its own from the workflow '
+            + `file it names (\`${WORKFLOW_DIR}/<step>.md\`, whose frontmatter keys are these same flags). `
+            + 'Put it there, or file the Job on its own with `hkb new`.',
+          );
+        }
         const steps = given(values.steps, '--steps')
           .split(',').map((t) => t.trim()).filter(Boolean);
-        const run = await cutRun(db, scope, { name: rest.join(' ').trim(), steps }, { by: whoami() });
+        const cut = await cutRun(db, scope, { name: rest.join(' ').trim(), steps }, { by: whoami() });
+        // `kind` discriminates the two shapes this verb can emit. Without it a consumer switching on
+        // `phase`, or resolving `id` against the Job table, gets a wrong answer rather than an error
+        // — `run.id` is a Run id and the Job shape has no `kind`, so the check is `kind === 'run'`.
+        const run = { kind: 'run' as const, ...cut };
         emit(out, run, () =>
           console.log(`run ${run.id} ${run.name}  on ${run.board}`
             + run.steps.map((st) => `\n  ${st.name}${st.after.length ? `  after ${st.after.join(', ')}` : '  — ready now'}`).join('')

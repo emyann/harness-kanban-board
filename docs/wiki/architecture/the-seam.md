@@ -7,13 +7,13 @@ audience: [dev]
 read_when: "building a second consumer, adding a verb that files or reads a Job, or wondering why a module takes `max-budget` rather than `maxBudgetUsd`"
 covers:
   - path: src/filing.ts
-    sha: 8f04eb76130291b1bf89174799cf5ba1c23955e3
+    sha: a3c67c49d8fc5b46e0caac0894bc52d10ca22a17
   - path: src/read.ts
     sha: 6225a35a96f1896a1457385bda9eb9d0868490c0
   - path: src/flags.ts
     sha: 7140df95e7457ce3f2ed4fe3fe38e19476728dd1
   - path: src/hkb.ts
-    sha: 34ab3eea05412ec969d728978076d2634efdb1c5
+    sha: eb759e566ef71b11caa34cc0945a6e2ae30958cf
   - path: src/spec.ts
     sha: a83486dc8471b6e0358af03bafba75fa363c4032
 related:
@@ -24,7 +24,7 @@ related:
     gotchas/argv-traps,
     architecture/the-board,
   ]
-generated_at_commit: 26055f1
+generated_at_commit: 2b8902f
 last_refreshed: 2026-09-10
 ---
 
