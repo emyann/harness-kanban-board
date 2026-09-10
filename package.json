@@ -1,7 +1,7 @@
 {
   "name": "hkb-cli",
   "version": "0.3.0",
-  "description": "hkb — a workload scheduler for coding agents: file a Job, and one agent runs one brief to completion in its own worktree. A SQLite board per machine, the Claude Agent SDK as the runtime, GitHub as the forge.",
+  "description": "hkb — a workload scheduler for coding agents: file a Job, and one agent runs one brief to completion in a workspace of its own. A SQLite board per machine, the Claude Agent SDK as the runtime. What happens to the work afterwards is your workflow, not hkb's.",
   "type": "module",
   "bin": {
     "hkb": "dist/bin/hkb.js"

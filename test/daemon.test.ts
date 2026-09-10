@@ -607,38 +607,83 @@ test('a resumable stop keeps its checkout — the next attempt resumes IN it', a
   const { collectable } = await import('../src/workspaces.ts');
   assert.equal(after.finishedAt, null);
   assert.deepEqual(
-    collectable([{ id: job.id, finishedAt: after.finishedAt, phase: after.phase }], new Date(Date.now() + 1e9), 0),
+    collectable(
+      [{ id: job.id, finishedAt: after.finishedAt, phase: after.phase, resumable: true }],
+      new Date(Date.now() + 1e9), 0,
+    ),
     [],
     'and no TTL, however long, makes it collectable while another attempt may resume there',
   );
 });
 
 test('the tick collects a finished Job\'s workspace once its TTL has elapsed', async () => {
-  // What replaced the old heuristic. That one asked each checkout whether it held uncommitted or
-  // unpushed work and kept it if so — a question that needed `pushedRef` and `heldWork`, only had
-  // an answer while the core required a push, and had no opinion about age at all (ADR-018).
-  //
-  // `ttlSecondsAfterFinished` asks nothing about the tree. The refusing cases are the interesting
-  // ones and they are exhaustive in `collectable`, so this test is about the two ends of it: a Job
-  // that has not finished is never a candidate, and a finished one becomes one on the clock.
-  const { collectable, workspaceName, removeWorkspace } = await import('../src/workspaces.ts');
+  // What replaced the inspect-the-tree heuristic. `ttlSecondsAfterFinished` asks nothing about what
+  // is in the tree; the interesting cases are the ones it REFUSES, and they are exhaustive here
+  // because `collectable` is pure.
+  const { collectable, removeWorkspace, workspaceJobId } = await import('../src/workspaces.ts');
 
   const finishedAt = new Date('2026-09-10T10:00:00Z');
-  const rows = [
-    { id: 1, finishedAt, phase: 'succeeded' },
-    { id: 2, finishedAt: null, phase: 'running' },
-    { id: 3, finishedAt: null, phase: 'suspended' },
-  ];
+  const done = { id: 1, finishedAt, phase: 'succeeded', resumable: false };
   const anHourLater = new Date('2026-09-10T11:00:00Z');
-  assert.deepEqual(collectable(rows, anHourLater, 3600), [1], 'exactly the finished one, and exactly on time');
-  assert.deepEqual(collectable(rows, new Date('2026-09-10T10:59:59Z'), 3600), [], 'a second early is not yet');
-  assert.deepEqual(collectable(rows, anHourLater, 0), [1], 'a TTL of zero means immediately, not never');
 
-  // And the removal itself is git's refusal rather than ours: a workspace that is not there is a
-  // success, because the sweep is level-triggered and must not report the same thing for ever.
-  const gone = removeWorkspace(elsewhere, workspaceName(9999));
-  assert.equal(gone.removed, true, 'nothing to take is not a failure');
+  assert.deepEqual(collectable([done], anHourLater, 3600), [1], 'finished, and exactly on time');
+  assert.deepEqual(collectable([done], new Date('2026-09-10T10:59:59Z'), 3600), [],
+    'a second early is not yet');
+  assert.deepEqual(collectable([done], anHourLater, 0), [1], 'a TTL of zero is immediately, not never');
+
+  // ---- the refusals, which are the whole point of the field.
+  assert.deepEqual(
+    collectable([{ id: 2, finishedAt: null, phase: 'running', resumable: false }], anHourLater, 0), [],
+    'a Job that has not finished is never a candidate, whatever the TTL');
+  assert.deepEqual(
+    collectable([{ id: 3, finishedAt: null, phase: 'suspended', resumable: false }], anHourLater, 0), [],
+    'nor one waiting on a person');
+  assert.deepEqual(
+    collectable([{ ...done, id: 4, resumable: true }], anHourLater, 0), [],
+    'and NOT one a retry would resume into — `max_budget` ends `failed` keeping its session, so '
+    + '`hkb retry --max-budget` continues it, and collecting the tree would strand that retry');
+
+  // The field failing SAFE is the property that matters, because a caller that forgets it must not
+  // silently start deleting. Asserted by passing a row that never mentions it.
+  const forgot = { id: 5, finishedAt, phase: 'succeeded' } as never;
+  assert.deepEqual(collectable([forgot], anHourLater, 0), [],
+    'a row that does not say is PROTECTED, not collected — a guard fails in the cheaper direction');
 });
+
+test('the sweep removes the worktree git actually reported, not one rebuilt from a convention',
+  async () => {
+    // The regression this exists for: an earlier version kept only the basename and had
+    // `removeWorkspace` reconstruct `<root>/.claude/worktrees/<name>`. A worktree anywhere else was
+    // found, missed by the remove, reported REMOVED — an absent workspace has to be a success, or
+    // the sweep reports the same thing for ever — and so logged on every tick in perpetuity. That is
+    // the exact runaway the whole function was written to end.
+    const { existingWorkspaces, removeWorkspace } = await import('../src/workspaces.ts');
+    const repo = path.join(dir, `elsewhere${++n}`);
+    fs.mkdirSync(repo, { recursive: true });
+    const g = (args: string[], cwd = repo) => spawnSync('git', args, { cwd, encoding: 'utf8' });
+    g(['init', '-q', '-b', 'main']);
+    g(['config', 'user.email', 'l@test']);
+    g(['config', 'user.name', 'l']);
+    fs.writeFileSync(path.join(repo, 'README.md'), '# x\n');
+    g(['add', '-A']);
+    g(['commit', '-qm', 'base']);
+
+    // Deliberately NOT under `.claude/worktrees` — that is the case the bug could not see.
+    const odd = path.join(dir, `kb-4242`);
+    g(['worktree', 'add', '-q', odd, '-b', 'kb-4242']);
+
+    const found = existingWorkspaces(repo);
+    assert.deepEqual(found.map((w) => w.jobId), [4242], 'found by name');
+    assert.equal(fs.realpathSync(found[0].path), fs.realpathSync(odd), 'and carrying its REAL path');
+
+    const swept = removeWorkspace(repo, found[0].path);
+    assert.equal(swept.removed, true);
+    assert.equal(fs.existsSync(odd), false,
+      'and it is actually gone — "removed" must never be reported about a directory still on disk');
+
+    // And a workspace that is genuinely absent is still a success, or the sweep never stops.
+    assert.equal(removeWorkspace(repo, path.join(dir, 'kb-9999')).removed, true);
+  });
 
 test('the Job runs in the repository its BOARD names, not wherever the daemon started', async () => {
   // The reason `repoPath` exists: a machine-level daemon has no meaningful cwd of its own.
@@ -654,10 +699,12 @@ test('the Job runs in the repository its BOARD names, not wherever the daemon st
   const seen: string[] = [];
   const spy = {
     name: 'spy',
-    async run(spec: { cwd: string }) {
+    async run(spec: { cwd: string; workspace?: { name: string } }) {
       seen.push(spec.cwd);
+      const ws = spec.workspace ? path.join(spec.cwd, '.hkb', 'workspaces', spec.workspace.name) : null;
+      if (ws) fs.mkdirSync(ws, { recursive: true });
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null, workspacePath: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null, workspacePath: ws };
     },
   } as never;
   await reconcile({ runtime: spy, cwd: REPO, board: board.slug });
@@ -665,4 +712,9 @@ test('the Job runs in the repository its BOARD names, not wherever the daemon st
   assert.ok(fs.existsSync(path.join(elsewhere, 'ELSEWHERE.md')),
     'sanity: the other repository is the one with this file in it');
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  // And the run was ACCEPTED. The spy provisions the workspace it was asked for; one that reported
+  // none would be refused by `isolationShortfall`, and this test would have gone on passing while
+  // asserting nothing about the outcome it had changed.
+  assert.equal(after.phase, 'succeeded');
+  assert.equal(after.attempts[0].outcome, 'completed');
 });

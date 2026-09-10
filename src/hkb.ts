@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { openBoard, closeBoard } from './db.ts';
 import { ensureSchema } from './schema.ts';
+import { retireLegacyPushHooks } from './workspaces.ts';
 import { databaseUrl } from './db-url.ts';
 import { reconcile } from './controller.ts';
 import { checkExportPath } from './exports.ts';
@@ -484,8 +485,6 @@ const OPTIONS = {
       name: { type: 'string' },
       input: { type: 'string', multiple: true },
       gate: { type: 'string' },
-      // The ref the checkout is cut from. One value, never repeatable: a branch has one base, and
-      // a second would be a merge nobody asked for.
       // A boolean, because the only thing that may be proposed is Jobs (ADR-011 decision 6). It
       // becomes the string the column holds, so the closed set can grow without a flag change.
       propose: { type: 'boolean' },
@@ -694,9 +693,27 @@ export async function main(argv: string[]): Promise<number> {
   if (verb === 'migrate') {
     const file = databaseUrl().replace(/^file:/, '');
     const got = ensureSchema(file, undefined, { asked: true });
-    emit(out, { board: file, ...got }, () => {
+    // ---- and the part of the upgrade that is not in the database.
+    //
+    // ADR-018 deleted the `pre-push` fence, and the fence left state on this machine: a shim in
+    // `~/.hkb/hooks` that `exec`s a file no longer shipped, pointed at by a per-worktree
+    // `core.hooksPath` on every checkout it ever cut. A push from one of those now fails with a hook
+    // that cannot start — hkb breaking a repository on the way out, which is the one kind of
+    // upgrade damage worth a verb noticing.
+    //
+    // Here rather than in the daemon because the migration guard already forces an upgrading
+    // operator through this exact command, and because it must happen whether or not anybody runs
+    // `hkb up`. Removing the directory is the whole fix: git treats a `core.hooksPath` that does not
+    // exist as no hooks at all, so every stale setting goes inert with nothing to unset.
+    const retired = retireLegacyPushHooks(daemon.boardDir());
+    emit(out, { board: file, ...got, ...(retired ? { retiredHooks: retired } : {}) }, () => {
       if (!got.applied.length) console.log(`${file} is already up to date (${got.alreadyApplied} migrations)`);
       else console.log(`${file} — applied ${got.applied.length}:\n${got.applied.map((m) => `  ${m}`).join('\n')}`);
+      if (retired) {
+        console.log(`removed ${retired} — the \`pre-push\` fence it held was deleted (ADR-018), and its `
+          + 'shim pointed at a file this build no longer ships. Any worktree still configured for it '
+          + 'can push again.');
+      }
     });
     return 0;
   }

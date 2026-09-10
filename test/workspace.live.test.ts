@@ -69,8 +69,16 @@ test('the harness provisions the workspace hkb declares, and the session runs in
       'the session ran in the main checkout — it was not isolated',
     );
 
-    // 3. The session itself agrees. The path is read off the `init` message, so a driver that
-    //    reported a directory the agent never entered would pass the two checks above.
+    // 3. It is where `workspaceJobId` can find it again. The sweep runs long after the session is
+    //    gone and recognises its own workspaces by directory NAME, so "the harness puts it somewhere
+    //    called `<name>`" is load-bearing and is exactly the kind of untyped-`extraArgs` fact this
+    //    test exists to pin.
+    const { workspaceJobId } = await import('../src/workspaces.ts');
+    assert.equal(workspaceJobId(outcome.workspacePath as string), 1,
+      `the sweep would not recognise ${outcome.workspacePath} as a workspace of Job 1`);
+
+    // 4. The session itself agrees. The path is read off the `init` message, so a driver that
+    //    reported a directory the agent never entered would pass the checks above.
     assert.match(
       outcome.text.trim(),
       new RegExp(name),

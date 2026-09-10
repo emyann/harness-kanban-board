@@ -515,9 +515,12 @@ test('a declared export lands in the board\'s repository, and the workspace wait
   const done = await db.job.findUniqueOrThrow({ where: { id: job.id } });
   assert.notEqual(done.finishedAt, null, 'it finished, so the clock has started');
   assert.deepEqual(
-    collectable([{ id: job.id, finishedAt: done.finishedAt, phase: done.phase }], new Date(Date.now() + 7200_000), 3600),
+    collectable(
+      [{ id: job.id, finishedAt: done.finishedAt, phase: done.phase, resumable: false }],
+      new Date(Date.now() + 7200_000), 3600,
+    ),
     [job.id],
-    'and an hour later it is collectable',
+    'and an hour later it is collectable — it succeeded, so nothing will resume into it',
   );
   fs.rmSync(path.join(cwd, '.claude'), { recursive: true, force: true });
 });
@@ -1461,9 +1464,12 @@ test('a suspended Job is never a sweep candidate, so the approved half continues
   assert.equal(after.finishedAt, null, 'suspended is not finished — a person may take days');
   const { collectable } = await import('../src/workspaces.ts');
   assert.deepEqual(
-    collectable([{ id: job.id, finishedAt: after.finishedAt, phase: after.phase }], new Date(Date.now() + 1e9), 0),
+    collectable(
+      [{ id: job.id, finishedAt: after.finishedAt, phase: after.phase, resumable: false }],
+      new Date(Date.now() + 1e9), 0,
+    ),
     [],
-    'and no TTL, however long, makes its workspace collectable',
+    'and no TTL, however long, makes its workspace collectable — it has not finished',
   );
 });
 

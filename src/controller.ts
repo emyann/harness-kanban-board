@@ -599,7 +599,17 @@ async function applyProposals(
 
     await db.job.update({
       where: { id: job.id },
-      data: { phase: 'succeeded', suspendedFor: null, lastError: null, finishedAt: now },
+      data: {
+        phase: 'succeeded',
+        suspendedFor: null,
+        lastError: null,
+        finishedAt: now,
+        // Cleared, like every other terminal transition (`lastSessionId: final.resumable ? … : null`
+        // on the ordinary path). A proposer's approval is applied HERE — no session ever wakes up in
+        // its workspace — so a kept session id is one `hkb show` advertises for a Job nothing will
+        // resume, and one the sweep would read as a reason to hold a whole checkout.
+        lastSessionId: null,
+      },
     });
     await db.event.create({
       data: {

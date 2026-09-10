@@ -6,8 +6,9 @@ import { boardDir } from './db-url.ts';
 
 export { boardDir };
 import { reconcile } from './controller.ts';
+import { basename as pathBasename } from 'node:path';
 import {
-  BUILT_IN_TTL_SECONDS, collectable, existingWorkspaces, removeWorkspace, workspaceName,
+  BUILT_IN_TTL_SECONDS, collectable, existingWorkspaces, removeWorkspace,
 } from './workspaces.ts';
 import { holderId, holderLiveness, parseHolder, pidIsAlive } from './liveness.ts';
 import { windowStart } from './limits.ts';
@@ -413,18 +414,25 @@ export async function loop(deps: LoopDeps): Promise<number> {
           // for ever, describing nothing happening; `removeWorkspace` reports an absent workspace as
           // removed (it must — the sweep is level-triggered), so there is no natural stopping point.
           // CLAUDE.md: no per-Job calls when a board-wide one exists.
-          const present = repo ? existingWorkspaces(repo) : new Set<string>();
-          if (repo && present.size) {
+          const present = repo ? existingWorkspaces(repo) : [];
+          if (repo && present.length) {
             const finished = await db.job.findMany({
-              where: { boardId: b.id, finishedAt: { not: null } },
+              where: { boardId: b.id, id: { in: present.map((w) => w.jobId) } },
               select: { id: true, finishedAt: true, phase: true, lastSessionId: true },
             });
-            const candidates = finished
-              .filter((j) => present.has(workspaceName(j.id)))
-              .map((j) => ({ ...j, resumable: j.lastSessionId != null }));
-            for (const id of collectable(candidates, new Date(now()), BUILT_IN_TTL_SECONDS)) {
-              const name = workspaceName(id);
-              const swept = removeWorkspace(repo, name);
+            // **`hkb retry` is what resumes, and it acts on a FAILED Job.** A Job the operator
+            // cancelled or marked done keeps its session id too, and so does one out of retries —
+            // nothing wakes any of them, and calling them resumable would keep a whole checkout per
+            // Job for ever with no reason an operator could see.
+            const candidates = finished.map((j) => ({
+              ...j,
+              resumable: j.phase === 'failed' && j.lastSessionId != null,
+            }));
+            const take = new Set(collectable(candidates, new Date(now()), BUILT_IN_TTL_SECONDS));
+            for (const { jobId: id, path: dir } of present.filter((w) => take.has(w.jobId))) {
+              const name = pathBasename(dir);
+              // The path git reported, never one rebuilt from a convention.
+              const swept = removeWorkspace(repo, dir);
               const where = boards.length > 1 ? `[${b.slug}] ` : '';
               if (swept.removed) {
                 // Said out loud. `.hkb/workflows/implement.md` tells a worker its workspace is
