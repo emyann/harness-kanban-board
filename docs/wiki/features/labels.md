@@ -7,15 +7,15 @@ audience: [dev]
 read_when: "grouping Jobs, adding a selector or a query to a consumer, or being tempted to schedule, own or cascade off a label"
 covers:
   - path: src/labels.ts
-    sha: b524ef31fce5611a1a676dfb4631aaa83ecba926
+    sha: 10ab4cd1a9170ef5426c135cbaf74ddedf979863
   - path: src/hkb.ts
-    sha: c06820804f259a976336c80742b3068586df9d84
+    sha: 34ab3eea05412ec969d728978076d2634efdb1c5
   - path: src/read.ts
     sha: 6225a35a96f1896a1457385bda9eb9d0868490c0
   - path: src/filing.ts
-    sha: afa2d406f78ccb1bc6c9d73cc4a56cdf0b16a16a
+    sha: 8f04eb76130291b1bf89174799cf5ba1c23955e3
   - path: prisma/schema.prisma
-    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
+    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
   - path: src/templates.ts
     sha: 169ac395a4b608e231beeb978952da3adfc8c82c
 related:
@@ -26,7 +26,7 @@ related:
     features/workflow-templates,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: 62135e9
+generated_at_commit: 26055f1
 last_refreshed: 2026-09-10
 ---
 

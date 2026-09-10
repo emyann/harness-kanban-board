@@ -19,12 +19,12 @@ covers:
   - path: src/brief.ts
     sha: b3eddf6aebd95fdab1f38424b24851d6a4e3e5a2
   - path: src/hkb.ts
-    sha: c06820804f259a976336c80742b3068586df9d84
+    sha: 34ab3eea05412ec969d728978076d2634efdb1c5
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: prisma/schema.prisma
-    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
-generated_at_commit: 62135e9
+    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
+generated_at_commit: 26055f1
 last_refreshed: 2026-09-10
 related: [decisions/adr-008-declared-outputs, decisions/adr-011-proposals-not-board-access, decisions/adr-018-the-boundary, features/proposals, features/workflow-templates, architecture/job-kind, architecture/the-board]
 ---

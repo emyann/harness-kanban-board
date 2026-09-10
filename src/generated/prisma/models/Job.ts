@@ -37,6 +37,7 @@ export type JobAvgAggregateOutputType = {
   proposedByJobId: number | null
   proposedByK: number | null
   proposalIndex: number | null
+  stepId: number | null
 }
 
 export type JobSumAggregateOutputType = {
@@ -50,6 +51,7 @@ export type JobSumAggregateOutputType = {
   proposedByJobId: number | null
   proposedByK: number | null
   proposalIndex: number | null
+  stepId: number | null
 }
 
 export type JobMinAggregateOutputType = {
@@ -78,6 +80,7 @@ export type JobMinAggregateOutputType = {
   proposedByJobId: number | null
   proposedByK: number | null
   proposalIndex: number | null
+  stepId: number | null
   createdAt: Date | null
   updatedAt: Date | null
   finishedAt: Date | null
@@ -109,6 +112,7 @@ export type JobMaxAggregateOutputType = {
   proposedByJobId: number | null
   proposedByK: number | null
   proposalIndex: number | null
+  stepId: number | null
   createdAt: Date | null
   updatedAt: Date | null
   finishedAt: Date | null
@@ -147,6 +151,7 @@ export type JobCountAggregateOutputType = {
   proposedByJobId: number
   proposedByK: number
   proposalIndex: number
+  stepId: number
   createdAt: number
   updatedAt: number
   finishedAt: number
@@ -165,6 +170,7 @@ export type JobAvgAggregateInputType = {
   proposedByJobId?: true
   proposedByK?: true
   proposalIndex?: true
+  stepId?: true
 }
 
 export type JobSumAggregateInputType = {
@@ -178,6 +184,7 @@ export type JobSumAggregateInputType = {
   proposedByJobId?: true
   proposedByK?: true
   proposalIndex?: true
+  stepId?: true
 }
 
 export type JobMinAggregateInputType = {
@@ -206,6 +213,7 @@ export type JobMinAggregateInputType = {
   proposedByJobId?: true
   proposedByK?: true
   proposalIndex?: true
+  stepId?: true
   createdAt?: true
   updatedAt?: true
   finishedAt?: true
@@ -237,6 +245,7 @@ export type JobMaxAggregateInputType = {
   proposedByJobId?: true
   proposedByK?: true
   proposalIndex?: true
+  stepId?: true
   createdAt?: true
   updatedAt?: true
   finishedAt?: true
@@ -275,6 +284,7 @@ export type JobCountAggregateInputType = {
   proposedByJobId?: true
   proposedByK?: true
   proposalIndex?: true
+  stepId?: true
   createdAt?: true
   updatedAt?: true
   finishedAt?: true
@@ -400,6 +410,7 @@ export type JobGroupByOutputType = {
   proposedByJobId: number | null
   proposedByK: number | null
   proposalIndex: number | null
+  stepId: number | null
   createdAt: Date
   updatedAt: Date
   finishedAt: Date | null
@@ -461,10 +472,12 @@ export type JobWhereInput = {
   proposedByJobId?: Prisma.IntNullableFilter<"Job"> | number | null
   proposedByK?: Prisma.IntNullableFilter<"Job"> | number | null
   proposalIndex?: Prisma.IntNullableFilter<"Job"> | number | null
+  stepId?: Prisma.IntNullableFilter<"Job"> | number | null
   createdAt?: Prisma.DateTimeFilter<"Job"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"Job"> | Date | string
   finishedAt?: Prisma.DateTimeNullableFilter<"Job"> | Date | string | null
   board?: Prisma.XOR<Prisma.BoardScalarRelationFilter, Prisma.BoardWhereInput>
+  step?: Prisma.XOR<Prisma.StepNullableScalarRelationFilter, Prisma.StepWhereInput> | null
   attempts?: Prisma.AttemptListRelationFilter
   lease?: Prisma.XOR<Prisma.LeaseNullableScalarRelationFilter, Prisma.LeaseWhereInput> | null
   events?: Prisma.EventListRelationFilter
@@ -503,10 +516,12 @@ export type JobOrderByWithRelationInput = {
   proposedByJobId?: Prisma.SortOrderInput | Prisma.SortOrder
   proposedByK?: Prisma.SortOrderInput | Prisma.SortOrder
   proposalIndex?: Prisma.SortOrderInput | Prisma.SortOrder
+  stepId?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   finishedAt?: Prisma.SortOrderInput | Prisma.SortOrder
   board?: Prisma.BoardOrderByWithRelationInput
+  step?: Prisma.StepOrderByWithRelationInput
   attempts?: Prisma.AttemptOrderByRelationAggregateInput
   lease?: Prisma.LeaseOrderByWithRelationInput
   events?: Prisma.EventOrderByRelationAggregateInput
@@ -514,6 +529,7 @@ export type JobOrderByWithRelationInput = {
 
 export type JobWhereUniqueInput = Prisma.AtLeast<{
   id?: number
+  stepId?: number
   proposedByJobId_proposedByK_proposalIndex?: Prisma.JobProposedByJobIdProposedByKProposalIndexCompoundUniqueInput
   AND?: Prisma.JobWhereInput | Prisma.JobWhereInput[]
   OR?: Prisma.JobWhereInput[]
@@ -553,10 +569,11 @@ export type JobWhereUniqueInput = Prisma.AtLeast<{
   updatedAt?: Prisma.DateTimeFilter<"Job"> | Date | string
   finishedAt?: Prisma.DateTimeNullableFilter<"Job"> | Date | string | null
   board?: Prisma.XOR<Prisma.BoardScalarRelationFilter, Prisma.BoardWhereInput>
+  step?: Prisma.XOR<Prisma.StepNullableScalarRelationFilter, Prisma.StepWhereInput> | null
   attempts?: Prisma.AttemptListRelationFilter
   lease?: Prisma.XOR<Prisma.LeaseNullableScalarRelationFilter, Prisma.LeaseWhereInput> | null
   events?: Prisma.EventListRelationFilter
-}, "id" | "proposedByJobId_proposedByK_proposalIndex">
+}, "id" | "stepId" | "proposedByJobId_proposedByK_proposalIndex">
 
 export type JobOrderByWithAggregationInput = {
   id?: Prisma.SortOrder
@@ -591,6 +608,7 @@ export type JobOrderByWithAggregationInput = {
   proposedByJobId?: Prisma.SortOrderInput | Prisma.SortOrder
   proposedByK?: Prisma.SortOrderInput | Prisma.SortOrder
   proposalIndex?: Prisma.SortOrderInput | Prisma.SortOrder
+  stepId?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   finishedAt?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -637,6 +655,7 @@ export type JobScalarWhereWithAggregatesInput = {
   proposedByJobId?: Prisma.IntNullableWithAggregatesFilter<"Job"> | number | null
   proposedByK?: Prisma.IntNullableWithAggregatesFilter<"Job"> | number | null
   proposalIndex?: Prisma.IntNullableWithAggregatesFilter<"Job"> | number | null
+  stepId?: Prisma.IntNullableWithAggregatesFilter<"Job"> | number | null
   createdAt?: Prisma.DateTimeWithAggregatesFilter<"Job"> | Date | string
   updatedAt?: Prisma.DateTimeWithAggregatesFilter<"Job"> | Date | string
   finishedAt?: Prisma.DateTimeNullableWithAggregatesFilter<"Job"> | Date | string | null
@@ -677,6 +696,7 @@ export type JobCreateInput = {
   updatedAt?: Date | string
   finishedAt?: Date | string | null
   board: Prisma.BoardCreateNestedOneWithoutJobsInput
+  step?: Prisma.StepCreateNestedOneWithoutJobInput
   attempts?: Prisma.AttemptCreateNestedManyWithoutJobInput
   lease?: Prisma.LeaseCreateNestedOneWithoutJobInput
   events?: Prisma.EventCreateNestedManyWithoutJobInput
@@ -715,6 +735,7 @@ export type JobUncheckedCreateInput = {
   proposedByJobId?: number | null
   proposedByK?: number | null
   proposalIndex?: number | null
+  stepId?: number | null
   createdAt?: Date | string
   updatedAt?: Date | string
   finishedAt?: Date | string | null
@@ -758,6 +779,7 @@ export type JobUpdateInput = {
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   board?: Prisma.BoardUpdateOneRequiredWithoutJobsNestedInput
+  step?: Prisma.StepUpdateOneWithoutJobNestedInput
   attempts?: Prisma.AttemptUpdateManyWithoutJobNestedInput
   lease?: Prisma.LeaseUpdateOneWithoutJobNestedInput
   events?: Prisma.EventUpdateManyWithoutJobNestedInput
@@ -796,6 +818,7 @@ export type JobUncheckedUpdateInput = {
   proposedByJobId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   proposedByK?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   proposalIndex?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  stepId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -837,6 +860,7 @@ export type JobCreateManyInput = {
   proposedByJobId?: number | null
   proposedByK?: number | null
   proposalIndex?: number | null
+  stepId?: number | null
   createdAt?: Date | string
   updatedAt?: Date | string
   finishedAt?: Date | string | null
@@ -911,6 +935,7 @@ export type JobUncheckedUpdateManyInput = {
   proposedByJobId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   proposedByK?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   proposalIndex?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  stepId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -965,6 +990,7 @@ export type JobCountOrderByAggregateInput = {
   proposedByJobId?: Prisma.SortOrder
   proposedByK?: Prisma.SortOrder
   proposalIndex?: Prisma.SortOrder
+  stepId?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   finishedAt?: Prisma.SortOrder
@@ -981,6 +1007,7 @@ export type JobAvgOrderByAggregateInput = {
   proposedByJobId?: Prisma.SortOrder
   proposedByK?: Prisma.SortOrder
   proposalIndex?: Prisma.SortOrder
+  stepId?: Prisma.SortOrder
 }
 
 export type JobMaxOrderByAggregateInput = {
@@ -1009,6 +1036,7 @@ export type JobMaxOrderByAggregateInput = {
   proposedByJobId?: Prisma.SortOrder
   proposedByK?: Prisma.SortOrder
   proposalIndex?: Prisma.SortOrder
+  stepId?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   finishedAt?: Prisma.SortOrder
@@ -1040,6 +1068,7 @@ export type JobMinOrderByAggregateInput = {
   proposedByJobId?: Prisma.SortOrder
   proposedByK?: Prisma.SortOrder
   proposalIndex?: Prisma.SortOrder
+  stepId?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   finishedAt?: Prisma.SortOrder
@@ -1056,6 +1085,7 @@ export type JobSumOrderByAggregateInput = {
   proposedByJobId?: Prisma.SortOrder
   proposedByK?: Prisma.SortOrder
   proposalIndex?: Prisma.SortOrder
+  stepId?: Prisma.SortOrder
 }
 
 export type JobScalarRelationFilter = {
@@ -1162,6 +1192,38 @@ export type JobUpdateOneWithoutEventsNestedInput = {
   update?: Prisma.XOR<Prisma.XOR<Prisma.JobUpdateToOneWithWhereWithoutEventsInput, Prisma.JobUpdateWithoutEventsInput>, Prisma.JobUncheckedUpdateWithoutEventsInput>
 }
 
+export type JobCreateNestedOneWithoutStepInput = {
+  create?: Prisma.XOR<Prisma.JobCreateWithoutStepInput, Prisma.JobUncheckedCreateWithoutStepInput>
+  connectOrCreate?: Prisma.JobCreateOrConnectWithoutStepInput
+  connect?: Prisma.JobWhereUniqueInput
+}
+
+export type JobUncheckedCreateNestedOneWithoutStepInput = {
+  create?: Prisma.XOR<Prisma.JobCreateWithoutStepInput, Prisma.JobUncheckedCreateWithoutStepInput>
+  connectOrCreate?: Prisma.JobCreateOrConnectWithoutStepInput
+  connect?: Prisma.JobWhereUniqueInput
+}
+
+export type JobUpdateOneWithoutStepNestedInput = {
+  create?: Prisma.XOR<Prisma.JobCreateWithoutStepInput, Prisma.JobUncheckedCreateWithoutStepInput>
+  connectOrCreate?: Prisma.JobCreateOrConnectWithoutStepInput
+  upsert?: Prisma.JobUpsertWithoutStepInput
+  disconnect?: Prisma.JobWhereInput | boolean
+  delete?: Prisma.JobWhereInput | boolean
+  connect?: Prisma.JobWhereUniqueInput
+  update?: Prisma.XOR<Prisma.XOR<Prisma.JobUpdateToOneWithWhereWithoutStepInput, Prisma.JobUpdateWithoutStepInput>, Prisma.JobUncheckedUpdateWithoutStepInput>
+}
+
+export type JobUncheckedUpdateOneWithoutStepNestedInput = {
+  create?: Prisma.XOR<Prisma.JobCreateWithoutStepInput, Prisma.JobUncheckedCreateWithoutStepInput>
+  connectOrCreate?: Prisma.JobCreateOrConnectWithoutStepInput
+  upsert?: Prisma.JobUpsertWithoutStepInput
+  disconnect?: Prisma.JobWhereInput | boolean
+  delete?: Prisma.JobWhereInput | boolean
+  connect?: Prisma.JobWhereUniqueInput
+  update?: Prisma.XOR<Prisma.XOR<Prisma.JobUpdateToOneWithWhereWithoutStepInput, Prisma.JobUpdateWithoutStepInput>, Prisma.JobUncheckedUpdateWithoutStepInput>
+}
+
 export type JobCreateWithoutBoardInput = {
   name: string
   brief: string
@@ -1196,6 +1258,7 @@ export type JobCreateWithoutBoardInput = {
   createdAt?: Date | string
   updatedAt?: Date | string
   finishedAt?: Date | string | null
+  step?: Prisma.StepCreateNestedOneWithoutJobInput
   attempts?: Prisma.AttemptCreateNestedManyWithoutJobInput
   lease?: Prisma.LeaseCreateNestedOneWithoutJobInput
   events?: Prisma.EventCreateNestedManyWithoutJobInput
@@ -1233,6 +1296,7 @@ export type JobUncheckedCreateWithoutBoardInput = {
   proposedByJobId?: number | null
   proposedByK?: number | null
   proposalIndex?: number | null
+  stepId?: number | null
   createdAt?: Date | string
   updatedAt?: Date | string
   finishedAt?: Date | string | null
@@ -1302,6 +1366,7 @@ export type JobScalarWhereInput = {
   proposedByJobId?: Prisma.IntNullableFilter<"Job"> | number | null
   proposedByK?: Prisma.IntNullableFilter<"Job"> | number | null
   proposalIndex?: Prisma.IntNullableFilter<"Job"> | number | null
+  stepId?: Prisma.IntNullableFilter<"Job"> | number | null
   createdAt?: Prisma.DateTimeFilter<"Job"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"Job"> | Date | string
   finishedAt?: Prisma.DateTimeNullableFilter<"Job"> | Date | string | null
@@ -1342,6 +1407,7 @@ export type JobCreateWithoutAttemptsInput = {
   updatedAt?: Date | string
   finishedAt?: Date | string | null
   board: Prisma.BoardCreateNestedOneWithoutJobsInput
+  step?: Prisma.StepCreateNestedOneWithoutJobInput
   lease?: Prisma.LeaseCreateNestedOneWithoutJobInput
   events?: Prisma.EventCreateNestedManyWithoutJobInput
 }
@@ -1379,6 +1445,7 @@ export type JobUncheckedCreateWithoutAttemptsInput = {
   proposedByJobId?: number | null
   proposedByK?: number | null
   proposalIndex?: number | null
+  stepId?: number | null
   createdAt?: Date | string
   updatedAt?: Date | string
   finishedAt?: Date | string | null
@@ -1437,6 +1504,7 @@ export type JobUpdateWithoutAttemptsInput = {
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   board?: Prisma.BoardUpdateOneRequiredWithoutJobsNestedInput
+  step?: Prisma.StepUpdateOneWithoutJobNestedInput
   lease?: Prisma.LeaseUpdateOneWithoutJobNestedInput
   events?: Prisma.EventUpdateManyWithoutJobNestedInput
 }
@@ -1474,6 +1542,7 @@ export type JobUncheckedUpdateWithoutAttemptsInput = {
   proposedByJobId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   proposedByK?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   proposalIndex?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  stepId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -1516,6 +1585,7 @@ export type JobCreateWithoutLeaseInput = {
   updatedAt?: Date | string
   finishedAt?: Date | string | null
   board: Prisma.BoardCreateNestedOneWithoutJobsInput
+  step?: Prisma.StepCreateNestedOneWithoutJobInput
   attempts?: Prisma.AttemptCreateNestedManyWithoutJobInput
   events?: Prisma.EventCreateNestedManyWithoutJobInput
 }
@@ -1553,6 +1623,7 @@ export type JobUncheckedCreateWithoutLeaseInput = {
   proposedByJobId?: number | null
   proposedByK?: number | null
   proposalIndex?: number | null
+  stepId?: number | null
   createdAt?: Date | string
   updatedAt?: Date | string
   finishedAt?: Date | string | null
@@ -1611,6 +1682,7 @@ export type JobUpdateWithoutLeaseInput = {
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   board?: Prisma.BoardUpdateOneRequiredWithoutJobsNestedInput
+  step?: Prisma.StepUpdateOneWithoutJobNestedInput
   attempts?: Prisma.AttemptUpdateManyWithoutJobNestedInput
   events?: Prisma.EventUpdateManyWithoutJobNestedInput
 }
@@ -1648,6 +1720,7 @@ export type JobUncheckedUpdateWithoutLeaseInput = {
   proposedByJobId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   proposedByK?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   proposalIndex?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  stepId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -1690,6 +1763,7 @@ export type JobCreateWithoutEventsInput = {
   updatedAt?: Date | string
   finishedAt?: Date | string | null
   board: Prisma.BoardCreateNestedOneWithoutJobsInput
+  step?: Prisma.StepCreateNestedOneWithoutJobInput
   attempts?: Prisma.AttemptCreateNestedManyWithoutJobInput
   lease?: Prisma.LeaseCreateNestedOneWithoutJobInput
 }
@@ -1727,6 +1801,7 @@ export type JobUncheckedCreateWithoutEventsInput = {
   proposedByJobId?: number | null
   proposedByK?: number | null
   proposalIndex?: number | null
+  stepId?: number | null
   createdAt?: Date | string
   updatedAt?: Date | string
   finishedAt?: Date | string | null
@@ -1785,6 +1860,7 @@ export type JobUpdateWithoutEventsInput = {
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   board?: Prisma.BoardUpdateOneRequiredWithoutJobsNestedInput
+  step?: Prisma.StepUpdateOneWithoutJobNestedInput
   attempts?: Prisma.AttemptUpdateManyWithoutJobNestedInput
   lease?: Prisma.LeaseUpdateOneWithoutJobNestedInput
 }
@@ -1822,11 +1898,190 @@ export type JobUncheckedUpdateWithoutEventsInput = {
   proposedByJobId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   proposedByK?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   proposalIndex?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  stepId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   attempts?: Prisma.AttemptUncheckedUpdateManyWithoutJobNestedInput
   lease?: Prisma.LeaseUncheckedUpdateOneWithoutJobNestedInput
+}
+
+export type JobCreateWithoutStepInput = {
+  name: string
+  brief: string
+  model?: string | null
+  effort?: string | null
+  maxTurns?: number | null
+  attemptDeadlineSeconds?: number | null
+  activeDeadlineSeconds?: number | null
+  maxBudgetUsd?: number | null
+  isolate?: boolean
+  allowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  guide?: string | null
+  maxRetries?: number | null
+  exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  check?: string | null
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: string | null
+  proposes?: string | null
+  phase?: $Enums.Phase
+  lastSessionId?: string | null
+  lastError?: string | null
+  suspendedFor?: string | null
+  endedBy?: string | null
+  endedFor?: string | null
+  proposedByJobId?: number | null
+  proposedByK?: number | null
+  proposalIndex?: number | null
+  createdAt?: Date | string
+  updatedAt?: Date | string
+  finishedAt?: Date | string | null
+  board: Prisma.BoardCreateNestedOneWithoutJobsInput
+  attempts?: Prisma.AttemptCreateNestedManyWithoutJobInput
+  lease?: Prisma.LeaseCreateNestedOneWithoutJobInput
+  events?: Prisma.EventCreateNestedManyWithoutJobInput
+}
+
+export type JobUncheckedCreateWithoutStepInput = {
+  id?: number
+  boardId: number
+  name: string
+  brief: string
+  model?: string | null
+  effort?: string | null
+  maxTurns?: number | null
+  attemptDeadlineSeconds?: number | null
+  activeDeadlineSeconds?: number | null
+  maxBudgetUsd?: number | null
+  isolate?: boolean
+  allowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  guide?: string | null
+  maxRetries?: number | null
+  exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  check?: string | null
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: string | null
+  proposes?: string | null
+  phase?: $Enums.Phase
+  lastSessionId?: string | null
+  lastError?: string | null
+  suspendedFor?: string | null
+  endedBy?: string | null
+  endedFor?: string | null
+  proposedByJobId?: number | null
+  proposedByK?: number | null
+  proposalIndex?: number | null
+  createdAt?: Date | string
+  updatedAt?: Date | string
+  finishedAt?: Date | string | null
+  attempts?: Prisma.AttemptUncheckedCreateNestedManyWithoutJobInput
+  lease?: Prisma.LeaseUncheckedCreateNestedOneWithoutJobInput
+  events?: Prisma.EventUncheckedCreateNestedManyWithoutJobInput
+}
+
+export type JobCreateOrConnectWithoutStepInput = {
+  where: Prisma.JobWhereUniqueInput
+  create: Prisma.XOR<Prisma.JobCreateWithoutStepInput, Prisma.JobUncheckedCreateWithoutStepInput>
+}
+
+export type JobUpsertWithoutStepInput = {
+  update: Prisma.XOR<Prisma.JobUpdateWithoutStepInput, Prisma.JobUncheckedUpdateWithoutStepInput>
+  create: Prisma.XOR<Prisma.JobCreateWithoutStepInput, Prisma.JobUncheckedCreateWithoutStepInput>
+  where?: Prisma.JobWhereInput
+}
+
+export type JobUpdateToOneWithWhereWithoutStepInput = {
+  where?: Prisma.JobWhereInput
+  data: Prisma.XOR<Prisma.JobUpdateWithoutStepInput, Prisma.JobUncheckedUpdateWithoutStepInput>
+}
+
+export type JobUpdateWithoutStepInput = {
+  name?: Prisma.StringFieldUpdateOperationsInput | string
+  brief?: Prisma.StringFieldUpdateOperationsInput | string
+  model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  attemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  activeDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  maxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
+  isolate?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  allowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  guide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  check?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  proposes?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
+  lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  suspendedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  proposedByJobId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  proposedByK?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  proposalIndex?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  board?: Prisma.BoardUpdateOneRequiredWithoutJobsNestedInput
+  attempts?: Prisma.AttemptUpdateManyWithoutJobNestedInput
+  lease?: Prisma.LeaseUpdateOneWithoutJobNestedInput
+  events?: Prisma.EventUpdateManyWithoutJobNestedInput
+}
+
+export type JobUncheckedUpdateWithoutStepInput = {
+  id?: Prisma.IntFieldUpdateOperationsInput | number
+  boardId?: Prisma.IntFieldUpdateOperationsInput | number
+  name?: Prisma.StringFieldUpdateOperationsInput | string
+  brief?: Prisma.StringFieldUpdateOperationsInput | string
+  model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  attemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  activeDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  maxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
+  isolate?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  allowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  guide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  check?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  proposes?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
+  lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  suspendedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  proposedByJobId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  proposedByK?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  proposalIndex?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  attempts?: Prisma.AttemptUncheckedUpdateManyWithoutJobNestedInput
+  lease?: Prisma.LeaseUncheckedUpdateOneWithoutJobNestedInput
+  events?: Prisma.EventUncheckedUpdateManyWithoutJobNestedInput
 }
 
 export type JobCreateManyBoardInput = {
@@ -1861,6 +2116,7 @@ export type JobCreateManyBoardInput = {
   proposedByJobId?: number | null
   proposedByK?: number | null
   proposalIndex?: number | null
+  stepId?: number | null
   createdAt?: Date | string
   updatedAt?: Date | string
   finishedAt?: Date | string | null
@@ -1900,6 +2156,7 @@ export type JobUpdateWithoutBoardInput = {
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  step?: Prisma.StepUpdateOneWithoutJobNestedInput
   attempts?: Prisma.AttemptUpdateManyWithoutJobNestedInput
   lease?: Prisma.LeaseUpdateOneWithoutJobNestedInput
   events?: Prisma.EventUpdateManyWithoutJobNestedInput
@@ -1937,6 +2194,7 @@ export type JobUncheckedUpdateWithoutBoardInput = {
   proposedByJobId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   proposedByK?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   proposalIndex?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  stepId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -1977,6 +2235,7 @@ export type JobUncheckedUpdateManyWithoutBoardInput = {
   proposedByJobId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   proposedByK?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   proposalIndex?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  stepId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -2055,10 +2314,12 @@ export type JobSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = ru
   proposedByJobId?: boolean
   proposedByK?: boolean
   proposalIndex?: boolean
+  stepId?: boolean
   createdAt?: boolean
   updatedAt?: boolean
   finishedAt?: boolean
   board?: boolean | Prisma.BoardDefaultArgs<ExtArgs>
+  step?: boolean | Prisma.Job$stepArgs<ExtArgs>
   attempts?: boolean | Prisma.Job$attemptsArgs<ExtArgs>
   lease?: boolean | Prisma.Job$leaseArgs<ExtArgs>
   events?: boolean | Prisma.Job$eventsArgs<ExtArgs>
@@ -2098,10 +2359,12 @@ export type JobSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extension
   proposedByJobId?: boolean
   proposedByK?: boolean
   proposalIndex?: boolean
+  stepId?: boolean
   createdAt?: boolean
   updatedAt?: boolean
   finishedAt?: boolean
   board?: boolean | Prisma.BoardDefaultArgs<ExtArgs>
+  step?: boolean | Prisma.Job$stepArgs<ExtArgs>
 }, ExtArgs["result"]["job"]>
 
 export type JobSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
@@ -2137,10 +2400,12 @@ export type JobSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extension
   proposedByJobId?: boolean
   proposedByK?: boolean
   proposalIndex?: boolean
+  stepId?: boolean
   createdAt?: boolean
   updatedAt?: boolean
   finishedAt?: boolean
   board?: boolean | Prisma.BoardDefaultArgs<ExtArgs>
+  step?: boolean | Prisma.Job$stepArgs<ExtArgs>
 }, ExtArgs["result"]["job"]>
 
 export type JobSelectScalar = {
@@ -2176,14 +2441,16 @@ export type JobSelectScalar = {
   proposedByJobId?: boolean
   proposedByK?: boolean
   proposalIndex?: boolean
+  stepId?: boolean
   createdAt?: boolean
   updatedAt?: boolean
   finishedAt?: boolean
 }
 
-export type JobOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "boardId" | "name" | "brief" | "model" | "effort" | "maxTurns" | "attemptDeadlineSeconds" | "activeDeadlineSeconds" | "maxBudgetUsd" | "isolate" | "allowedTools" | "pluginPaths" | "guide" | "maxRetries" | "exports" | "inputs" | "results" | "artifacts" | "check" | "labels" | "gate" | "proposes" | "phase" | "lastSessionId" | "lastError" | "suspendedFor" | "endedBy" | "endedFor" | "proposedByJobId" | "proposedByK" | "proposalIndex" | "createdAt" | "updatedAt" | "finishedAt", ExtArgs["result"]["job"]>
+export type JobOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "boardId" | "name" | "brief" | "model" | "effort" | "maxTurns" | "attemptDeadlineSeconds" | "activeDeadlineSeconds" | "maxBudgetUsd" | "isolate" | "allowedTools" | "pluginPaths" | "guide" | "maxRetries" | "exports" | "inputs" | "results" | "artifacts" | "check" | "labels" | "gate" | "proposes" | "phase" | "lastSessionId" | "lastError" | "suspendedFor" | "endedBy" | "endedFor" | "proposedByJobId" | "proposedByK" | "proposalIndex" | "stepId" | "createdAt" | "updatedAt" | "finishedAt", ExtArgs["result"]["job"]>
 export type JobInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   board?: boolean | Prisma.BoardDefaultArgs<ExtArgs>
+  step?: boolean | Prisma.Job$stepArgs<ExtArgs>
   attempts?: boolean | Prisma.Job$attemptsArgs<ExtArgs>
   lease?: boolean | Prisma.Job$leaseArgs<ExtArgs>
   events?: boolean | Prisma.Job$eventsArgs<ExtArgs>
@@ -2191,15 +2458,18 @@ export type JobInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = r
 }
 export type JobIncludeCreateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   board?: boolean | Prisma.BoardDefaultArgs<ExtArgs>
+  step?: boolean | Prisma.Job$stepArgs<ExtArgs>
 }
 export type JobIncludeUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   board?: boolean | Prisma.BoardDefaultArgs<ExtArgs>
+  step?: boolean | Prisma.Job$stepArgs<ExtArgs>
 }
 
 export type $JobPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "Job"
   objects: {
     board: Prisma.$BoardPayload<ExtArgs>
+    step: Prisma.$StepPayload<ExtArgs> | null
     attempts: Prisma.$AttemptPayload<ExtArgs>[]
     lease: Prisma.$LeasePayload<ExtArgs> | null
     events: Prisma.$EventPayload<ExtArgs>[]
@@ -2473,6 +2743,24 @@ export type $JobPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
     proposedByJobId: number | null
     proposedByK: number | null
     proposalIndex: number | null
+    /**
+     * The Step this Job carries out, or null for the Jobs nobody sequenced — which is nearly all of
+     * them.
+     * 
+     * **The owner reference, and it lives on the CHILD**, the way `metadata.ownerReferences` does and
+     * the way `proposedByJobId` above already does. Putting it here rather than a `jobId` on `Step` is
+     * what makes `reconcileRuns` idempotent without a transaction: the second pass over the same ready
+     * Step tries to create a second Job carrying the same `stepId`, and `@unique` refuses it. That is
+     * the rule the three columns above are already written to — *a constraint that refuses beats logic
+     * that has to be right* — and it is the one thing a parent-side pointer could not give, because a
+     * duplicate Job gets a fresh id and no constraint would see it.
+     * 
+     * `onDelete: SetNull`, not Cascade: `hkb rm` on a Job is the operator saying "this run of the work
+     * is gone", and the Step is a *declaration* that outlives it. The next pass sees a Step with no Job
+     * and files another — which is what a level-triggered controller is for, and what deleting a Pod
+     * out from under a Job does in Kubernetes.
+     */
+    stepId: number | null
     createdAt: Date
     updatedAt: Date
     finishedAt: Date | null
@@ -2871,6 +3159,7 @@ readonly fields: JobFieldRefs;
 export interface Prisma__JobClient<T, Null = never, ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs, GlobalOmitOptions = {}> extends Prisma.PrismaPromise<T> {
   readonly [Symbol.toStringTag]: "PrismaPromise"
   board<T extends Prisma.BoardDefaultArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.BoardDefaultArgs<ExtArgs>>): Prisma.Prisma__BoardClient<runtime.Types.Result.GetResult<Prisma.$BoardPayload<ExtArgs>, T, "findUniqueOrThrow", GlobalOmitOptions> | Null, Null, ExtArgs, GlobalOmitOptions>
+  step<T extends Prisma.Job$stepArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.Job$stepArgs<ExtArgs>>): Prisma.Prisma__StepClient<runtime.Types.Result.GetResult<Prisma.$StepPayload<ExtArgs>, T, "findUniqueOrThrow", GlobalOmitOptions> | null, null, ExtArgs, GlobalOmitOptions>
   attempts<T extends Prisma.Job$attemptsArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.Job$attemptsArgs<ExtArgs>>): Prisma.PrismaPromise<runtime.Types.Result.GetResult<Prisma.$AttemptPayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
   lease<T extends Prisma.Job$leaseArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.Job$leaseArgs<ExtArgs>>): Prisma.Prisma__LeaseClient<runtime.Types.Result.GetResult<Prisma.$LeasePayload<ExtArgs>, T, "findUniqueOrThrow", GlobalOmitOptions> | null, null, ExtArgs, GlobalOmitOptions>
   events<T extends Prisma.Job$eventsArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.Job$eventsArgs<ExtArgs>>): Prisma.PrismaPromise<runtime.Types.Result.GetResult<Prisma.$EventPayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
@@ -2935,6 +3224,7 @@ export interface JobFieldRefs {
   readonly proposedByJobId: Prisma.FieldRef<"Job", 'Int'>
   readonly proposedByK: Prisma.FieldRef<"Job", 'Int'>
   readonly proposalIndex: Prisma.FieldRef<"Job", 'Int'>
+  readonly stepId: Prisma.FieldRef<"Job", 'Int'>
   readonly createdAt: Prisma.FieldRef<"Job", 'DateTime'>
   readonly updatedAt: Prisma.FieldRef<"Job", 'DateTime'>
   readonly finishedAt: Prisma.FieldRef<"Job", 'DateTime'>
@@ -3334,6 +3624,25 @@ export type JobDeleteManyArgs<ExtArgs extends runtime.Types.Extensions.InternalA
    * Limit how many Jobs to delete.
    */
   limit?: number
+}
+
+/**
+ * Job.step
+ */
+export type Job$stepArgs<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
+  /**
+   * Select specific fields to fetch from the Step
+   */
+  select?: Prisma.StepSelect<ExtArgs> | null
+  /**
+   * Omit specific fields from the Step
+   */
+  omit?: Prisma.StepOmit<ExtArgs> | null
+  /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.StepInclude<ExtArgs> | null
+  where?: Prisma.StepWhereInput
 }
 
 /**

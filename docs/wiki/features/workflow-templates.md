@@ -9,13 +9,13 @@ covers:
   - path: src/templates.ts
     sha: 169ac395a4b608e231beeb978952da3adfc8c82c
   - path: src/hkb.ts
-    sha: c06820804f259a976336c80742b3068586df9d84
+    sha: 34ab3eea05412ec969d728978076d2634efdb1c5
   - path: src/inputs.ts
     sha: 6ed576d25bf9db5f8b76e3752c17a250725df3b6
   - path: src/filing.ts
-    sha: afa2d406f78ccb1bc6c9d73cc4a56cdf0b16a16a
+    sha: 8f04eb76130291b1bf89174799cf5ba1c23955e3
   - path: prisma/schema.prisma
-    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
+    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
 related:
   [
     decisions/adr-015-machinery-and-consumer,
@@ -26,7 +26,7 @@ related:
     concepts/ceilings,
     features/proposals,
   ]
-generated_at_commit: 62135e9
+generated_at_commit: 26055f1
 last_refreshed: 2026-09-10
 ---
 
@@ -339,6 +339,28 @@ the shipped reader**, which is the thing that would rot.
 One detail in that file is worth keeping: it sets `max-turns: 60`. The built-in is 20
 (`src/spec.ts`), and the first of the four Jobs it is reconstructed from stopped on `max_turns` at 20
 having spent $1.56 and produced nothing. A workflow is where that lesson can be written down once.
+
+## A workflow is now also a step's identity
+
+`hkb new "the parser" --steps implement,review` cuts a `Run` whose `Step` rows are named
+`implement` and `review` — and those names *are* these filenames. The Run controller files each
+step's Job with `--from <step name>` when its predecessor succeeds (`src/runs.ts`,
+*features/runs-and-steps*).
+
+That is why sequencing needed no file format of its own. Everything a step is — its model, its
+budget, its tool surface, its gate, its whole instruction — was already expressible here, in a file
+whose 21 frontmatter keys are `hkb new`'s flags. The only thing this format could not say is *what
+comes after what*, and that is the one thing that became a column.
+
+Two consequences worth knowing before writing a workflow that a run will use:
+
+- **The board's default workflow is still appended.** `--from` does not exclude it (`src/filing.ts`),
+  so a `review` step on a board whose default is `implement` is told to commit, push and open a pull
+  request. That is a known gap awaiting the Job's lineage column, not a decision about reviews.
+- **A placeholder in the body refuses the step.** A run supplies no `--input`, so `{{page}}` cannot be
+  filled, and the step is reported stalled by name rather than filed with the literal text. Nothing
+  flows along an edge yet, deliberately — *features/runs-and-steps* has the reason, and it is a
+  safety one.
 
 ## Known gaps
 

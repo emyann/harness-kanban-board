@@ -117,7 +117,7 @@ export async function createJob(
   db: Db,
   scope: FilingScope,
   spec: FilingSpec,
-  opts: { by: string },
+  opts: { by: string; forStep?: number },
 ): Promise<Filed> {
   // A copy, because the fills below write into it. A caller's object is theirs.
   const values: Record<string, unknown> = { ...spec };
@@ -391,6 +391,13 @@ export async function createJob(
       // check at file time would refuse the one workflow the field exists for. It is checked
       // when the checkout is made, where a missing ref fails the Job by name (`src/controller.ts`).
       ...(triage ? { phase: 'triage' as const } : {}),
+      // The owner reference, when this Job is one step of a run (`src/runs.ts`). Set HERE rather
+      // than by an update afterwards, and that is the whole of what makes `reconcileRuns`
+      // idempotent: `Job.stepId` is `@unique`, so a second pass over the same ready step is
+      // refused by the database with P2002 — the same mechanism, and the same argument, as
+      // `(proposedByJobId, proposedByK, proposalIndex)`. Filing first and pointing after would
+      // leave a window in which a crash means two Jobs for one step, and no constraint could see it.
+      ...(opts.forStep === undefined ? {} : { stepId: opts.forStep }),
       proposes,
       model,
       effort: effort ?? null,

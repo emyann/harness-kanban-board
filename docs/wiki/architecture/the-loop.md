@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "changing the daemon, the reclaim rule, or anything that decides whether a lease may be taken"
 covers:
   - path: src/daemon.ts
-    sha: 3de5966ef5a47b7e7c7f0ecc0e6fc7c2b238dc76
+    sha: 4c8ba70c686f4876addbe4a9c079c6ba0fa36a2b
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
@@ -20,7 +20,7 @@ covers:
     sha: 730324bea5aa0fe083bc5fb7244c06ce20a54c2c
   - path: src/workspaces.ts
     sha: b709212e781376f570a613907a209648dab91526
-generated_at_commit: 62135e9
+generated_at_commit: 26055f1
 last_refreshed: 2026-09-10
 related: [architecture/job-kind, architecture/runtime-layer, decisions/adr-007-workload-scheduler, decisions/adr-016-the-pod-spec-is-the-map, concepts/leases-and-liveness, features/check]
 ---
@@ -127,8 +127,11 @@ had to poll `hkb ls` and diff.
 
 ## One step that is pure controller
 
-`applyProposals` is the exception to the fusion above, and worth knowing about because it is the only
-part of the pass that **creates rows**. It runs after the reclaim and before anything is claimed: a
+`applyProposals` is the exception to the fusion above, and worth knowing about because it is one of
+only two parts of a pass that **create rows** — the other is `reconcileRuns`, which is not in this
+file at all: it is the board's kind, composed in front of this one by `src/pass.ts`
+(*features/runs-and-steps*). Both run before anything is claimed, and for the same reason, so a row
+created this pass is claimable in it. `applyProposals` runs after the reclaim and before any claim: a
 Job approved with `hkb approve` is `pending` again, and if it reached the claim loop it would be *run
 a second time* rather than have what it proposed filed (`src/controller.ts`, `features/proposals`).
 
@@ -141,7 +144,8 @@ one.
 
 Only four things are genuinely time-driven, and none has a sub-minute tolerance:
 a lease expiring, a run passing its wall clock, scheduled work (a kind that
-does not exist yet), and a workspace passing its TTL. The change-driven
+does not exist yet — `Run`/`Step` sequences, it does not schedule by clock),
+and a workspace passing its TTL. The change-driven
 half — *a Job was filed, run it* — is always one `hkb run` away, so it does not
 set the cadence.
 

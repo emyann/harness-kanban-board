@@ -19,7 +19,7 @@ covers:
   - path: src/spec.ts
     sha: a83486dc8471b6e0358af03bafba75fa363c4032
   - path: prisma/schema.prisma
-    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
+    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
 related:
   [
     decisions/adr-007-workload-scheduler,
@@ -29,7 +29,7 @@ related:
     features/skill-invocation,
     decisions/adr-018-the-boundary,
   ]
-generated_at_commit: 62135e9
+generated_at_commit: 26055f1
 last_refreshed: 2026-09-10
 ---
 

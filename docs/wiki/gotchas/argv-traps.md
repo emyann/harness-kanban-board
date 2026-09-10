@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "adding a flag, adding a verb that joins positionals, or wondering why a value arrived as one word — or as the word `true`, or as another flag"
 covers:
   - path: src/hkb.ts
-    sha: c06820804f259a976336c80742b3068586df9d84
+    sha: 34ab3eea05412ec969d728978076d2634efdb1c5
   - path: src/flags.ts
     sha: 7140df95e7457ce3f2ed4fe3fe38e19476728dd1
 related:
@@ -16,7 +16,7 @@ related:
     features/workflow-templates,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: 62135e9
+generated_at_commit: 26055f1
 last_refreshed: 2026-09-10
 ---
 

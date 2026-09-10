@@ -62,3 +62,35 @@ export type Lease = Prisma.LeaseModel
  * operator-level entries that explain the gaps in it.
  */
 export type Event = Prisma.EventModel
+/**
+ * Model Run
+ * A sequenced piece of work — the second kind, and the first thing on this board that is not a Job.
+ * 
+ * ADR-018 draws the line this sits on: hkb-the-machinery is one kind, `Job`, whose whole contract
+ * is *cut a workspace, run one agent session under limits, record what happened, clean up*. Ordering
+ * is not in it and `batch/v1` has no field for it either. So ordering becomes a kind of its own with
+ * a controller of its own, built **on** the Job kind — `tekton.dev` on `batch/v1` — and `src/runs.ts`
+ * is that controller. Nothing in `src/controller.ts` knows either of these tables exists.
+ * 
+ * A `Run` holds no status. Whether it is finished is a question about its Steps' Jobs, and SQLite
+ * can join for it — which is the whole reason the answer is not copied here. Tekton learned that
+ * one the expensive way and reversed it in v0.45 (TEP-0100): `PipelineRun.status.taskruns` held a
+ * copy of every child's status, so every child transition rewrote the parent, and what replaced it
+ * was `childReferences` — a reference, deliberately without even the child's pass/fail bit.
+ */
+export type Run = Prisma.RunModel
+/**
+ * Model Step
+ * One step of a run: a name, and what must succeed before it.
+ * 
+ * **Four columns of consequence, and no fifth.** There is no `model`, no `brief`, no budget and no
+ * tool surface here, because none of them changes what a reconcile pass *decides*: the controller
+ * hands them over unread at the moment it files the Job, and the place they are already written is
+ * `.hkb/workflows/<name>.md`, whose frontmatter has 21 keys (`src/templates.ts`) and whose body is
+ * the brief. A field the controller hands over without reading is not a decision input, and storing
+ * it would only mean two places to edit it and one of them stale.
+ * 
+ * So `name` is the workflow's name — the step *is* the file — and that is why v1 needs no file
+ * format at all.
+ */
+export type Step = Prisma.StepModel

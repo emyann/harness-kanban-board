@@ -7,16 +7,16 @@ audience: [dev]
 read_when: "installing hkb on a machine that should keep reconciling without somebody logged in at a terminal"
 covers:
   - path: src/daemon.ts
-    sha: 3de5966ef5a47b7e7c7f0ecc0e6fc7c2b238dc76
+    sha: 4c8ba70c686f4876addbe4a9c079c6ba0fa36a2b
   - path: src/workspaces.ts
     sha: b709212e781376f570a613907a209648dab91526
   - path: src/hkb.ts
-    sha: c06820804f259a976336c80742b3068586df9d84
+    sha: 34ab3eea05412ec969d728978076d2634efdb1c5
   - path: src/runtime/claude.ts
     sha: e3afb9de9e34d90f222e7bf9865cbad39e99044b
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
-generated_at_commit: 62135e9
+generated_at_commit: 26055f1
 last_refreshed: 2026-09-10
 related: [architecture/the-loop, architecture/job-kind, decisions/adr-007-workload-scheduler, decisions/adr-018-the-boundary]
 ---

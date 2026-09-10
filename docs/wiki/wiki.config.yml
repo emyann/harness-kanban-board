@@ -116,6 +116,9 @@ pages:
   - slug: features/check
     summary: "A shell command run in the attempt's checkout after the run and after the rebase, whose non-zero exit fails the attempt. Why it sits beside the declared outputs rather than in a hooks list, why the command may never come from the worktree, and why a failed check is transient, resumable, and briefed to the next attempt."
     status: seeded
+  - slug: features/runs-and-steps
+    summary: "Ordering, as a kind of its own: four columns of consequence, a pure `readyNow`, and everything else left in the workflow markdown. Why the owner reference sits on the Job, why there is no `phase` on a Step, and what v1 deliberately cannot say."
+    status: seeded
   - slug: features/skill-invocation
     summary: "The `Skill` tool on the default surface, and the measurement that had never been taken: ADR-012 proved a repository's skills REACH a worker and the gate denied the tool that CALLS one, so every plugin grant was inert. What admitting it does and does not widen, the three runs that recorded the first skill invocation, and why `Agent` stays out."
     status: seeded

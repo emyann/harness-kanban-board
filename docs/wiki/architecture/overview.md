@@ -9,11 +9,11 @@ covers:
   - path: bin/hkb.ts
     sha: 698dd0e673a442929b7314d6bb409f87f89b8251
   - path: src/hkb.ts
-    sha: c06820804f259a976336c80742b3068586df9d84
+    sha: 34ab3eea05412ec969d728978076d2634efdb1c5
   - path: src/controller.ts
     sha: 6563f3234641037e46504688115ac5ed4b76cf1b
   - path: src/daemon.ts
-    sha: 3de5966ef5a47b7e7c7f0ecc0e6fc7c2b238dc76
+    sha: 4c8ba70c686f4876addbe4a9c079c6ba0fa36a2b
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
   - path: src/db-url.ts
@@ -27,7 +27,7 @@ covers:
   - path: src/templates.ts
     sha: 169ac395a4b608e231beeb978952da3adfc8c82c
   - path: src/labels.ts
-    sha: b524ef31fce5611a1a676dfb4631aaa83ecba926
+    sha: 10ab4cd1a9170ef5426c135cbaf74ddedf979863
   - path: src/watch.ts
     sha: 992b53f9dc3ef4284c2a1bf0201794490afee393
   - path: src/workspaces.ts
@@ -37,7 +37,7 @@ covers:
   - path: src/brief.ts
     sha: b3eddf6aebd95fdab1f38424b24851d6a4e3e5a2
   - path: prisma/schema.prisma
-    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
+    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
 related:
   [
     architecture/job-kind,
@@ -48,7 +48,7 @@ related:
     decisions/adr-009-retiring-the-first-system,
     decisions/adr-011-proposals-not-board-access,
   ]
-generated_at_commit: 62135e9
+generated_at_commit: 26055f1
 last_refreshed: 2026-09-10
 ---
 
@@ -260,9 +260,11 @@ not know which answered.
 
 ## What is deliberately not here
 
-- **A dependency graph.** Cards that depend on cards is a *second workload kind* that does not exist yet;
-  its controller will create Jobs the way a CronJob creates Jobs, and its ordering rule belongs in the
-  admission gate rather than in a prompt. `docs/rebuild-plan.md` holds the order.
+- **A dependency graph.** Ordering now exists as the *second kind* it was always going to be —
+  `Run`/`Step`, whose controller creates Jobs the way a CronJob creates Jobs
+  (*features/runs-and-steps*). What is still not here is everything past a chain: no conditionals, no
+  fan-out, no `finally`, nothing flowing along an edge, and no supervision of a set. The ordering
+  rule turned out to belong in a pure function over rows rather than in the admission gate.
 - **An LLM anywhere in the controller.** The reconcile pass is arithmetic and SQL.
 - **A merge.** hkb never merges. That is the one step a human keeps.
 - **A branch, a push, a rebase or a pull request.** The core knows none of them

@@ -5,7 +5,7 @@ import { openBoard } from './db.ts';
 import { boardDir } from './db-url.ts';
 
 export { boardDir };
-import { reconcile } from './controller.ts';
+import { pass } from './pass.ts';
 import { basename as pathBasename } from 'node:path';
 import {
   BUILT_IN_TTL_SECONDS, collectable, existingWorkspaces, removeWorkspace,
@@ -380,7 +380,7 @@ export async function loop(deps: LoopDeps): Promise<number> {
           });
         }
 
-        const report = await reconcile({
+        const report = await pass({
           runtime: deps.runtime,
           cwd: deps.cwd,
           board: b.slug,

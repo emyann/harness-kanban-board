@@ -1281,8 +1281,13 @@ test('hkb ls says so when a succeeded Job produced nothing, and stays quiet when
   const line = (id: number) => out.split('\n').find((l) => l.includes(`#${id}`)) ?? '';
   assert.match(line(empty.id), /produced nothing/, 'the absence is on the row, not only in `hkb show`');
   assert.doesNotMatch(line(shipped.id), /produced nothing/, 'and a Job that shipped is not accused of it');
-  assert.match(out, /1 of 2 succeeded Jobs? .*declared no outputs\./,
+  assert.match(out, /1 of 2 succeeded Jobs? declared no outputs and left nothing behind\./,
     'and the count is the aggregate the finding asked for');
+  // The line used to read "produced no pull request and declared no outputs", which stopped being
+  // true at ADR-018: `producedNothing` no longer asks a forge anything, so the sentence was naming
+  // a check nobody runs. Asserted rather than merely fixed, because a stale message is exactly the
+  // kind of thing that survives a demolition by not being in anybody's test.
+  assert.doesNotMatch(out, /pull request/);
 
   const rows = json((await hkb('ls', '--board', 'produced-nothing', '--json')).out) as
     { id: number; exports: string[]; producedNothing: boolean }[];

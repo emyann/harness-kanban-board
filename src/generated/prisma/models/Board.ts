@@ -365,6 +365,7 @@ export type BoardWhereInput = {
   createdAt?: Prisma.DateTimeFilter<"Board"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"Board"> | Date | string
   jobs?: Prisma.JobListRelationFilter
+  runs?: Prisma.RunListRelationFilter
   events?: Prisma.EventListRelationFilter
   controller?: Prisma.XOR<Prisma.ControllerNullableScalarRelationFilter, Prisma.ControllerWhereInput> | null
 }
@@ -392,6 +393,7 @@ export type BoardOrderByWithRelationInput = {
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   jobs?: Prisma.JobOrderByRelationAggregateInput
+  runs?: Prisma.RunOrderByRelationAggregateInput
   events?: Prisma.EventOrderByRelationAggregateInput
   controller?: Prisma.ControllerOrderByWithRelationInput
 }
@@ -422,6 +424,7 @@ export type BoardWhereUniqueInput = Prisma.AtLeast<{
   createdAt?: Prisma.DateTimeFilter<"Board"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"Board"> | Date | string
   jobs?: Prisma.JobListRelationFilter
+  runs?: Prisma.RunListRelationFilter
   events?: Prisma.EventListRelationFilter
   controller?: Prisma.XOR<Prisma.ControllerNullableScalarRelationFilter, Prisma.ControllerWhereInput> | null
 }, "id" | "slug">
@@ -504,6 +507,7 @@ export type BoardCreateInput = {
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobCreateNestedManyWithoutBoardInput
+  runs?: Prisma.RunCreateNestedManyWithoutBoardInput
   events?: Prisma.EventCreateNestedManyWithoutBoardInput
   controller?: Prisma.ControllerCreateNestedOneWithoutBoardInput
 }
@@ -531,6 +535,7 @@ export type BoardUncheckedCreateInput = {
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobUncheckedCreateNestedManyWithoutBoardInput
+  runs?: Prisma.RunUncheckedCreateNestedManyWithoutBoardInput
   events?: Prisma.EventUncheckedCreateNestedManyWithoutBoardInput
   controller?: Prisma.ControllerUncheckedCreateNestedOneWithoutBoardInput
 }
@@ -557,6 +562,7 @@ export type BoardUpdateInput = {
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUpdateManyWithoutBoardNestedInput
+  runs?: Prisma.RunUpdateManyWithoutBoardNestedInput
   events?: Prisma.EventUpdateManyWithoutBoardNestedInput
   controller?: Prisma.ControllerUpdateOneWithoutBoardNestedInput
 }
@@ -584,6 +590,7 @@ export type BoardUncheckedUpdateInput = {
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUncheckedUpdateManyWithoutBoardNestedInput
+  runs?: Prisma.RunUncheckedUpdateManyWithoutBoardNestedInput
   events?: Prisma.EventUncheckedUpdateManyWithoutBoardNestedInput
   controller?: Prisma.ControllerUncheckedUpdateOneWithoutBoardNestedInput
 }
@@ -843,6 +850,20 @@ export type BoardUpdateOneWithoutEventsNestedInput = {
   update?: Prisma.XOR<Prisma.XOR<Prisma.BoardUpdateToOneWithWhereWithoutEventsInput, Prisma.BoardUpdateWithoutEventsInput>, Prisma.BoardUncheckedUpdateWithoutEventsInput>
 }
 
+export type BoardCreateNestedOneWithoutRunsInput = {
+  create?: Prisma.XOR<Prisma.BoardCreateWithoutRunsInput, Prisma.BoardUncheckedCreateWithoutRunsInput>
+  connectOrCreate?: Prisma.BoardCreateOrConnectWithoutRunsInput
+  connect?: Prisma.BoardWhereUniqueInput
+}
+
+export type BoardUpdateOneRequiredWithoutRunsNestedInput = {
+  create?: Prisma.XOR<Prisma.BoardCreateWithoutRunsInput, Prisma.BoardUncheckedCreateWithoutRunsInput>
+  connectOrCreate?: Prisma.BoardCreateOrConnectWithoutRunsInput
+  upsert?: Prisma.BoardUpsertWithoutRunsInput
+  connect?: Prisma.BoardWhereUniqueInput
+  update?: Prisma.XOR<Prisma.XOR<Prisma.BoardUpdateToOneWithWhereWithoutRunsInput, Prisma.BoardUpdateWithoutRunsInput>, Prisma.BoardUncheckedUpdateWithoutRunsInput>
+}
+
 export type BoardCreateWithoutControllerInput = {
   slug: string
   repoPath?: string | null
@@ -865,6 +886,7 @@ export type BoardCreateWithoutControllerInput = {
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobCreateNestedManyWithoutBoardInput
+  runs?: Prisma.RunCreateNestedManyWithoutBoardInput
   events?: Prisma.EventCreateNestedManyWithoutBoardInput
 }
 
@@ -891,6 +913,7 @@ export type BoardUncheckedCreateWithoutControllerInput = {
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobUncheckedCreateNestedManyWithoutBoardInput
+  runs?: Prisma.RunUncheckedCreateNestedManyWithoutBoardInput
   events?: Prisma.EventUncheckedCreateNestedManyWithoutBoardInput
 }
 
@@ -932,6 +955,7 @@ export type BoardUpdateWithoutControllerInput = {
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUpdateManyWithoutBoardNestedInput
+  runs?: Prisma.RunUpdateManyWithoutBoardNestedInput
   events?: Prisma.EventUpdateManyWithoutBoardNestedInput
 }
 
@@ -958,6 +982,7 @@ export type BoardUncheckedUpdateWithoutControllerInput = {
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUncheckedUpdateManyWithoutBoardNestedInput
+  runs?: Prisma.RunUncheckedUpdateManyWithoutBoardNestedInput
   events?: Prisma.EventUncheckedUpdateManyWithoutBoardNestedInput
 }
 
@@ -982,6 +1007,7 @@ export type BoardCreateWithoutJobsInput = {
   defaultWorkflow?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
+  runs?: Prisma.RunCreateNestedManyWithoutBoardInput
   events?: Prisma.EventCreateNestedManyWithoutBoardInput
   controller?: Prisma.ControllerCreateNestedOneWithoutBoardInput
 }
@@ -1008,6 +1034,7 @@ export type BoardUncheckedCreateWithoutJobsInput = {
   defaultWorkflow?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
+  runs?: Prisma.RunUncheckedCreateNestedManyWithoutBoardInput
   events?: Prisma.EventUncheckedCreateNestedManyWithoutBoardInput
   controller?: Prisma.ControllerUncheckedCreateNestedOneWithoutBoardInput
 }
@@ -1049,6 +1076,7 @@ export type BoardUpdateWithoutJobsInput = {
   defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  runs?: Prisma.RunUpdateManyWithoutBoardNestedInput
   events?: Prisma.EventUpdateManyWithoutBoardNestedInput
   controller?: Prisma.ControllerUpdateOneWithoutBoardNestedInput
 }
@@ -1075,6 +1103,7 @@ export type BoardUncheckedUpdateWithoutJobsInput = {
   defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  runs?: Prisma.RunUncheckedUpdateManyWithoutBoardNestedInput
   events?: Prisma.EventUncheckedUpdateManyWithoutBoardNestedInput
   controller?: Prisma.ControllerUncheckedUpdateOneWithoutBoardNestedInput
 }
@@ -1101,6 +1130,7 @@ export type BoardCreateWithoutEventsInput = {
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobCreateNestedManyWithoutBoardInput
+  runs?: Prisma.RunCreateNestedManyWithoutBoardInput
   controller?: Prisma.ControllerCreateNestedOneWithoutBoardInput
 }
 
@@ -1127,6 +1157,7 @@ export type BoardUncheckedCreateWithoutEventsInput = {
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobUncheckedCreateNestedManyWithoutBoardInput
+  runs?: Prisma.RunUncheckedCreateNestedManyWithoutBoardInput
   controller?: Prisma.ControllerUncheckedCreateNestedOneWithoutBoardInput
 }
 
@@ -1168,6 +1199,7 @@ export type BoardUpdateWithoutEventsInput = {
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUpdateManyWithoutBoardNestedInput
+  runs?: Prisma.RunUpdateManyWithoutBoardNestedInput
   controller?: Prisma.ControllerUpdateOneWithoutBoardNestedInput
 }
 
@@ -1194,6 +1226,129 @@ export type BoardUncheckedUpdateWithoutEventsInput = {
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUncheckedUpdateManyWithoutBoardNestedInput
+  runs?: Prisma.RunUncheckedUpdateManyWithoutBoardNestedInput
+  controller?: Prisma.ControllerUncheckedUpdateOneWithoutBoardNestedInput
+}
+
+export type BoardCreateWithoutRunsInput = {
+  slug: string
+  repoPath?: string | null
+  pausedAt?: Date | string | null
+  pausedBy?: string | null
+  dailyBudgetUsd?: number | null
+  maxConcurrent?: number
+  defaultModel?: string | null
+  defaultEffort?: string | null
+  defaultMaxTurns?: number | null
+  defaultAttemptDeadlineSeconds?: number | null
+  defaultActiveDeadlineSeconds?: number | null
+  defaultMaxBudgetUsd?: number | null
+  defaultMaxRetries?: number | null
+  defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultGuide?: string | null
+  defaultCheck?: string | null
+  defaultWorkflow?: string | null
+  createdAt?: Date | string
+  updatedAt?: Date | string
+  jobs?: Prisma.JobCreateNestedManyWithoutBoardInput
+  events?: Prisma.EventCreateNestedManyWithoutBoardInput
+  controller?: Prisma.ControllerCreateNestedOneWithoutBoardInput
+}
+
+export type BoardUncheckedCreateWithoutRunsInput = {
+  id?: number
+  slug: string
+  repoPath?: string | null
+  pausedAt?: Date | string | null
+  pausedBy?: string | null
+  dailyBudgetUsd?: number | null
+  maxConcurrent?: number
+  defaultModel?: string | null
+  defaultEffort?: string | null
+  defaultMaxTurns?: number | null
+  defaultAttemptDeadlineSeconds?: number | null
+  defaultActiveDeadlineSeconds?: number | null
+  defaultMaxBudgetUsd?: number | null
+  defaultMaxRetries?: number | null
+  defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultGuide?: string | null
+  defaultCheck?: string | null
+  defaultWorkflow?: string | null
+  createdAt?: Date | string
+  updatedAt?: Date | string
+  jobs?: Prisma.JobUncheckedCreateNestedManyWithoutBoardInput
+  events?: Prisma.EventUncheckedCreateNestedManyWithoutBoardInput
+  controller?: Prisma.ControllerUncheckedCreateNestedOneWithoutBoardInput
+}
+
+export type BoardCreateOrConnectWithoutRunsInput = {
+  where: Prisma.BoardWhereUniqueInput
+  create: Prisma.XOR<Prisma.BoardCreateWithoutRunsInput, Prisma.BoardUncheckedCreateWithoutRunsInput>
+}
+
+export type BoardUpsertWithoutRunsInput = {
+  update: Prisma.XOR<Prisma.BoardUpdateWithoutRunsInput, Prisma.BoardUncheckedUpdateWithoutRunsInput>
+  create: Prisma.XOR<Prisma.BoardCreateWithoutRunsInput, Prisma.BoardUncheckedCreateWithoutRunsInput>
+  where?: Prisma.BoardWhereInput
+}
+
+export type BoardUpdateToOneWithWhereWithoutRunsInput = {
+  where?: Prisma.BoardWhereInput
+  data: Prisma.XOR<Prisma.BoardUpdateWithoutRunsInput, Prisma.BoardUncheckedUpdateWithoutRunsInput>
+}
+
+export type BoardUpdateWithoutRunsInput = {
+  slug?: Prisma.StringFieldUpdateOperationsInput | string
+  repoPath?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  pausedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  pausedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  dailyBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
+  maxConcurrent?: Prisma.IntFieldUpdateOperationsInput | number
+  defaultModel?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  defaultEffort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  defaultMaxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultAttemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultActiveDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
+  defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  jobs?: Prisma.JobUpdateManyWithoutBoardNestedInput
+  events?: Prisma.EventUpdateManyWithoutBoardNestedInput
+  controller?: Prisma.ControllerUpdateOneWithoutBoardNestedInput
+}
+
+export type BoardUncheckedUpdateWithoutRunsInput = {
+  id?: Prisma.IntFieldUpdateOperationsInput | number
+  slug?: Prisma.StringFieldUpdateOperationsInput | string
+  repoPath?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  pausedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  pausedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  dailyBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
+  maxConcurrent?: Prisma.IntFieldUpdateOperationsInput | number
+  defaultModel?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  defaultEffort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  defaultMaxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultAttemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultActiveDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
+  defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  jobs?: Prisma.JobUncheckedUpdateManyWithoutBoardNestedInput
+  events?: Prisma.EventUncheckedUpdateManyWithoutBoardNestedInput
   controller?: Prisma.ControllerUncheckedUpdateOneWithoutBoardNestedInput
 }
 
@@ -1204,11 +1359,13 @@ export type BoardUncheckedUpdateWithoutEventsInput = {
 
 export type BoardCountOutputType = {
   jobs: number
+  runs: number
   events: number
 }
 
 export type BoardCountOutputTypeSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   jobs?: boolean | BoardCountOutputTypeCountJobsArgs
+  runs?: boolean | BoardCountOutputTypeCountRunsArgs
   events?: boolean | BoardCountOutputTypeCountEventsArgs
 }
 
@@ -1227,6 +1384,13 @@ export type BoardCountOutputTypeDefaultArgs<ExtArgs extends runtime.Types.Extens
  */
 export type BoardCountOutputTypeCountJobsArgs<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   where?: Prisma.JobWhereInput
+}
+
+/**
+ * BoardCountOutputType without action
+ */
+export type BoardCountOutputTypeCountRunsArgs<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
+  where?: Prisma.RunWhereInput
 }
 
 /**
@@ -1260,6 +1424,7 @@ export type BoardSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
   createdAt?: boolean
   updatedAt?: boolean
   jobs?: boolean | Prisma.Board$jobsArgs<ExtArgs>
+  runs?: boolean | Prisma.Board$runsArgs<ExtArgs>
   events?: boolean | Prisma.Board$eventsArgs<ExtArgs>
   controller?: boolean | Prisma.Board$controllerArgs<ExtArgs>
   _count?: boolean | Prisma.BoardCountOutputTypeDefaultArgs<ExtArgs>
@@ -1340,6 +1505,7 @@ export type BoardSelectScalar = {
 export type BoardOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "slug" | "repoPath" | "pausedAt" | "pausedBy" | "dailyBudgetUsd" | "maxConcurrent" | "defaultModel" | "defaultEffort" | "defaultMaxTurns" | "defaultAttemptDeadlineSeconds" | "defaultActiveDeadlineSeconds" | "defaultMaxBudgetUsd" | "defaultMaxRetries" | "defaultAllowedTools" | "defaultPluginPaths" | "defaultGuide" | "defaultCheck" | "defaultWorkflow" | "createdAt" | "updatedAt", ExtArgs["result"]["board"]>
 export type BoardInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   jobs?: boolean | Prisma.Board$jobsArgs<ExtArgs>
+  runs?: boolean | Prisma.Board$runsArgs<ExtArgs>
   events?: boolean | Prisma.Board$eventsArgs<ExtArgs>
   controller?: boolean | Prisma.Board$controllerArgs<ExtArgs>
   _count?: boolean | Prisma.BoardCountOutputTypeDefaultArgs<ExtArgs>
@@ -1351,6 +1517,7 @@ export type $BoardPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs 
   name: "Board"
   objects: {
     jobs: Prisma.$JobPayload<ExtArgs>[]
+    runs: Prisma.$RunPayload<ExtArgs>[]
     events: Prisma.$EventPayload<ExtArgs>[]
     controller: Prisma.$ControllerPayload<ExtArgs> | null
   }
@@ -1849,6 +2016,7 @@ readonly fields: BoardFieldRefs;
 export interface Prisma__BoardClient<T, Null = never, ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs, GlobalOmitOptions = {}> extends Prisma.PrismaPromise<T> {
   readonly [Symbol.toStringTag]: "PrismaPromise"
   jobs<T extends Prisma.Board$jobsArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.Board$jobsArgs<ExtArgs>>): Prisma.PrismaPromise<runtime.Types.Result.GetResult<Prisma.$JobPayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
+  runs<T extends Prisma.Board$runsArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.Board$runsArgs<ExtArgs>>): Prisma.PrismaPromise<runtime.Types.Result.GetResult<Prisma.$RunPayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
   events<T extends Prisma.Board$eventsArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.Board$eventsArgs<ExtArgs>>): Prisma.PrismaPromise<runtime.Types.Result.GetResult<Prisma.$EventPayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
   controller<T extends Prisma.Board$controllerArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.Board$controllerArgs<ExtArgs>>): Prisma.Prisma__ControllerClient<runtime.Types.Result.GetResult<Prisma.$ControllerPayload<ExtArgs>, T, "findUniqueOrThrow", GlobalOmitOptions> | null, null, ExtArgs, GlobalOmitOptions>
   /**
@@ -2313,6 +2481,30 @@ export type Board$jobsArgs<ExtArgs extends runtime.Types.Extensions.InternalArgs
   take?: number
   skip?: number
   distinct?: Prisma.JobScalarFieldEnum | Prisma.JobScalarFieldEnum[]
+}
+
+/**
+ * Board.runs
+ */
+export type Board$runsArgs<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
+  /**
+   * Select specific fields to fetch from the Run
+   */
+  select?: Prisma.RunSelect<ExtArgs> | null
+  /**
+   * Omit specific fields from the Run
+   */
+  omit?: Prisma.RunOmit<ExtArgs> | null
+  /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.RunInclude<ExtArgs> | null
+  where?: Prisma.RunWhereInput
+  orderBy?: Prisma.RunOrderByWithRelationInput | Prisma.RunOrderByWithRelationInput[]
+  cursor?: Prisma.RunWhereUniqueInput
+  take?: number
+  skip?: number
+  distinct?: Prisma.RunScalarFieldEnum | Prisma.RunScalarFieldEnum[]
 }
 
 /**

@@ -6,7 +6,8 @@ import { parseArgs } from 'node:util';
 import { openBoard, closeBoard } from './db.ts';
 import { ensureSchema } from './schema.ts';
 import { databaseUrl } from './db-url.ts';
-import { reconcile } from './controller.ts';
+import { pass } from './pass.ts';
+import { cutRun } from './runs.ts';
 import { checkExportPath } from './exports.ts';
 import {
   approveJob, concludeJob, queueJob, rejectJob, removeJob, retryJob, triageJob,
@@ -59,6 +60,7 @@ import type { Runtime } from './runtime/index.ts';
 const HELP = `hkb — run one agent against one brief
 
   hkb new <name>            file a Job
+  hkb new <name> --steps a,b  cut a run: one Job per workflow, each after the last
        --brief <text> | --brief-file <path> | --brief - (stdin)
        --from <workflow>  file it from \`${WORKFLOW_DIR}/<workflow>.md\` in this board's
                         REPOSITORY: the frontmatter is the spec, the body is the brief. The keys
@@ -524,6 +526,12 @@ const OPTIONS = {
       // The watch cursor. An id, not a duration — `--since` is "how far back", `--after` is
       // "resume exactly here", and only the second one survives a restart without gaps.
       after: { type: 'string' },
+      // The steps of a run, in order, comma-separated — `--steps implement,review`. Comma-separated
+      // rather than repeatable, unlike `--export` and `--allow-tool` above, because the thing that
+      // makes those repeatable does not apply: a step's name becomes the label `step=<name>`, and
+      // `src/labels.ts` refuses a comma in a label, so a workflow whose name contains one is
+      // refused BY NAME at cut time rather than being quietly unsayable.
+      steps: { type: 'string' },
 } as const;
 
 /**
@@ -719,6 +727,25 @@ export async function main(argv: string[]): Promise<number> {
   switch (verb) {
     // ---------------------------------------------------------------- new
     case 'new': {
+      // A RUN, not a Job. The same verb because it is the same act — filing work on a board — and
+      // the same name argument, so `hkb new "fix the parser"` and `hkb new "fix the parser"
+      // --steps implement,review` differ by exactly what they differ by. The whole authoring
+      // surface of a run is this flag; there is no file format, because a step IS a workflow file
+      // and argument order IS the chain (`src/runs.ts`).
+      if (values.steps !== undefined) {
+        const steps = given(values.steps, '--steps')
+          .split(',').map((t) => t.trim()).filter(Boolean);
+        const run = await cutRun(db, scope, { name: rest.join(' ').trim(), steps }, { by: whoami() });
+        emit(out, run, () =>
+          console.log(`run ${run.id} ${run.name}  on ${run.board}`
+            + run.steps.map((st) => `\n  ${st.name}${st.after.length ? `  after ${st.after.join(', ')}` : '  — ready now'}`).join('')
+            // Said out loud because nothing has been created on the board yet and a run that
+            // looked filed but ran nothing would be the surprise. The first Job appears on the
+            // next pass, which is the daemon's tick or an `hkb run` away.
+            + `\n  nothing is filed yet — the first Job is created on the next pass`
+            + `\n  \`hkb ls --label run=${run.id}\` follows it`));
+        return 0;
+      }
       // Parse, call, print — and nothing else. Everything between "the arguments are parsed" and
       // "the row is printed" is `createJob` (`src/filing.ts`): the workflow read and its
       // fill-what-is-absent rule, every declaration and its refusal by name, the proposing-Job
@@ -812,7 +839,7 @@ export async function main(argv: string[]): Promise<number> {
         const empty = rows.filter((r) => r.producedNothing).length;
         if (empty) {
           console.log(`\n${empty} of ${rows.filter((r) => r.phase === 'succeeded').length} succeeded `
-            + `${empty === 1 ? 'Job' : 'Jobs'} produced no pull request and declared no outputs.`);
+            + `${empty === 1 ? 'Job' : 'Jobs'} declared no outputs and left nothing behind.`);
         }
       });
       return 0;
@@ -1050,7 +1077,7 @@ export async function main(argv: string[]): Promise<number> {
       process.on('SIGINT', onSigint);
       process.on('SIGTERM', onSigint);
       try {
-        const report = await reconcile({
+        const report = await pass({
           runtime, cwd: process.cwd(), only, board: slug, signal: stopper.signal,
           onEvent: out.json ? undefined : (l) => console.log(l),
           // Tagged with the Job for the same reason the controller's own lines are: a board that
@@ -1064,15 +1091,28 @@ export async function main(argv: string[]): Promise<number> {
         // claiming anything: a run that created three Jobs and reported "nothing pending" would be
         // saying the opposite of what it just did.
         const moved = report.claimed.length + report.reclaimed.length + report.filed.length;
+        const proposed = report.filed.length - report.runs.filed.length;
         emit(out, report, () => {
           if (report.refused) console.log(`refused: ${report.refused}`);
           else if (!moved) console.log(only ? `#${only} is not pending — nothing to do` : 'nothing pending');
           else {
             console.log(`${report.succeeded.length} succeeded, ${report.failed.length} failed, ${report.retrying.length} to retry`
-              + (report.filed.length ? `, ${report.filed.length} filed from a proposal` : '')
+              // Counted apart, because they answer different questions. A Job filed from a
+              // PROPOSAL exists because a person approved one; a Job filed from a RUN exists
+              // because its predecessor succeeded. Reporting both as "from a proposal" was this
+              // line's first bug, found the first time a run was cut.
+              + (proposed ? `, ${proposed} filed from a proposal` : '')
+              + (report.runs.filed.length ? `, ${report.runs.filed.length} filed from a run` : '')
               // Last and named, because it is the only one of these that is a request: the others say
               // what the machine did, this one says what it now needs from a person.
               + (report.suspended.length ? `, ${report.suspended.length} waiting for you` : ''));
+          }
+          // A run that cannot go on says so, and says which retry would move it. Printed here and
+          // nowhere else on purpose: this is the foreground verb, where an operator is watching. The
+          // daemon computes the same list every pass and prints none of it, because a level-triggered
+          // reconciler that logged a standing fact would log it for ever (`src/workspaces.ts`).
+          for (const s of report.runs.stalled) {
+            console.log(`run ${s.run}: \`${s.step}\` ${s.why}`);
           }
         });
       } finally {

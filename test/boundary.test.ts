@@ -141,3 +141,90 @@ test('no core spec field is git-shaped', () => {
     );
   }
 });
+
+/**
+ * The OTHER boundary — the one this repository has not had a guard for until now.
+ *
+ * ADR-018's rule is a *direction of dependency*: the board may use core primitives, and the core may
+ * never name a board concept. `Run`/`Step` (`src/runs.ts`) is a board kind with a controller of its
+ * own, built on the Job kind the way `tekton.dev` is built on `batch/v1`. The tempting shortcut is
+ * one line in `reconcile()` calling `reconcileRuns()` — which is how the last three attempts at this
+ * line dissolved, because each of them left a description instead of a check.
+ *
+ * `src/pass.ts` is the composition, and it is the only file allowed to know both.
+ */
+test('the Job kind does not know the Run kind exists', () => {
+  for (const file of THE_CORE) {
+    assert.doesNotMatch(
+      read(file),
+      /from ['"][./]*runs\.ts['"]/,
+      `src/${file} imports src/runs.ts. Ordering is a board concern with a controller of its own `
+      + '(ADR-018); the core may not reach for it. `src/pass.ts` composes the two, and it is the '
+      + 'only file that may import both.',
+    );
+  }
+});
+
+/**
+ * Sequencing is not scheduling, and the day they merge nobody will notice without this.
+ *
+ * hkb's fleet half is finished — ceilings, leases, liveness, per-board leader election — and its
+ * sequencing half is `src/runs.ts`. **A step becoming ready is a request to schedule; whether it
+ * runs now is the fleet's business.** A Run controller that grew its own concurrency knob would be
+ * a second scheduler, disagreeing with the first about a board it shares.
+ */
+test('the Run kind schedules nothing — it files rows and stops', () => {
+  const runs = read('runs.ts').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+  for (const [gone, why] of [
+    ['limits.ts', 'a ceiling is the fleet\'s answer, checked once, before a claim'],
+    ['liveness.ts', 'whether a holder is alive is a question about a lease, and runs hold none'],
+  ] as [string, string][]) {
+    assert.doesNotMatch(
+      runs,
+      new RegExp(`from ['"][./]*${gone.replace('.', '\\.')}['"]`),
+      `src/runs.ts imports ${gone} — ${why}`,
+    );
+  }
+  assert.doesNotMatch(
+    runs, /\bLease\b|\bmaxConcurrent\b|\bdailyBudgetUsd\b/,
+    'src/runs.ts names a scheduling concept. Sequencing decides WHAT is next; scheduling decides '
+    + 'whether anything runs now. Two schedulers on one board disagree.',
+  );
+  // And the composition is exactly one file deep. `src/pass.ts` imports both halves; the two halves
+  // import neither it nor each other. What DOES import it is an entry point — `src/daemon.ts`, which
+  // is the process that drives a pass on a timer, and `src/hkb.ts`, which is the one that drives it
+  // in the foreground. Neither of those is reconciling anything; they are choosing when a pass
+  // happens, which is the one job a composition root has.
+  for (const file of ['controller.ts', 'runs.ts']) {
+    assert.doesNotMatch(
+      read(file), /from ['"][./]*pass\.ts['"]/,
+      `src/${file} imports src/pass.ts — composition flows one way, from the entry point inward`,
+    );
+  }
+});
+
+/**
+ * The Step kind's own minimality, which is the answer `docs/is-a-step-data.md` arrived at.
+ *
+ * A step is *mostly markdown and barely data*: everything a controller needs to decide whether to
+ * CREATE a row is data, everything needed to carry that decision out is a file read once at filing
+ * time. The fields below are the ones that get proposed first and every one of them is already a
+ * `TEMPLATE_KEYS` entry — a column for any of them would be a second place to edit one value, and
+ * the controller would still hand it over unread.
+ */
+test('no Step column is a spec field', () => {
+  const schema = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'prisma', 'schema.prisma'), 'utf8');
+  const model = schema.slice(schema.indexOf('\nmodel Step {') + 1);
+  const body = model.slice(0, model.indexOf('\n}'))
+    .split('\n').filter((l) => !l.trim().startsWith('///') && !l.trim().startsWith('//')).join('\n');
+  for (const field of ['model', 'brief', 'effort', 'gate', 'guide', 'check', 'maxBudgetUsd', 'allowedTools', 'phase']) {
+    assert.doesNotMatch(
+      body, new RegExp(`^\\s+${field}\\s+\\w`, 'm'),
+      `Step has a \`${field}\` column. Every one of these is already a workflow frontmatter key `
+      + '(`src/templates.ts`), which the filing path reads and no reconcile pass ever does — so it '
+      + 'changes no create/flip/refuse decision, and a column would only be a second place to edit '
+      + 'it. `phase` is the other kind of wrong: it would be a copy of the Job\'s, rewritten on '
+      + 'every child transition, which is the write amplification Tekton removed in v0.45.',
+    );
+  }
+});

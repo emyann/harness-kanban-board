@@ -45,7 +45,7 @@
  * variable that did not expand far more often than it is a deliberate marker, and the fix for
  * wanting "just a tag" is to say what it is — `kind=triage` rather than `triage=`.
  */
-const LABEL_TOKEN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,61}[A-Za-z0-9])?$/;
+export const LABEL_TOKEN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,61}[A-Za-z0-9])?$/;
 
 /**
  * How many labels one Job may carry.
