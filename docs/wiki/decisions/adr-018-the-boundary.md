@@ -22,7 +22,7 @@ covers:
     sha: b709212e781376f570a613907a209648dab91526
   - path: src/exports.ts
     sha: afa23e85d0df61d1d0d91587d425df2ad7a872a0
-generated_at_commit: 62135e9
+generated_at_commit: 191ea02
 last_refreshed: 2026-09-10
 related:
   [
@@ -227,6 +227,49 @@ message carries the *entire* parked question — every option with its descripti
 runtime can produce one**, which means the whole park → suspend → answer → resume path gets a test
 that spends nothing and runs at the shipped defaults. `WorkerOutcome.denials` is a bare count today
 and would have to carry the questions, not just how many there were.
+
+## The audit: every field on `Job`, against this record's own test
+
+The git protocol was the conflation that was *generating bugs*, so it went first. It is not the only
+one. Below is the test applied to every field the `Job` kind carries, so the next session reads a
+verdict instead of re-deriving one — which is the whole reason this record exists.
+
+**Core — `batch/v1` or the PodSpec has the field, and it makes sense for a workload that is not
+code:**
+
+`id` · `boardId` (Namespace) · `name` (`metadata.name`) · `brief` (the container's command — this
+*is* the workload) · `model` · `effort` · `maxTurns` · `maxBudgetUsd` (`resources.limits`) ·
+`attemptDeadlineSeconds` (`template.spec.activeDeadlineSeconds`) · `activeDeadlineSeconds`
+(`JobSpec.activeDeadlineSeconds`) · `maxRetries` (`backoffLimit`) · `allowedTools`
+(`serviceAccountName` + RBAC) · `labels` (`metadata.labels`) · `phase` / `lastError` / `finishedAt`
+(`status`) · `attempts` (Pods) · `lease` · `events`.
+
+**Fails the test — board vocabulary on a core row:**
+
+| field | why it fails | where it belongs |
+|---|---|---|
+| `proposes`, `proposedByJobId`, `proposedByK`, `proposalIndex` | **a Job that files Jobs is a controller.** `src/controller.ts` calls `db.job.create` on its behalf — the core's only write of a workload it did not receive | a board kind whose controller creates Jobs, which is what Workflow/Step is |
+| `gate`, `suspendedFor` | `batch/v1` has `suspend`, but it is a field a **client sets**, not one a workload requests. "Suspend me when I finish, and ask a person" is a step in somebody's process | Step |
+| `guide` | resolves against `Board.repoPath` (`src/guide.ts`). A workload with no repository has no contributor guide | Step content, or a generic "prepend this text" that names no repository |
+| `exports` | copies declared paths **into `Board.repoPath`** (`src/controller.ts`). Same presumption | Step |
+| `results`, `artifacts` | these are **Tekton Task Results**, not `batch/v1`. They are the right mechanism and the wrong kind | Step — and they are exactly what a Step's edges carry |
+| `endedBy`, `endedFor` | who cancelled it and why. Kubernetes deletes the object and the audit log answers this | board |
+| `check` | `successPolicy` is the nearest field, so the *concept* is core; the implementation shells out into a workspace, which presumes a shell and a suite | borderline — leave until Step exists, then decide |
+
+**Structurally wrong rather than misplaced: `isolate`.** It is a boolean where the analogue is a
+**StorageClass** — a workload asks for a class by name and never names a provisioner. Two values and
+one driver make the boolean survivable today; it is the field that gets more expensive with every row.
+
+### What this does NOT license
+
+**Nothing above moves yet, and that is a decision rather than an omission.** Every one of them needs
+somewhere to go, and that somewhere is the board's kinds, which do not exist. Deleting them now would
+delete shipped features with no home — which is the opposite of what the git protocol's removal did,
+where the destination (a workflow file) already existed and was already being used.
+
+The order this implies, when Workflow/Step lands: `proposes` first (it is the only one that makes the
+core *write* a workload), then `gate`, then the `guide`/`exports`/`results`/`artifacts` group, which
+are all one question — what a Step declares and what its edges carry.
 
 ## Consequences
 
