@@ -40,6 +40,26 @@ export type WorkerSpec = {
    */
   plugins?: string[];
   /**
+   * A workspace of its own for this session — **declared here, provisioned by the runtime.**
+   *
+   * This is the PodSpec's `volumes:`, and the split is the one Kubernetes draws: a workload
+   * *declares* that it needs storage and never provisions any. The kubelet and its plugins do
+   * that, because how a volume comes into existence is a property of where it runs, not of the
+   * work. Kubernetes has no such field on `JobSpec` at all, and neither should hkb's Job kind.
+   *
+   * The controller used to cut a git worktree itself and pass its path as `cwd` — ~1,000 lines
+   * reimplementing, feature for feature, what the harness already does: `--worktree` creates it
+   * under `.claude/worktrees/<name>`, `.worktreeinclude` carries gitignored files into it (the
+   * same filename hkb had invented), `worktree.baseRef: "fresh"` keeps the base current, the
+   * harness takes a `git worktree lock` for the length of the run, and its own periodic sweep
+   * collects it. Measured through the SDK, not read: `extraArgs: { worktree }` reaches the flag,
+   * and the session's real path comes back on the `init` message as `workspacePath` below.
+   *
+   * A driver that has no such concept ignores it and runs in `cwd`, which is what
+   * `src/runtime/fake.ts` does with a plain temporary directory — an `emptyDir`, literally.
+   */
+  workspace?: { name: string };
+  /**
    * Is `cwd` a worktree cut for this attempt, or the operator's own checkout?
    *
    * The runtime needs this for the subagent isolation policy and for nothing else: forcing
@@ -107,6 +127,18 @@ export type WorkerOutcome = {
   denials: number;
   /** The failure text `query()` threw, when it threw. */
   error: string | null;
+  /**
+   * Where the session actually ran, when the runtime provisioned a workspace for it.
+   *
+   * Reported rather than assumed. The caller asked for a workspace by name and the runtime decides
+   * what that means and where it lands — so the caller reads the path back the way a Pod reads a
+   * mount path rather than choosing one. Null when no workspace was asked for, in which case the
+   * session ran in `cwd`.
+   *
+   * It is what the declared outputs are collected from and where the completion check runs, so it
+   * has to be the truth rather than a convention this side reconstructed.
+   */
+  workspacePath: string | null;
 };
 
 /** A progress line, for the operator's console. Nothing here is stored. */

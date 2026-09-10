@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import type { PreToolUseHookInput } from '@anthropic-ai/claude-agent-sdk';
 
 import { admissionCallback } from '../admission.ts';
@@ -58,6 +60,21 @@ export function fakeRuntime(
     reset() { decisions.length = 0; },
     async run(spec: WorkerSpec, onEvent?: (e: RuntimeEvent) => void): Promise<WorkerOutcome> {
       const sessionId = `fake-${spec.taskId}-${spec.attempt}`;
+      // ---- the workspace, provisioned the way this runtime provisions everything: as cheaply as
+      // the contract allows.
+      //
+      // A plain directory — an `emptyDir`, literally, which is what the seam actually promises. The
+      // Claude driver satisfies the same declaration with a git worktree because that is what its
+      // harness offers; nothing in the Job kind can tell the difference, and a test that passes
+      // against this one is a test that proves the Job kind never looked.
+      //
+      // Made under the repository so the paths a test asserts on stay inside its own fixture, and
+      // reused across attempts of the same Job, because a resumed session continues in the tree it
+      // left — the property `newestWorktree` used to exist for.
+      const workspacePath = spec.workspace
+        ? path.join(spec.cwd, '.hkb', 'workspaces', spec.workspace.name)
+        : null;
+      if (workspacePath) fs.mkdirSync(workspacePath, { recursive: true });
       onEvent?.({ kind: 'started', taskId: spec.taskId, sessionId });
       // The delay is what makes a shutdown testable — something has to be in flight to interrupt.
       if (opts.delayMs) {
@@ -78,6 +95,7 @@ export function fakeRuntime(
         return {
           status: 'timeout', ok: false, sessionId, text: '', costUsd: 0, turns: 0,
           durationMs: 0, stopReason: 'aborted', denials: 0, error: 'stopped by the operator',
+          workspacePath,
         };
       }
       if (capped.has(spec.taskId)) {
@@ -88,7 +106,7 @@ export function fakeRuntime(
         return {
           status: 'max_budget', ok: false, sessionId, text: `got partway through #${spec.taskId}`,
           costUsd: spec.maxBudgetUsd ?? 0, turns: 1, durationMs: 0, stopReason: 'max_budget',
-          denials: 0, error: null,
+          denials: 0, error: null, workspacePath,
         };
       }
       // The tool calls, through the gate this run's spec builds — a denied call is a call this
@@ -141,6 +159,7 @@ export function fakeRuntime(
         stopReason: 'end_turn',
         denials: denied,
         error: ok ? null : 'fake failure',
+        workspacePath,
       };
     },
   };

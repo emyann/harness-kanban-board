@@ -7,7 +7,8 @@ import { openBoard, closeBoard } from './db.ts';
 import { ensureSchema } from './schema.ts';
 import { databaseUrl } from './db-url.ts';
 import { reconcile } from './controller.ts';
-import { checkExportPath, checkRef } from './worktree.ts';
+import { checkRef } from './worktree.ts';
+import { checkExportPath } from './exports.ts';
 import {
   approveJob, concludeJob, queueJob, rejectJob, removeJob, retryJob, triageJob,
 } from './transitions.ts';

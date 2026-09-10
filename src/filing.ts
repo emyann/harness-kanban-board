@@ -1,5 +1,6 @@
 import type { openBoard } from './db.ts';
-import { checkExportPath, checkRef } from './worktree.ts';
+import { checkRef } from './worktree.ts';
+import { checkExportPath } from './exports.ts';
 import { checkResultName } from './results.ts';
 import { checkArtifactName } from './artifacts.ts';
 import { parseLabels } from './labels.ts';

@@ -1,9 +1,10 @@
 import { openBoard } from './db.ts';
 import {
-  baseFor, baseRef, createWorktree, exportOutputs, existingWorktree, fetchBase, isAttemptBranch,
+  baseFor, baseRef, createWorktree, existingWorktree, fetchBase, isAttemptBranch,
   newestWorktree, lockWorktree, onRemote, pushedRef, removeWorktree, resolves, unlockWorktree,
   type Worktree,
 } from './worktree.ts';
+import { exportOutputs } from './exports.ts';
 import { rebaseNote, rebaseOntoBase, rebaseShortfall, type RebaseResult } from './rebase.ts';
 import { prForBranch } from './pulls.ts';
 // The read model's own predicates, imported so a second copy cannot drift from the printed one.

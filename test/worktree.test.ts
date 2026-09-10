@@ -23,8 +23,10 @@ git(['commit', '-qm', 'base']);
 const {
   createWorktree, existingWorktree, removeWorktree, worktreeHasWork, branchFor, baseRef, freeBranch,
   includedFiles, sweepWorktrees, lockWorktree, listWorktrees, heldWork,
-  checkExportPath, exportOutputs,
 } = await import('../src/worktree.ts');
+// Moved out of `src/worktree.ts`: what a Job hands back is ADR-008's execroot, not a git concept.
+// The cases stay here, because they are exercised against a real worktree.
+const { checkExportPath, exportOutputs } = await import('../src/exports.ts');
 
 test.after(() => fs.rmSync(repo, { recursive: true, force: true }));
 
