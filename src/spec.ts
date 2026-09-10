@@ -87,6 +87,21 @@ export const BUILT_IN = {
   maxBudgetUsd: 1,
   maxRetries: 2,
   /**
+   * Thirty minutes for one attempt — Kubernetes' `template.spec.activeDeadlineSeconds`, and the
+   * number the old `Job.timeoutMs` database default carried. It moves here for the reason every
+   * other built-in did: a column that defaults to 1800 cannot tell "the operator asked for thirty
+   * minutes" from "the operator said nothing", and without that distinction a board default is
+   * outranked by every Job that ever existed.
+   */
+  attemptDeadlineSeconds: 1800,
+  /**
+   * **Null, and the null is Kubernetes' own default**: a Job has no wall clock across its attempts
+   * unless somebody sets one. Writing a number here would put every Job that ever runs under a
+   * ceiling nobody asked for, and this is the one deadline that does not retry — it ends the Job.
+   * A default that silently ends work is not a default.
+   */
+  activeDeadlineSeconds: null as number | null,
+  /**
    * Null for the same reason `model` is: the built-in answer is "say nothing and let the runtime
    * pick its own surface", which is a real answer rather than a missing one. Naming the list here
    * would move a runtime concern into the spec and give two modules an opinion that can drift.
@@ -117,6 +132,8 @@ export type JobSpec = {
   maxTurns?: number | null;
   maxBudgetUsd?: number | null;
   maxRetries?: number | null;
+  attemptDeadlineSeconds?: number | null;
+  activeDeadlineSeconds?: number | null;
   /** Raw, straight off the `Json?` column — `toolList` normalizes it here rather than at
    * every call site, so a malformed value cannot narrow a surface by accident. */
   allowedTools?: unknown;
@@ -134,6 +151,8 @@ export type BoardDefaults = {
   defaultMaxTurns?: number | null;
   defaultMaxBudgetUsd?: number | null;
   defaultMaxRetries?: number | null;
+  defaultAttemptDeadlineSeconds?: number | null;
+  defaultActiveDeadlineSeconds?: number | null;
   defaultAllowedTools?: unknown;
   defaultPluginPaths?: unknown;
   defaultGuide?: unknown;
@@ -158,6 +177,10 @@ export type ResolvedSpec = {
   maxTurns: Traced<number>;
   maxBudgetUsd: Traced<number>;
   maxRetries: Traced<number>;
+  /** One attempt's wall clock, in seconds. Always resolves — the built-in is 1800. */
+  attemptDeadlineSeconds: Traced<number>;
+  /** The Job's wall clock across every attempt, in seconds, or null for "no Job-wide deadline". */
+  activeDeadlineSeconds: Traced<number | null>;
   allowedTools: Traced<string[] | null>;
   pluginPaths: Traced<string[] | null>;
   guide: Traced<string | null>;
@@ -198,6 +221,12 @@ export function resolveSpec(
     maxTurns: pick(j.maxTurns, b.defaultMaxTurns, BUILT_IN.maxTurns),
     maxBudgetUsd: pick(j.maxBudgetUsd, b.defaultMaxBudgetUsd, BUILT_IN.maxBudgetUsd),
     maxRetries: pick(j.maxRetries, b.defaultMaxRetries, BUILT_IN.maxRetries),
+    attemptDeadlineSeconds: pick(
+      j.attemptDeadlineSeconds, b.defaultAttemptDeadlineSeconds, BUILT_IN.attemptDeadlineSeconds,
+    ),
+    activeDeadlineSeconds: pick(
+      j.activeDeadlineSeconds, b.defaultActiveDeadlineSeconds, BUILT_IN.activeDeadlineSeconds,
+    ),
     // An EMPTY list is a value, not an absence: `allowedTools: []` means "this Job may call no
     // tools at all", which is exactly what a read-only propose half might want. `pick` compares
     // against null rather than truthiness precisely so that survives — the same reason
@@ -227,7 +256,8 @@ export function hasDefaults(b: BoardDefaults): boolean {
   return b.defaultModel != null || b.defaultEffort != null || b.defaultMaxTurns != null
     || b.defaultMaxBudgetUsd != null || b.defaultMaxRetries != null || toolList(b.defaultAllowedTools) != null
     || pluginList(b.defaultPluginPaths) != null || str(b.defaultGuide) != null
-    || str(b.defaultBase) != null || str(b.defaultCheck) != null || str(b.defaultWorkflow) != null;
+    || str(b.defaultBase) != null || str(b.defaultCheck) != null || str(b.defaultWorkflow) != null
+    || b.defaultAttemptDeadlineSeconds != null || b.defaultActiveDeadlineSeconds != null;
 }
 
 /** A board's defaults, under the names the Job knows them by. What `--json` carries. */
@@ -244,5 +274,7 @@ export function boardDefaults(b: BoardDefaults) {
     base: str(b.defaultBase),
     check: str(b.defaultCheck),
     workflow: str(b.defaultWorkflow),
+    attemptDeadlineSeconds: b.defaultAttemptDeadlineSeconds ?? null,
+    activeDeadlineSeconds: b.defaultActiveDeadlineSeconds ?? null,
   };
 }

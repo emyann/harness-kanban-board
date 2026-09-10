@@ -150,3 +150,41 @@ test('the window is a rolling 24 hours, with no timezone in it', () => {
   const now = new Date('2026-09-05T05:00:00Z');
   assert.equal(windowStart(now).toISOString(), '2026-09-04T05:00:00.000Z');
 });
+
+// ---------------------------------------------------------------- the Job's own wall clock
+
+/**
+ * `deadlineExceeded` — Kubernetes' `JobSpec.activeDeadlineSeconds`, as a pure decision.
+ *
+ * The per-attempt clock bounds a runaway session; this bounds a runaway Job. Both refusing cases
+ * matter and they refuse in opposite directions: a Job with no deadline must never be ended, and a
+ * Job past one must never get another attempt however many retries it has left.
+ */
+const { deadlineExceeded, deadlineShortfall } = await import('../src/limits.ts');
+
+const at = (ms: number) => new Date(1_000_000 + ms);
+
+test('no deadline means no deadline — the shipped default ends nothing', () => {
+  assert.equal(deadlineExceeded(at(0), at(999_999_999), null), false);
+  assert.equal(deadlineExceeded(at(0), at(999_999_999), undefined), false);
+});
+
+test('a Job that never started cannot have outrun a clock that never began', () => {
+  assert.equal(deadlineExceeded(null, at(999_999_999), 60), false);
+  assert.equal(deadlineExceeded(undefined, at(999_999_999), 60), false);
+});
+
+test('the clock runs from the FIRST attempt, and the boundary is inclusive', () => {
+  assert.equal(deadlineExceeded(at(0), at(59_000), 60), false, 'a second short is not exceeded');
+  assert.equal(deadlineExceeded(at(0), at(60_000), 60), true, 'exactly at the deadline IS exceeded');
+  assert.equal(deadlineExceeded(at(0), at(60_001), 60), true);
+});
+
+test('the shortfall names both numbers and the way back, since a retry is what it refuses', () => {
+  const why = deadlineShortfall(7, 2 * 3_600_000, 3600);
+  assert.match(why, /#7/);
+  assert.match(why, /120m/, 'how long it actually ran');
+  assert.match(why, /60m/, 'and the deadline it ran past');
+  assert.match(why, /--deadline/, 'and the flag that changes it');
+  assert.match(why, /retries or not/, 'said plainly, because retries left is the confusing part');
+});

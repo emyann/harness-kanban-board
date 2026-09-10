@@ -79,7 +79,7 @@ test('a lapsed lease whose holder is still running is NOT reclaimed', async () =
     },
   });
   await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
-  await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'me', runtime: 'fake', maxBudgetUsd: 1 } });
+  await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'me', runtime: 'fake', maxBudgetUsd: 1 , attemptDeadlineSeconds: 1800} });
 
   const report = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug, readPr: false });
 
@@ -103,7 +103,7 @@ test('a lapsed lease whose holder has exited IS reclaimed, without waiting any l
     },
   });
   await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
-  await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'gone', runtime: 'fake', maxBudgetUsd: 1 } });
+  await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'gone', runtime: 'fake', maxBudgetUsd: 1 , attemptDeadlineSeconds: 1800} });
 
   const report = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug, readPr: false });
   assert.deepEqual(report.reclaimed, [job.id]);
@@ -460,12 +460,12 @@ test('status reports the ceilings and only the spend inside the rolling window',
   const job = await mkJob(board.id);
   const now = Date.now();
   await db.attempt.create({
-    data: { jobId: job.id, k: 1, costUsd: 0.25, maxBudgetUsd: 1, startedAt: new Date(now - 60_000) },
+    data: { jobId: job.id, k: 1, costUsd: 0.25, maxBudgetUsd: 1, attemptDeadlineSeconds: 1800, startedAt: new Date(now - 60_000) },
   });
   // Outside the window `gateClaim` charges against, so it must not count here either: a status
   // that explained a refusal with a number the refusal never saw would be worse than no status.
   await db.attempt.create({
-    data: { jobId: job.id, k: 2, costUsd: 9.5, maxBudgetUsd: 1, startedAt: new Date(now - 25 * 60 * 60_000) },
+    data: { jobId: job.id, k: 2, costUsd: 9.5, maxBudgetUsd: 1, attemptDeadlineSeconds: 1800, startedAt: new Date(now - 25 * 60 * 60_000) },
   });
 
   const [s] = await daemon.status(board.slug, now);

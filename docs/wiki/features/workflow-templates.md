@@ -7,13 +7,13 @@ audience: [dev]
 read_when: "authoring a workflow, setting a board's default one, adding a flag to `hkb new`, or deciding whether something belongs in the format (machinery) or in a workflow file (content)"
 covers:
   - path: src/templates.ts
-    sha: 5377df2c14203132e63b836c3685a7f6b0e9d9bc
+    sha: 84e68dad2edc226425dfb0b8880e9765b2628686
   - path: src/hkb.ts
-    sha: 07cc5da2cf62b8a7cb356558d805b9c2a29ba5b7
+    sha: 28cc3417db47ad003b9ff5e19ea4c25a27394b72
   - path: src/inputs.ts
     sha: 140cf48b8b323742a57e3e604b6853f829c72b6c
   - path: prisma/schema.prisma
-    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
+    sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
 related:
   [
     features/the-checkout-base,
@@ -24,7 +24,7 @@ related:
     concepts/ceilings,
     features/proposals,
   ]
-generated_at_commit: ff67f87
+generated_at_commit: 1a75d0b
 last_refreshed: 2026-09-09
 ---
 

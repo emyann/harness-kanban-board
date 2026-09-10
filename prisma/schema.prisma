@@ -96,6 +96,14 @@ enum Outcome {
               // resumable, unlike `no_output`: the session is worth continuing precisely because it
               // is the session that wrote the code the check refused, and the next attempt is told
               // the command, the exit code and the tail of what it printed.
+  deadline_exceeded // the JOB's own wall clock ran out, across every attempt it has had
+              // (`Job.activeDeadlineSeconds`). Kubernetes' `reason: DeadlineExceeded`, and its rule
+              // comes with it: this **outranks the retry budget**. A Job past its deadline does not
+              // get another attempt however many retries remain, because the thing that ran out is
+              // not this attempt's — it is the Job's. Distinct from `timed_out`, which is one
+              // attempt's clock and IS resumable: the two send an operator to different places, one
+              // to raise a per-attempt clock and the other to decide whether the Job is worth more
+              // wall time at all.
   lost        // the lease expired with nobody reporting — the attempt was never heard from again
   stopped     // the operator stopped the daemon mid-run. Resumable, and it does NOT spend a retry:
               // `kb down` is not a failure of the work, and charging one would mean a Job could be
@@ -143,11 +151,17 @@ model Board {
   /// wins: a Job may not exceed `dailyBudgetUsd`, and it may freely override `defaultModel`.
   ///
   /// Resolution is in `src/spec.ts`: the Job's own value wins, the Board's default fills a null,
-  /// the built-in is the last resort. `timeoutMs` deliberately has no twin here — nothing has asked
+  /// the built-in is the last resort. The deadlines have twins here now — something asked
   /// for one, and each default costs a column, a flag and a line of provenance in `kb show`.
   defaultModel        String?
   defaultEffort       String?
   defaultMaxTurns     Int?
+  /// The two deadlines, in seconds. `defaultAttemptDeadlineSeconds` fills a Job that named no
+  /// per-attempt clock; `defaultActiveDeadlineSeconds` gives a board a Job-wide ceiling every Job
+  /// filed here inherits. Both are *defaults*, freely overridden on the Job — a ceiling nobody can
+  /// exceed is `dailyBudgetUsd` and `maxConcurrent`, and these are not that.
+  defaultAttemptDeadlineSeconds Int?
+  defaultActiveDeadlineSeconds  Int?
   defaultMaxBudgetUsd Float?
   defaultMaxRetries   Int?
   /// The board's default tool surface, filling a Job that named none. A default, not a ceiling:
@@ -237,8 +251,38 @@ model Job {
   model        String?
   effort       String?
   maxTurns     Int?
-  /// Wall clock. The model's own caps (turns, budget) cannot stop a session that has stalled.
-  timeoutMs    Int     @default(1800000)
+  /// **One attempt's wall clock**, in seconds — Kubernetes' `template.spec.activeDeadlineSeconds`
+  /// (ADR-016). The model's own caps (turns, budget) cannot stop a session that has stalled, and a
+  /// Pod that outruns this one fails with `DeadlineExceeded` and is *retried* subject to the
+  /// backoff limit. That is exactly hkb's behaviour: `timed_out` is resumable and burns a retry.
+  ///
+  /// Nullable like the five above, and for the same reason: a column with a database default cannot
+  /// tell "the operator asked for 30 minutes" from "the operator said nothing", so a board default
+  /// would be outranked by every Job that ever existed. The built-in 1800 lives in `src/spec.ts`.
+  ///
+  /// Seconds, not milliseconds, because that is the unit Kubernetes named the field in and hkb does
+  /// not invent a vocabulary where the map has one. The runtime seam still takes milliseconds
+  /// (`WorkerSpec.timeoutMs`) — a driver's unit is the driver's business, and the seam is where hkb
+  /// stops being Kubernetes-shaped.
+  attemptDeadlineSeconds Int?
+  /// **The whole Job's wall clock**, across every attempt — Kubernetes' `JobSpec
+  /// .activeDeadlineSeconds`, measured from the first attempt's `startedAt`.
+  ///
+  /// The one above bounds a runaway *attempt*; this bounds a runaway *Job*. Without it a Job with
+  /// three retries and a 90-minute attempt clock can occupy a slot for four and a half hours and
+  /// still be "within its caps". Kubernetes draws exactly this distinction and hkb had only half of
+  /// it, which ADR-016's map recorded as `resources.limits` — a row that is imprecise, since
+  /// `resources.limits` is cpu and memory and a deadline is neither.
+  ///
+  /// **It takes precedence over `maxRetries`**, which is Kubernetes' rule and not a choice made
+  /// here: "once a Job reaches activeDeadlineSeconds, all of its running Pods are terminated and
+  /// the Job status will become type: Failed with reason: DeadlineExceeded". So a Job past this
+  /// does not retry, however many retries it has left — `nextPhase` in `src/controller.ts`, where
+  /// the ordering is written down and tested.
+  ///
+  /// Null is the shipped default and means *no Job-wide deadline*, which is Kubernetes' default
+  /// too. A per-attempt clock always applies; this one applies when somebody asked for it.
+  activeDeadlineSeconds  Int?
   maxBudgetUsd Float?
   /// Run in its own git worktree. Enforced at admission, not requested in a prompt.
   isolate      Boolean @default(true)
@@ -528,6 +572,11 @@ model Attempt {
   /// facts kept in two places to answer no question. This one is here because another process
   /// reads it about someone else's attempt.
   maxBudgetUsd Float
+  /// The per-attempt wall clock this attempt ran under, frozen at claim time for the reason the cap
+  /// above is: `hkb job set --attempt-deadline` after the fact must not rewrite what stopped an
+  /// earlier attempt. Kubernetes' shape one table over — admission stamps a Pod with the limits it
+  /// was admitted under, and a LimitRange edited afterwards does not rewrite what is running.
+  attemptDeadlineSeconds Int
 
   // What this attempt produced on the forge. A fact about what happened, so it is history and
   // belongs here; the PR's *state* (open, merged, conflicted) is live and stays on GitHub.

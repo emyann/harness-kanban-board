@@ -9,13 +9,13 @@ covers:
   - path: src/worktree.ts
     sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
   - path: src/spec.ts
-    sha: 8792a804835fd0602a992aeccf978e110fe2a98f
+    sha: 5f549ec7407fcf1af8d80266ad35b9e90ab1620a
   - path: src/controller.ts
-    sha: 3673f449a7ebf15f9b21900915183b3bec63b6e5
+    sha: 2c0187bd11936fb1ed6b7a5517ccc53bec3db190
   - path: src/rebase.ts
     sha: 5b0df395ad3a5c5a8b2bad44a782d40e92d40d28
   - path: prisma/schema.prisma
-    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
+    sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
 related:
   [
     features/rebase-and-verify,
@@ -24,7 +24,7 @@ related:
     architecture/job-kind,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: f8ea774
+generated_at_commit: 1a75d0b
 last_refreshed: 2026-09-09
 ---
 

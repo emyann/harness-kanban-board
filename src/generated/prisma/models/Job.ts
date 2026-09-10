@@ -30,7 +30,8 @@ export type JobAvgAggregateOutputType = {
   id: number | null
   boardId: number | null
   maxTurns: number | null
-  timeoutMs: number | null
+  attemptDeadlineSeconds: number | null
+  activeDeadlineSeconds: number | null
   maxBudgetUsd: number | null
   maxRetries: number | null
   proposedByJobId: number | null
@@ -42,7 +43,8 @@ export type JobSumAggregateOutputType = {
   id: number | null
   boardId: number | null
   maxTurns: number | null
-  timeoutMs: number | null
+  attemptDeadlineSeconds: number | null
+  activeDeadlineSeconds: number | null
   maxBudgetUsd: number | null
   maxRetries: number | null
   proposedByJobId: number | null
@@ -58,7 +60,8 @@ export type JobMinAggregateOutputType = {
   model: string | null
   effort: string | null
   maxTurns: number | null
-  timeoutMs: number | null
+  attemptDeadlineSeconds: number | null
+  activeDeadlineSeconds: number | null
   maxBudgetUsd: number | null
   isolate: boolean | null
   base: string | null
@@ -89,7 +92,8 @@ export type JobMaxAggregateOutputType = {
   model: string | null
   effort: string | null
   maxTurns: number | null
-  timeoutMs: number | null
+  attemptDeadlineSeconds: number | null
+  activeDeadlineSeconds: number | null
   maxBudgetUsd: number | null
   isolate: boolean | null
   base: string | null
@@ -120,7 +124,8 @@ export type JobCountAggregateOutputType = {
   model: number
   effort: number
   maxTurns: number
-  timeoutMs: number
+  attemptDeadlineSeconds: number
+  activeDeadlineSeconds: number
   maxBudgetUsd: number
   isolate: number
   base: number
@@ -156,7 +161,8 @@ export type JobAvgAggregateInputType = {
   id?: true
   boardId?: true
   maxTurns?: true
-  timeoutMs?: true
+  attemptDeadlineSeconds?: true
+  activeDeadlineSeconds?: true
   maxBudgetUsd?: true
   maxRetries?: true
   proposedByJobId?: true
@@ -168,7 +174,8 @@ export type JobSumAggregateInputType = {
   id?: true
   boardId?: true
   maxTurns?: true
-  timeoutMs?: true
+  attemptDeadlineSeconds?: true
+  activeDeadlineSeconds?: true
   maxBudgetUsd?: true
   maxRetries?: true
   proposedByJobId?: true
@@ -184,7 +191,8 @@ export type JobMinAggregateInputType = {
   model?: true
   effort?: true
   maxTurns?: true
-  timeoutMs?: true
+  attemptDeadlineSeconds?: true
+  activeDeadlineSeconds?: true
   maxBudgetUsd?: true
   isolate?: true
   base?: true
@@ -215,7 +223,8 @@ export type JobMaxAggregateInputType = {
   model?: true
   effort?: true
   maxTurns?: true
-  timeoutMs?: true
+  attemptDeadlineSeconds?: true
+  activeDeadlineSeconds?: true
   maxBudgetUsd?: true
   isolate?: true
   base?: true
@@ -246,7 +255,8 @@ export type JobCountAggregateInputType = {
   model?: true
   effort?: true
   maxTurns?: true
-  timeoutMs?: true
+  attemptDeadlineSeconds?: true
+  activeDeadlineSeconds?: true
   maxBudgetUsd?: true
   isolate?: true
   base?: true
@@ -371,7 +381,8 @@ export type JobGroupByOutputType = {
   model: string | null
   effort: string | null
   maxTurns: number | null
-  timeoutMs: number
+  attemptDeadlineSeconds: number | null
+  activeDeadlineSeconds: number | null
   maxBudgetUsd: number | null
   isolate: boolean
   base: string | null
@@ -432,7 +443,8 @@ export type JobWhereInput = {
   model?: Prisma.StringNullableFilter<"Job"> | string | null
   effort?: Prisma.StringNullableFilter<"Job"> | string | null
   maxTurns?: Prisma.IntNullableFilter<"Job"> | number | null
-  timeoutMs?: Prisma.IntFilter<"Job"> | number
+  attemptDeadlineSeconds?: Prisma.IntNullableFilter<"Job"> | number | null
+  activeDeadlineSeconds?: Prisma.IntNullableFilter<"Job"> | number | null
   maxBudgetUsd?: Prisma.FloatNullableFilter<"Job"> | number | null
   isolate?: Prisma.BoolFilter<"Job"> | boolean
   base?: Prisma.StringNullableFilter<"Job"> | string | null
@@ -474,7 +486,8 @@ export type JobOrderByWithRelationInput = {
   model?: Prisma.SortOrderInput | Prisma.SortOrder
   effort?: Prisma.SortOrderInput | Prisma.SortOrder
   maxTurns?: Prisma.SortOrderInput | Prisma.SortOrder
-  timeoutMs?: Prisma.SortOrder
+  attemptDeadlineSeconds?: Prisma.SortOrderInput | Prisma.SortOrder
+  activeDeadlineSeconds?: Prisma.SortOrderInput | Prisma.SortOrder
   maxBudgetUsd?: Prisma.SortOrderInput | Prisma.SortOrder
   isolate?: Prisma.SortOrder
   base?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -520,7 +533,8 @@ export type JobWhereUniqueInput = Prisma.AtLeast<{
   model?: Prisma.StringNullableFilter<"Job"> | string | null
   effort?: Prisma.StringNullableFilter<"Job"> | string | null
   maxTurns?: Prisma.IntNullableFilter<"Job"> | number | null
-  timeoutMs?: Prisma.IntFilter<"Job"> | number
+  attemptDeadlineSeconds?: Prisma.IntNullableFilter<"Job"> | number | null
+  activeDeadlineSeconds?: Prisma.IntNullableFilter<"Job"> | number | null
   maxBudgetUsd?: Prisma.FloatNullableFilter<"Job"> | number | null
   isolate?: Prisma.BoolFilter<"Job"> | boolean
   base?: Prisma.StringNullableFilter<"Job"> | string | null
@@ -562,7 +576,8 @@ export type JobOrderByWithAggregationInput = {
   model?: Prisma.SortOrderInput | Prisma.SortOrder
   effort?: Prisma.SortOrderInput | Prisma.SortOrder
   maxTurns?: Prisma.SortOrderInput | Prisma.SortOrder
-  timeoutMs?: Prisma.SortOrder
+  attemptDeadlineSeconds?: Prisma.SortOrderInput | Prisma.SortOrder
+  activeDeadlineSeconds?: Prisma.SortOrderInput | Prisma.SortOrder
   maxBudgetUsd?: Prisma.SortOrderInput | Prisma.SortOrder
   isolate?: Prisma.SortOrder
   base?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -608,7 +623,8 @@ export type JobScalarWhereWithAggregatesInput = {
   model?: Prisma.StringNullableWithAggregatesFilter<"Job"> | string | null
   effort?: Prisma.StringNullableWithAggregatesFilter<"Job"> | string | null
   maxTurns?: Prisma.IntNullableWithAggregatesFilter<"Job"> | number | null
-  timeoutMs?: Prisma.IntWithAggregatesFilter<"Job"> | number
+  attemptDeadlineSeconds?: Prisma.IntNullableWithAggregatesFilter<"Job"> | number | null
+  activeDeadlineSeconds?: Prisma.IntNullableWithAggregatesFilter<"Job"> | number | null
   maxBudgetUsd?: Prisma.FloatNullableWithAggregatesFilter<"Job"> | number | null
   isolate?: Prisma.BoolWithAggregatesFilter<"Job"> | boolean
   base?: Prisma.StringNullableWithAggregatesFilter<"Job"> | string | null
@@ -644,7 +660,8 @@ export type JobCreateInput = {
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
-  timeoutMs?: number
+  attemptDeadlineSeconds?: number | null
+  activeDeadlineSeconds?: number | null
   maxBudgetUsd?: number | null
   isolate?: boolean
   base?: string | null
@@ -686,7 +703,8 @@ export type JobUncheckedCreateInput = {
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
-  timeoutMs?: number
+  attemptDeadlineSeconds?: number | null
+  activeDeadlineSeconds?: number | null
   maxBudgetUsd?: number | null
   isolate?: boolean
   base?: string | null
@@ -725,7 +743,8 @@ export type JobUpdateInput = {
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
-  timeoutMs?: Prisma.IntFieldUpdateOperationsInput | number
+  attemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  activeDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   maxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   isolate?: Prisma.BoolFieldUpdateOperationsInput | boolean
   base?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -767,7 +786,8 @@ export type JobUncheckedUpdateInput = {
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
-  timeoutMs?: Prisma.IntFieldUpdateOperationsInput | number
+  attemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  activeDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   maxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   isolate?: Prisma.BoolFieldUpdateOperationsInput | boolean
   base?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -808,7 +828,8 @@ export type JobCreateManyInput = {
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
-  timeoutMs?: number
+  attemptDeadlineSeconds?: number | null
+  activeDeadlineSeconds?: number | null
   maxBudgetUsd?: number | null
   isolate?: boolean
   base?: string | null
@@ -844,7 +865,8 @@ export type JobUpdateManyMutationInput = {
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
-  timeoutMs?: Prisma.IntFieldUpdateOperationsInput | number
+  attemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  activeDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   maxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   isolate?: Prisma.BoolFieldUpdateOperationsInput | boolean
   base?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -882,7 +904,8 @@ export type JobUncheckedUpdateManyInput = {
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
-  timeoutMs?: Prisma.IntFieldUpdateOperationsInput | number
+  attemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  activeDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   maxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   isolate?: Prisma.BoolFieldUpdateOperationsInput | boolean
   base?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -936,7 +959,8 @@ export type JobCountOrderByAggregateInput = {
   model?: Prisma.SortOrder
   effort?: Prisma.SortOrder
   maxTurns?: Prisma.SortOrder
-  timeoutMs?: Prisma.SortOrder
+  attemptDeadlineSeconds?: Prisma.SortOrder
+  activeDeadlineSeconds?: Prisma.SortOrder
   maxBudgetUsd?: Prisma.SortOrder
   isolate?: Prisma.SortOrder
   base?: Prisma.SortOrder
@@ -970,7 +994,8 @@ export type JobAvgOrderByAggregateInput = {
   id?: Prisma.SortOrder
   boardId?: Prisma.SortOrder
   maxTurns?: Prisma.SortOrder
-  timeoutMs?: Prisma.SortOrder
+  attemptDeadlineSeconds?: Prisma.SortOrder
+  activeDeadlineSeconds?: Prisma.SortOrder
   maxBudgetUsd?: Prisma.SortOrder
   maxRetries?: Prisma.SortOrder
   proposedByJobId?: Prisma.SortOrder
@@ -986,7 +1011,8 @@ export type JobMaxOrderByAggregateInput = {
   model?: Prisma.SortOrder
   effort?: Prisma.SortOrder
   maxTurns?: Prisma.SortOrder
-  timeoutMs?: Prisma.SortOrder
+  attemptDeadlineSeconds?: Prisma.SortOrder
+  activeDeadlineSeconds?: Prisma.SortOrder
   maxBudgetUsd?: Prisma.SortOrder
   isolate?: Prisma.SortOrder
   base?: Prisma.SortOrder
@@ -1017,7 +1043,8 @@ export type JobMinOrderByAggregateInput = {
   model?: Prisma.SortOrder
   effort?: Prisma.SortOrder
   maxTurns?: Prisma.SortOrder
-  timeoutMs?: Prisma.SortOrder
+  attemptDeadlineSeconds?: Prisma.SortOrder
+  activeDeadlineSeconds?: Prisma.SortOrder
   maxBudgetUsd?: Prisma.SortOrder
   isolate?: Prisma.SortOrder
   base?: Prisma.SortOrder
@@ -1044,7 +1071,8 @@ export type JobSumOrderByAggregateInput = {
   id?: Prisma.SortOrder
   boardId?: Prisma.SortOrder
   maxTurns?: Prisma.SortOrder
-  timeoutMs?: Prisma.SortOrder
+  attemptDeadlineSeconds?: Prisma.SortOrder
+  activeDeadlineSeconds?: Prisma.SortOrder
   maxBudgetUsd?: Prisma.SortOrder
   maxRetries?: Prisma.SortOrder
   proposedByJobId?: Prisma.SortOrder
@@ -1162,7 +1190,8 @@ export type JobCreateWithoutBoardInput = {
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
-  timeoutMs?: number
+  attemptDeadlineSeconds?: number | null
+  activeDeadlineSeconds?: number | null
   maxBudgetUsd?: number | null
   isolate?: boolean
   base?: string | null
@@ -1202,7 +1231,8 @@ export type JobUncheckedCreateWithoutBoardInput = {
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
-  timeoutMs?: number
+  attemptDeadlineSeconds?: number | null
+  activeDeadlineSeconds?: number | null
   maxBudgetUsd?: number | null
   isolate?: boolean
   base?: string | null
@@ -1271,7 +1301,8 @@ export type JobScalarWhereInput = {
   model?: Prisma.StringNullableFilter<"Job"> | string | null
   effort?: Prisma.StringNullableFilter<"Job"> | string | null
   maxTurns?: Prisma.IntNullableFilter<"Job"> | number | null
-  timeoutMs?: Prisma.IntFilter<"Job"> | number
+  attemptDeadlineSeconds?: Prisma.IntNullableFilter<"Job"> | number | null
+  activeDeadlineSeconds?: Prisma.IntNullableFilter<"Job"> | number | null
   maxBudgetUsd?: Prisma.FloatNullableFilter<"Job"> | number | null
   isolate?: Prisma.BoolFilter<"Job"> | boolean
   base?: Prisma.StringNullableFilter<"Job"> | string | null
@@ -1307,7 +1338,8 @@ export type JobCreateWithoutAttemptsInput = {
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
-  timeoutMs?: number
+  attemptDeadlineSeconds?: number | null
+  activeDeadlineSeconds?: number | null
   maxBudgetUsd?: number | null
   isolate?: boolean
   base?: string | null
@@ -1348,7 +1380,8 @@ export type JobUncheckedCreateWithoutAttemptsInput = {
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
-  timeoutMs?: number
+  attemptDeadlineSeconds?: number | null
+  activeDeadlineSeconds?: number | null
   maxBudgetUsd?: number | null
   isolate?: boolean
   base?: string | null
@@ -1402,7 +1435,8 @@ export type JobUpdateWithoutAttemptsInput = {
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
-  timeoutMs?: Prisma.IntFieldUpdateOperationsInput | number
+  attemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  activeDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   maxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   isolate?: Prisma.BoolFieldUpdateOperationsInput | boolean
   base?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1443,7 +1477,8 @@ export type JobUncheckedUpdateWithoutAttemptsInput = {
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
-  timeoutMs?: Prisma.IntFieldUpdateOperationsInput | number
+  attemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  activeDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   maxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   isolate?: Prisma.BoolFieldUpdateOperationsInput | boolean
   base?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1481,7 +1516,8 @@ export type JobCreateWithoutLeaseInput = {
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
-  timeoutMs?: number
+  attemptDeadlineSeconds?: number | null
+  activeDeadlineSeconds?: number | null
   maxBudgetUsd?: number | null
   isolate?: boolean
   base?: string | null
@@ -1522,7 +1558,8 @@ export type JobUncheckedCreateWithoutLeaseInput = {
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
-  timeoutMs?: number
+  attemptDeadlineSeconds?: number | null
+  activeDeadlineSeconds?: number | null
   maxBudgetUsd?: number | null
   isolate?: boolean
   base?: string | null
@@ -1576,7 +1613,8 @@ export type JobUpdateWithoutLeaseInput = {
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
-  timeoutMs?: Prisma.IntFieldUpdateOperationsInput | number
+  attemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  activeDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   maxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   isolate?: Prisma.BoolFieldUpdateOperationsInput | boolean
   base?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1617,7 +1655,8 @@ export type JobUncheckedUpdateWithoutLeaseInput = {
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
-  timeoutMs?: Prisma.IntFieldUpdateOperationsInput | number
+  attemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  activeDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   maxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   isolate?: Prisma.BoolFieldUpdateOperationsInput | boolean
   base?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1655,7 +1694,8 @@ export type JobCreateWithoutEventsInput = {
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
-  timeoutMs?: number
+  attemptDeadlineSeconds?: number | null
+  activeDeadlineSeconds?: number | null
   maxBudgetUsd?: number | null
   isolate?: boolean
   base?: string | null
@@ -1696,7 +1736,8 @@ export type JobUncheckedCreateWithoutEventsInput = {
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
-  timeoutMs?: number
+  attemptDeadlineSeconds?: number | null
+  activeDeadlineSeconds?: number | null
   maxBudgetUsd?: number | null
   isolate?: boolean
   base?: string | null
@@ -1750,7 +1791,8 @@ export type JobUpdateWithoutEventsInput = {
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
-  timeoutMs?: Prisma.IntFieldUpdateOperationsInput | number
+  attemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  activeDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   maxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   isolate?: Prisma.BoolFieldUpdateOperationsInput | boolean
   base?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1791,7 +1833,8 @@ export type JobUncheckedUpdateWithoutEventsInput = {
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
-  timeoutMs?: Prisma.IntFieldUpdateOperationsInput | number
+  attemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  activeDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   maxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   isolate?: Prisma.BoolFieldUpdateOperationsInput | boolean
   base?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1830,7 +1873,8 @@ export type JobCreateManyBoardInput = {
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
-  timeoutMs?: number
+  attemptDeadlineSeconds?: number | null
+  activeDeadlineSeconds?: number | null
   maxBudgetUsd?: number | null
   isolate?: boolean
   base?: string | null
@@ -1866,7 +1910,8 @@ export type JobUpdateWithoutBoardInput = {
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
-  timeoutMs?: Prisma.IntFieldUpdateOperationsInput | number
+  attemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  activeDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   maxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   isolate?: Prisma.BoolFieldUpdateOperationsInput | boolean
   base?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1906,7 +1951,8 @@ export type JobUncheckedUpdateWithoutBoardInput = {
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
-  timeoutMs?: Prisma.IntFieldUpdateOperationsInput | number
+  attemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  activeDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   maxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   isolate?: Prisma.BoolFieldUpdateOperationsInput | boolean
   base?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1946,7 +1992,8 @@ export type JobUncheckedUpdateManyWithoutBoardInput = {
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
-  timeoutMs?: Prisma.IntFieldUpdateOperationsInput | number
+  attemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  activeDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   maxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   isolate?: Prisma.BoolFieldUpdateOperationsInput | boolean
   base?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -2024,7 +2071,8 @@ export type JobSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = ru
   model?: boolean
   effort?: boolean
   maxTurns?: boolean
-  timeoutMs?: boolean
+  attemptDeadlineSeconds?: boolean
+  activeDeadlineSeconds?: boolean
   maxBudgetUsd?: boolean
   isolate?: boolean
   base?: boolean
@@ -2067,7 +2115,8 @@ export type JobSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extension
   model?: boolean
   effort?: boolean
   maxTurns?: boolean
-  timeoutMs?: boolean
+  attemptDeadlineSeconds?: boolean
+  activeDeadlineSeconds?: boolean
   maxBudgetUsd?: boolean
   isolate?: boolean
   base?: boolean
@@ -2106,7 +2155,8 @@ export type JobSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extension
   model?: boolean
   effort?: boolean
   maxTurns?: boolean
-  timeoutMs?: boolean
+  attemptDeadlineSeconds?: boolean
+  activeDeadlineSeconds?: boolean
   maxBudgetUsd?: boolean
   isolate?: boolean
   base?: boolean
@@ -2145,7 +2195,8 @@ export type JobSelectScalar = {
   model?: boolean
   effort?: boolean
   maxTurns?: boolean
-  timeoutMs?: boolean
+  attemptDeadlineSeconds?: boolean
+  activeDeadlineSeconds?: boolean
   maxBudgetUsd?: boolean
   isolate?: boolean
   base?: boolean
@@ -2175,7 +2226,7 @@ export type JobSelectScalar = {
   finishedAt?: boolean
 }
 
-export type JobOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "boardId" | "name" | "brief" | "model" | "effort" | "maxTurns" | "timeoutMs" | "maxBudgetUsd" | "isolate" | "base" | "allowedTools" | "pluginPaths" | "guide" | "maxRetries" | "exports" | "inputs" | "results" | "artifacts" | "check" | "labels" | "gate" | "proposes" | "phase" | "lastSessionId" | "lastError" | "suspendedFor" | "endedBy" | "endedFor" | "proposedByJobId" | "proposedByK" | "proposalIndex" | "createdAt" | "updatedAt" | "finishedAt", ExtArgs["result"]["job"]>
+export type JobOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "boardId" | "name" | "brief" | "model" | "effort" | "maxTurns" | "attemptDeadlineSeconds" | "activeDeadlineSeconds" | "maxBudgetUsd" | "isolate" | "base" | "allowedTools" | "pluginPaths" | "guide" | "maxRetries" | "exports" | "inputs" | "results" | "artifacts" | "check" | "labels" | "gate" | "proposes" | "phase" | "lastSessionId" | "lastError" | "suspendedFor" | "endedBy" | "endedFor" | "proposedByJobId" | "proposedByK" | "proposalIndex" | "createdAt" | "updatedAt" | "finishedAt", ExtArgs["result"]["job"]>
 export type JobInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   board?: boolean | Prisma.BoardDefaultArgs<ExtArgs>
   attempts?: boolean | Prisma.Job$attemptsArgs<ExtArgs>
@@ -2215,9 +2266,41 @@ export type $JobPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
     effort: string | null
     maxTurns: number | null
     /**
-     * Wall clock. The model's own caps (turns, budget) cannot stop a session that has stalled.
+     * **One attempt's wall clock**, in seconds — Kubernetes' `template.spec.activeDeadlineSeconds`
+     * (ADR-016). The model's own caps (turns, budget) cannot stop a session that has stalled, and a
+     * Pod that outruns this one fails with `DeadlineExceeded` and is *retried* subject to the
+     * backoff limit. That is exactly hkb's behaviour: `timed_out` is resumable and burns a retry.
+     * 
+     * Nullable like the five above, and for the same reason: a column with a database default cannot
+     * tell "the operator asked for 30 minutes" from "the operator said nothing", so a board default
+     * would be outranked by every Job that ever existed. The built-in 1800 lives in `src/spec.ts`.
+     * 
+     * Seconds, not milliseconds, because that is the unit Kubernetes named the field in and hkb does
+     * not invent a vocabulary where the map has one. The runtime seam still takes milliseconds
+     * (`WorkerSpec.timeoutMs`) — a driver's unit is the driver's business, and the seam is where hkb
+     * stops being Kubernetes-shaped.
      */
-    timeoutMs: number
+    attemptDeadlineSeconds: number | null
+    /**
+     * **The whole Job's wall clock**, across every attempt — Kubernetes' `JobSpec
+     * .activeDeadlineSeconds`, measured from the first attempt's `startedAt`.
+     * 
+     * The one above bounds a runaway *attempt*; this bounds a runaway *Job*. Without it a Job with
+     * three retries and a 90-minute attempt clock can occupy a slot for four and a half hours and
+     * still be "within its caps". Kubernetes draws exactly this distinction and hkb had only half of
+     * it, which ADR-016's map recorded as `resources.limits` — a row that is imprecise, since
+     * `resources.limits` is cpu and memory and a deadline is neither.
+     * 
+     * **It takes precedence over `maxRetries`**, which is Kubernetes' rule and not a choice made
+     * here: "once a Job reaches activeDeadlineSeconds, all of its running Pods are terminated and
+     * the Job status will become type: Failed with reason: DeadlineExceeded". So a Job past this
+     * does not retry, however many retries it has left — `nextPhase` in `src/controller.ts`, where
+     * the ordering is written down and tested.
+     * 
+     * Null is the shipped default and means *no Job-wide deadline*, which is Kubernetes' default
+     * too. A per-attempt clock always applies; this one applies when somebody asked for it.
+     */
+    activeDeadlineSeconds: number | null
     maxBudgetUsd: number | null
     /**
      * Run in its own git worktree. Enforced at admission, not requested in a prompt.
@@ -2893,7 +2976,8 @@ export interface JobFieldRefs {
   readonly model: Prisma.FieldRef<"Job", 'String'>
   readonly effort: Prisma.FieldRef<"Job", 'String'>
   readonly maxTurns: Prisma.FieldRef<"Job", 'Int'>
-  readonly timeoutMs: Prisma.FieldRef<"Job", 'Int'>
+  readonly attemptDeadlineSeconds: Prisma.FieldRef<"Job", 'Int'>
+  readonly activeDeadlineSeconds: Prisma.FieldRef<"Job", 'Int'>
   readonly maxBudgetUsd: Prisma.FieldRef<"Job", 'Float'>
   readonly isolate: Prisma.FieldRef<"Job", 'Boolean'>
   readonly base: Prisma.FieldRef<"Job", 'String'>

@@ -31,7 +31,7 @@ import {
 import {
   PROPOSAL_ARTIFACT, proposalGate, readProposal, storedProposal, type Proposal,
 } from './proposals.ts';
-import { gateClaim, windowStart, type ClaimGate } from './limits.ts';
+import { deadlineExceeded, deadlineShortfall, gateClaim, windowStart, type ClaimGate } from './limits.ts';
 import { resolveSpec } from './spec.ts';
 import { holderId, holderLiveness } from './liveness.ts';
 import type { Runtime, RuntimeEvent, WorkerOutcome } from './runtime/index.ts';
@@ -179,7 +179,7 @@ const LEASE_GRACE_MS = 5 * 60_000;
  */
 export type Decision = {
   phase: 'succeeded' | 'failed' | 'pending' | 'suspended';
-  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped' | 'no_output' | 'no_input' | 'conflicted' | 'check_failed';
+  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped' | 'no_output' | 'no_input' | 'conflicted' | 'check_failed' | 'deadline_exceeded';
   resumable: boolean;
   /**
    * What to write on the Job's `lastError`, when the reason it stopped is something a *human* has
@@ -238,7 +238,34 @@ export function nextPhase(
    * The controller runs it after the rebase and calls back in with what it said.
    */
   failedCheck?: CheckRecord | null,
+  /**
+   * The Job's own wall clock, already decided (`deadlineExceeded`, `src/limits.ts`).
+   *
+   * Passed in rather than computed here for the reason `failedCheck` is: this function is pure and
+   * a clock is not. The controller measures from the first attempt's `startedAt` and calls back in.
+   */
+  jobDeadline?: { exceeded: boolean; ranForMs: number; seconds: number } | null,
 ): Decision {
+  // **First, above the check and above `completed`, because Kubernetes puts it there.** Once a Job
+  // reaches `activeDeadlineSeconds` its Pods are terminated and it becomes `Failed` with
+  // `DeadlineExceeded` — the deadline outranks `backoffLimit`, so retries left do not matter.
+  //
+  // Above `completed` too, and that is the ordering worth stating: an attempt that finished cleanly
+  // *after* the Job's clock ran out still ended a Job nobody may spend more wall time on. Ordering
+  // it below would make the deadline mean "unless the last attempt happened to work", which is a
+  // race with the scheduler rather than a ceiling.
+  //
+  // Not resumable, and no session is kept: what ran out is the Job's clock, not this attempt's, so
+  // there is nothing a resumed session could do about it. `hkb job set --deadline` then `hkb retry`
+  // is the way back, and the message says so.
+  if (jobDeadline?.exceeded) {
+    return {
+      phase: 'failed',
+      outcome: 'deadline_exceeded',
+      resumable: false,
+      lastError: deadlineShortfall(0, jobDeadline.ranForMs, jobDeadline.seconds),
+    };
+  }
   // First, and it outranks `completed` — which is exactly the point. A check only ever runs after a
   // session that ended cleanly and produced everything it declared, so `outcome.status` here is
   // always `completed`; taking that as the answer is what having no exit code MEANS, and this is
@@ -768,7 +795,10 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // ---- acquire. `@@id(jobId)` on Lease is the compare-and-swap: a second holder loses here,
     // and losing is a normal outcome, not an error.
     const token = `${host}:${k}:${now().getTime()}`;
-    const leaseMs = leaseFor(job.timeoutMs);
+    // Seconds on the column, milliseconds in the arithmetic. The lease is still
+    // `<attempt clock> + LEASE_GRACE_MS`, so a longer clock lengthens the lease by exactly as much
+    // and the renewer covers the rest — a 60-minute Job is not reclaimed at 35.
+    const leaseMs = leaseFor(spec.attemptDeadlineSeconds.value * 1000);
     // The concurrency slot: the lowest non-negative integer no other LIVE lease holds. Machine-wide,
     // because one board file serves one machine and ports do not respect board boundaries.
     //
@@ -803,6 +833,9 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       data: {
         jobId: job.id, k, host, runtime: deps.runtime.name, startedAt: now(),
         maxBudgetUsd: spec.maxBudgetUsd.value,
+        // Frozen at claim time beside the cap, and for the same reason: raising the clock afterwards
+        // must not rewrite what stopped an earlier attempt.
+        attemptDeadlineSeconds: spec.attemptDeadlineSeconds.value,
         // Copied off the Lease so the fact survives the release — `hkb show` can say which slot a
         // past attempt held, which is what makes a port collision diagnosable after the fact.
         slot,
@@ -1410,7 +1443,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
           // let a Job write a hook its own next attempt executes. Against the repository, a merge is
           // the only way to change what a grant loads.
           plugins: grantedPlugins,
-          timeoutMs: job.timeoutMs,
+          timeoutMs: spec.attemptDeadlineSeconds.value * 1000,
           resume: job.lastSessionId ?? undefined,
           signal: deps.signal,
         }, deps.onRuntimeEvent)
@@ -1444,6 +1477,24 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       // The operator's intent outranks whatever the runtime made of being cut off. A stopped run
       // reports `timeout` or `error` depending on where the abort landed, and recording either would
       // be a lie about why it ended AND would spend a retry on it.
+      // ---- the Job's own wall clock, measured across every attempt it has had.
+      //
+      // From the FIRST attempt's `startedAt`, which is Kubernetes' `Job.status.startTime` — not this
+      // attempt's, or a Job with three retries would get its full deadline three times over and the
+      // ceiling would bound nothing. Read here rather than at claim time because this is where the
+      // decision is made; the claim-time half is a separate guard below.
+      const startedFirst = await db.attempt.findFirst({
+        where: { jobId: job.id }, orderBy: { k: 'asc' }, select: { startedAt: true },
+      });
+      const deadlineSeconds = spec.activeDeadlineSeconds.value;
+      const jobDeadline = deadlineSeconds != null && startedFirst
+        ? {
+          exceeded: deadlineExceeded(startedFirst.startedAt, now(), deadlineSeconds),
+          ranForMs: now().getTime() - startedFirst.startedAt.getTime(),
+          seconds: deadlineSeconds,
+        }
+        : null;
+
       // `let`, because one thing may still change it after the fact: a stop that lands while the
       // completion check is in flight. See the check block below.
       let ran: Decision = inputShortfall
@@ -1456,7 +1507,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // Both from the resolved spec, so the budget advice names the cap this attempt actually ran
         // under — which may be the board's. Quoting the raw column would print `$0.00` and send the
         // operator to raise a limit that was never the one they hit.
-        : nextPhase(outcome, charged, spec.maxRetries.value, spec.maxBudgetUsd.value);
+        : nextPhase(outcome, charged, spec.maxRetries.value, spec.maxBudgetUsd.value, null, jobDeadline);
 
       // ---- the declared outputs, out of the sandbox BEFORE it is torn down. The order is the whole
       // design: a worktree is the pod filesystem and dies with the run, so an artifact still inside it

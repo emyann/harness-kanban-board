@@ -104,3 +104,43 @@ export function gateClaim(i: ClaimInputs): ClaimGate {
 
 /** The start of the rolling window. Not a calendar day: there is no timezone to get wrong. */
 export const windowStart = (now: Date) => new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+/**
+ * Has this Job outrun its own wall clock — the one that spans every attempt?
+ *
+ * Kubernetes' `JobSpec.activeDeadlineSeconds`, measured from the Job's `startTime`, which here is
+ * the first attempt's `startedAt`. The per-attempt clock (`attemptDeadlineSeconds`) bounds a
+ * runaway *session*; this bounds a runaway *Job*. Without it, three retries under a 90-minute
+ * attempt clock can hold a slot for four and a half hours and still be "within its caps".
+ *
+ * **Pure, and in this module rather than the controller**, because it is a ceiling and this is where
+ * ceilings live (`src/spec.ts`'s header draws that line: a *default* is a value a Job may override
+ * and is resolved there; a *ceiling* is a limit it may not exceed and is enforced here). The
+ * controller supplies `startedAt` and `now`; nothing here reads a clock or a database, so the case
+ * that matters — the refusing one — is testable without either.
+ *
+ * Null `seconds` is "no Job-wide deadline", which is the shipped default and Kubernetes' own. Null
+ * `startedAt` is a Job that has never run: it cannot have outrun a clock that never started.
+ */
+export function deadlineExceeded(
+  startedAt: Date | null | undefined,
+  now: Date,
+  seconds: number | null | undefined,
+): boolean {
+  if (seconds == null || startedAt == null) return false;
+  return now.getTime() - startedAt.getTime() >= seconds * 1000;
+}
+
+/**
+ * What the operator is told when a Job is ended by its own deadline.
+ *
+ * Names the two numbers that decide it and the one flag that changes it, because "DeadlineExceeded"
+ * on its own sends nobody anywhere. It says `hkb job set --deadline` rather than "retry", since a
+ * retry is precisely what this outcome refuses: the Job is out of wall clock, not out of luck.
+ */
+export function deadlineShortfall(jobId: number, ranForMs: number, seconds: number): string {
+  const mins = (ms: number) => `${Math.round(ms / 60_000)}m`;
+  return `#${jobId} ran ${mins(ranForMs)} across its attempts and its deadline is ${mins(seconds * 1000)} `
+    + `— ended without another attempt, retries or not. `
+    + `\`hkb job set ${jobId} --deadline <seconds>\` then \`hkb retry ${jobId}\` to give it more wall clock.`;
+}

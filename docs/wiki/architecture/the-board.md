@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "adding a column, deciding whether something belongs on the Job or the Attempt, writing a migration, or explaining why a board refuses to open"
 covers:
   - path: prisma/schema.prisma
-    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
+    sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
   - path: src/schema.ts
     sha: ee1920b789eb96be121c8bba20cc92e452ddf818
   - path: src/db.ts
@@ -15,8 +15,8 @@ covers:
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/spec.ts
-    sha: 8792a804835fd0602a992aeccf978e110fe2a98f
-generated_at_commit: f8ea774
+    sha: 5f549ec7407fcf1af8d80266ad35b9e90ab1620a
+generated_at_commit: 1a75d0b
 last_refreshed: 2026-09-09
 related:
   [
@@ -69,6 +69,13 @@ The distinction that decides who wins is *default* versus *ceiling*. A default i
 freely override, resolved in `src/spec.ts`. A ceiling is a limit a Job may not exceed, enforced at
 claim time in `src/limits.ts`. `Board.defaultMaxBudgetUsd` is the first; `Board.dailyBudgetUsd` and
 `maxConcurrent` are the second, and no Job column overrides them.
+
+The two **deadlines** are one of each kind, which is why they are named apart.
+`defaultAttemptDeadlineSeconds` fills a Job that named no per-attempt clock — a default, freely
+overridden. `defaultActiveDeadlineSeconds` gives every Job filed here a wall clock across all its
+attempts, and that one ENDS a Job rather than shaping it: it outranks the retry budget, the way
+Kubernetes' `JobSpec.activeDeadlineSeconds` outranks `backoffLimit` (*concepts/ceilings*). Both are
+seconds, because that is the unit the map named them in.
 
 `Board.defaultWorkflow` is a third thing again, and the only board column with no Job twin: it names
 a workflow file whose frontmatter `hkb new` expands into the columns above at file time, and whose

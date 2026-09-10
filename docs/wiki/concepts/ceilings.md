@@ -7,18 +7,18 @@ audience: [dev, ops]
 read_when: "touching gateClaim, adding a limit, changing what a claim is judged against, or explaining why a board claimed nothing"
 covers:
   - path: src/limits.ts
-    sha: 61b65c43e2fd7c28f952c403e02d073ca9907561
+    sha: 6dfe4dbab79fff06f46f4d7cd01f3cd071ed9765
   - path: src/controller.ts
-    sha: 3673f449a7ebf15f9b21900915183b3bec63b6e5
+    sha: 2c0187bd11936fb1ed6b7a5517ccc53bec3db190
   - path: prisma/schema.prisma
-    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
+    sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
   - path: src/spec.ts
-    sha: 8792a804835fd0602a992aeccf978e110fe2a98f
+    sha: 5f549ec7407fcf1af8d80266ad35b9e90ab1620a
   - path: src/hkb.ts
-    sha: 07cc5da2cf62b8a7cb356558d805b9c2a29ba5b7
+    sha: 28cc3417db47ad003b9ff5e19ea4c25a27394b72
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
-generated_at_commit: ff67f87
+generated_at_commit: 1a75d0b
 last_refreshed: 2026-09-09
 related: [architecture/the-board, architecture/the-loop, architecture/job-kind, concepts/leases-and-liveness]
 ---
@@ -182,6 +182,45 @@ Two edges worth knowing. `--max-concurrent 0` **drains** a board without stoppin
 state from the kill switch, and a deliberate one (`prisma/schema.prisma:127`, `src/hkb.ts:1437-1440`).
 And `--daily-budget` accepts the literal `none` to clear the ceiling, because "no ceiling" and "a
 ceiling of zero" are different configurations (`src/hkb.ts:1444-1448`).
+
+## The fourth ceiling, and it is the only one that is not the board's
+
+`Job.activeDeadlineSeconds` is a **wall clock across every attempt a Job has**, from the first one's
+`startedAt` — Kubernetes' `JobSpec.activeDeadlineSeconds`. It belongs on this page because it
+behaves like the three above and not like a default: a Job may set it, but once past it, nothing the
+Job says gets it another attempt.
+
+**It outranks the retry budget**, and that is Kubernetes' rule rather than a choice made here:
+*"once a Job reaches activeDeadlineSeconds, all of its running Pods are terminated and the Job
+status will become type: Failed with reason: DeadlineExceeded."* ADR-016 decision 4 says the failure
+semantics are Kubernetes' to decide, so `nextPhase` reads this **before** the completion check and
+before `completed` — an attempt that finished cleanly after the Job's clock ran out still ended a
+Job nobody may spend more wall time on. Ordering it lower would make the deadline mean "unless the
+last attempt happened to work", which is a race with the scheduler rather than a ceiling.
+
+The decision is pure and lives here rather than in the controller: `deadlineExceeded(startedAt, now,
+seconds)` in `src/limits.ts`, with the controller supplying both clocks.
+
+Null is the shipped default — no Job-wide deadline — which is Kubernetes' default too. A default
+that silently ends work is not a default.
+
+### Its per-attempt twin, which is a default rather than a ceiling
+
+`Job.attemptDeadlineSeconds` (Kubernetes' `template.spec.activeDeadlineSeconds`) bounds **one
+session**. A run that outruns it is stopped and the attempt is **retried** like any other failure —
+`timed_out` is resumable and burns a retry. So it shapes work rather than ending it, resolves three
+deep like every other default (`src/spec.ts`), and is frozen onto the `Attempt` at claim time so
+raising it later cannot rewrite what stopped an earlier one.
+
+The lease is derived from it — `attemptDeadlineSeconds + LEASE_GRACE_MS` — so a longer clock
+lengthens the lease by exactly as much and a 60-minute Job is not reclaimed at 35
+(*concepts/leases-and-liveness*).
+
+Both are set with `hkb new`, `hkb job set` and `hkb boards set`, in **seconds**, and both refuse
+zero and negatives by name: Kubernetes says the value must be a positive integer, and `0` reads to a
+person as "no deadline" while meaning "already expired" to the arithmetic. Until card #53 neither
+had a flag at all — `Job.timeoutMs` was non-nullable with a database default, so the only way to
+change a Job's wall clock was `update Job set timeoutMs` in SQL.
 
 `--max-budget` on `hkb boards set` is **not** a ceiling despite the neighbouring flags: it writes
 `defaultMaxBudgetUsd`, a default a Job may override (`src/hkb.ts:1362`,

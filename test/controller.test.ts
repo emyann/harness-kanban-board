@@ -249,7 +249,7 @@ test('a genuine race is lost at the compare-and-swap, not at the gate', async ()
 test('an expired lease is reclaimed and its orphaned attempt is marked lost', async () => {
   const job = await mkJob('abandoned');
   await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
-  await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'dead-host', maxBudgetUsd: 1 } });
+  await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'dead-host', maxBudgetUsd: 1 , attemptDeadlineSeconds: 1800} });
   await db.lease.create({
     data: { jobId: job.id, holder: 'dead-host', token: 't', expiresAt: new Date(Date.now() - 1000) },
   });
@@ -548,7 +548,7 @@ test('an open attempt is charged its own frozen cap, not the board\'s current de
   });
   // Somebody else's run, claimed while the board's default was $7. It is still going.
   const theirs = await db.job.create({ data: { boardId: b.id, name: 'theirs', brief: 'x', phase: 'running' } });
-  await db.attempt.create({ data: { jobId: theirs.id, k: 1, host: 'another-host', maxBudgetUsd: 7 } });
+  await db.attempt.create({ data: { jobId: theirs.id, k: 1, host: 'another-host', maxBudgetUsd: 7 , attemptDeadlineSeconds: 1800} });
 
   const { seen, runtime } = specSpy();
   await db.job.create({ data: { boardId: b.id, name: 'mine', brief: 'x', isolate: false, maxBudgetUsd: 2 } });
@@ -1946,7 +1946,7 @@ test('an approved proposal cannot be applied to a Job in triage either', async (
   });
   await db.attempt.create({
     data: {
-      jobId: job.id, k: 1, maxBudgetUsd: 1, outcome: 'completed', endedAt: new Date(),
+      jobId: job.id, k: 1, maxBudgetUsd: 1, attemptDeadlineSeconds: 1800, outcome: 'completed', endedAt: new Date(),
       proposal: { jobs: [{ name: 'must not be filed', brief: 'x' }], clamped: [] },
     },
   });
@@ -2604,7 +2604,7 @@ test('a Job left `running` with no lease and no live holder is reclaimed on the 
   // A holder on THIS machine whose process is gone — the one case liveness can prove. An open
   // attempt from another machine, or from a live process, is left alone: see the sibling tests
   // that model another host's run in flight this same way.
-  await db.attempt.create({ data: { jobId: job.id, k: 1, host: `${os.hostname()}/999999@fake`, maxBudgetUsd: 1, startedAt: new Date() } });
+  await db.attempt.create({ data: { jobId: job.id, k: 1, host: `${os.hostname()}/999999@fake`, maxBudgetUsd: 1, attemptDeadlineSeconds: 1800, startedAt: new Date() } });
   const r = await reconcile({ runtime: fakeRuntime(), cwd, board: 'stranded-running', readPr: false });
   assert.deepEqual(r.reclaimed, [job.id]);
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
@@ -2621,8 +2621,8 @@ test('the interrupted-check notice survives a `stopped` attempt in between', asy
     data: { boardId: b.id, name: 'walk', brief: 'x', check: 'true', phase: 'pending', lastSessionId: 's-walk', maxRetries: 4 },
   });
   const at = new Date();
-  await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'h', maxBudgetUsd: 1, startedAt: at, endedAt: at, outcome: 'completed', sessionId: 's-walk', reason: 'check interrupted by a stop — the run stands, the check runs again' } });
-  await db.attempt.create({ data: { jobId: job.id, k: 2, host: 'h', maxBudgetUsd: 1, startedAt: at, endedAt: at, outcome: 'stopped', sessionId: 's-walk' } });
+  await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'h', maxBudgetUsd: 1, attemptDeadlineSeconds: 1800, startedAt: at, endedAt: at, outcome: 'completed', sessionId: 's-walk', reason: 'check interrupted by a stop — the run stands, the check runs again' } });
+  await db.attempt.create({ data: { jobId: job.id, k: 2, host: 'h', maxBudgetUsd: 1, attemptDeadlineSeconds: 1800, startedAt: at, endedAt: at, outcome: 'stopped', sessionId: 's-walk' } });
   const prompts: string[] = [];
   await reconcile({ runtime: spyingPlants(prompts, {}), cwd, board: 'interrupted-walkback', readPr: false });
   assert.equal(prompts.length, 1);
@@ -2957,4 +2957,73 @@ test('a board pointing at a workflow that is not there REFUSES the attempt, and 
   assert.equal(row.phase, 'failed');
   assert.match(row.lastError ?? '', /workflow `gone`/);
   assert.match(row.lastError ?? '', /hkb boards set steps --workflow/, 'and the message names the fix');
+});
+
+// ---------------------------------------------------------------- the Job-wide deadline
+
+/**
+ * `activeDeadlineSeconds` outranks `maxRetries`, and that ordering is Kubernetes' rather than ours.
+ *
+ * *"Once a Job reaches activeDeadlineSeconds, all of its running Pods are terminated and the Job
+ * status will become type: Failed with reason: DeadlineExceeded."* ADR-016 decision 4 says the
+ * failure semantics are Kubernetes' to decide, so the tests here are about ORDER: the deadline is
+ * read before the check, before `completed`, and before anything counts retries.
+ */
+const exceeded = { exceeded: true, ranForMs: 7_200_000, seconds: 3600 };
+const within = { exceeded: false, ranForMs: 60_000, seconds: 3600 };
+
+test('a Job past its deadline fails, with retries left and to spare', () => {
+  const d = nextPhase({ status: 'max_turns' } as never, 1, 99, 1, null, exceeded);
+  assert.equal(d.phase, 'failed', '99 retries remain and it still does not get another attempt');
+  assert.equal(d.outcome, 'deadline_exceeded');
+  assert.equal(d.resumable, false, 'the Job ran out of wall clock, not the session');
+  assert.match(d.lastError ?? '', /--deadline/);
+});
+
+test('and it outranks a run that FINISHED — otherwise the deadline is a race, not a ceiling', () => {
+  // The ordering that is easy to get backwards: an attempt completing after the Job's clock ran out
+  // still ended a Job nobody may spend more wall time on.
+  const d = nextPhase({ status: 'completed' } as never, 1, 2, 1, null, exceeded);
+  assert.equal(d.phase, 'failed');
+  assert.equal(d.outcome, 'deadline_exceeded');
+});
+
+test('and over a failed check, which is otherwise the first thing read', () => {
+  const check = { command: 'npm test', code: 1, tail: 'nope', ranForMs: 10, at: new Date() };
+  const d = nextPhase({ status: 'completed' } as never, 1, 2, 1, check as never, exceeded);
+  assert.equal(d.outcome, 'deadline_exceeded', 'the Job is over; what the check said no longer decides');
+});
+
+test('a Job INSIDE its deadline is decided by everything else, exactly as before', () => {
+  assert.equal(nextPhase({ status: 'completed' } as never, 1, 2, 1, null, within).outcome, 'completed');
+  assert.equal(nextPhase({ status: 'max_turns' } as never, 1, 2, 1, null, within).phase, 'pending');
+  // And with no deadline at all, which is the shipped default.
+  assert.equal(nextPhase({ status: 'completed' } as never, 1, 2, 1, null, null).outcome, 'completed');
+  assert.equal(nextPhase({ status: 'completed' } as never, 1, 2).outcome, 'completed');
+});
+
+test('a Job ends on its deadline through a real reconcile, and keeps no session to resume', async () => {
+  // At the shipped defaults but for the deadline itself: 1 second, and a runtime that takes longer.
+  const b = await proposalBoard();
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'runaway', brief: 'go forever', isolate: false,
+      maxBudgetUsd: 1, maxRetries: 5, activeDeadlineSeconds: 1,
+    },
+  });
+  const slow = {
+    name: 'slow',
+    async run() {
+      await new Promise((r) => setTimeout(r, 1200));
+      return { status: 'max_turns', ok: false, sessionId: 'keep-me', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'max_turns', denials: 0, error: null };
+    },
+  } as never;
+  await reconcile({ runtime: slow, cwd, only: job.id, board: 'proposals', readPr: false });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'failed', 'five retries remained and none of them was taken');
+  assert.equal(after.attempts[0].outcome, 'deadline_exceeded');
+  assert.equal(after.lastSessionId, null, 'nothing to resume: the clock that ran out was the Job\'s');
+  assert.match(after.lastError ?? '', /ran .* across its attempts/);
 });

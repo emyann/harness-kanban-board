@@ -154,7 +154,7 @@ test('retry refuses a spent budget under the same cap — same run, same wall, s
   await db.attempt.create({
     data: {
       jobId: j.id, k: 1, host: 'h', runtime: 'fake', startedAt: new Date(), endedAt: new Date(),
-      outcome: 'max_budget', maxBudgetUsd: 2,
+      outcome: 'max_budget', maxBudgetUsd: 2, attemptDeadlineSeconds: 1800,
     },
   });
   await refusal(() => retryJob(db, j.id, { by: 'a' }), /stops in the same place, at the same price/);
@@ -234,11 +234,11 @@ test('concluding a Job closes an attempt nobody ever heard from again', async ()
   // print a duration that climbs for ever.
   const j = await mkJob('abandoned', { phase: 'pending' });
   await db.attempt.create({
-    data: { jobId: j.id, k: 1, host: 'h', runtime: 'fake', startedAt: new Date(), maxBudgetUsd: 1 },
+    data: { jobId: j.id, k: 1, host: 'h', runtime: 'fake', startedAt: new Date(), maxBudgetUsd: 1 , attemptDeadlineSeconds: 1800},
   });
   const finished = await db.attempt.create({
     data: {
-      jobId: j.id, k: 2, host: 'h', runtime: 'fake', startedAt: new Date(), maxBudgetUsd: 1,
+      jobId: j.id, k: 2, host: 'h', runtime: 'fake', startedAt: new Date(), maxBudgetUsd: 1, attemptDeadlineSeconds: 1800,
       endedAt: new Date(0), outcome: 'crashed',
     },
   });
