@@ -9,7 +9,7 @@ covers:
   - path: src/filing.ts
     sha: afa2d406f78ccb1bc6c9d73cc4a56cdf0b16a16a
   - path: src/read.ts
-    sha: 6225a35a96f1896a1457385bda9eb9d0868490c0
+    sha: 30fc92b5f53ce6228f3335ec556538fc1af464df
   - path: src/flags.ts
     sha: 7140df95e7457ce3f2ed4fe3fe38e19476728dd1
   - path: src/hkb.ts
@@ -24,7 +24,7 @@ related:
     gotchas/argv-traps,
     architecture/the-board,
   ]
-generated_at_commit: 62135e9
+generated_at_commit: 410ed29
 last_refreshed: 2026-09-10
 ---
 
