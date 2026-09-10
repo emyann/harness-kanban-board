@@ -31,6 +31,8 @@ export type BoardAvgAggregateOutputType = {
   dailyBudgetUsd: number | null
   maxConcurrent: number | null
   defaultMaxTurns: number | null
+  defaultAttemptDeadlineSeconds: number | null
+  defaultActiveDeadlineSeconds: number | null
   defaultMaxBudgetUsd: number | null
   defaultMaxRetries: number | null
 }
@@ -40,6 +42,8 @@ export type BoardSumAggregateOutputType = {
   dailyBudgetUsd: number | null
   maxConcurrent: number | null
   defaultMaxTurns: number | null
+  defaultAttemptDeadlineSeconds: number | null
+  defaultActiveDeadlineSeconds: number | null
   defaultMaxBudgetUsd: number | null
   defaultMaxRetries: number | null
 }
@@ -55,6 +59,8 @@ export type BoardMinAggregateOutputType = {
   defaultModel: string | null
   defaultEffort: string | null
   defaultMaxTurns: number | null
+  defaultAttemptDeadlineSeconds: number | null
+  defaultActiveDeadlineSeconds: number | null
   defaultMaxBudgetUsd: number | null
   defaultMaxRetries: number | null
   defaultGuide: string | null
@@ -76,6 +82,8 @@ export type BoardMaxAggregateOutputType = {
   defaultModel: string | null
   defaultEffort: string | null
   defaultMaxTurns: number | null
+  defaultAttemptDeadlineSeconds: number | null
+  defaultActiveDeadlineSeconds: number | null
   defaultMaxBudgetUsd: number | null
   defaultMaxRetries: number | null
   defaultGuide: string | null
@@ -97,6 +105,8 @@ export type BoardCountAggregateOutputType = {
   defaultModel: number
   defaultEffort: number
   defaultMaxTurns: number
+  defaultAttemptDeadlineSeconds: number
+  defaultActiveDeadlineSeconds: number
   defaultMaxBudgetUsd: number
   defaultMaxRetries: number
   defaultAllowedTools: number
@@ -116,6 +126,8 @@ export type BoardAvgAggregateInputType = {
   dailyBudgetUsd?: true
   maxConcurrent?: true
   defaultMaxTurns?: true
+  defaultAttemptDeadlineSeconds?: true
+  defaultActiveDeadlineSeconds?: true
   defaultMaxBudgetUsd?: true
   defaultMaxRetries?: true
 }
@@ -125,6 +137,8 @@ export type BoardSumAggregateInputType = {
   dailyBudgetUsd?: true
   maxConcurrent?: true
   defaultMaxTurns?: true
+  defaultAttemptDeadlineSeconds?: true
+  defaultActiveDeadlineSeconds?: true
   defaultMaxBudgetUsd?: true
   defaultMaxRetries?: true
 }
@@ -140,6 +154,8 @@ export type BoardMinAggregateInputType = {
   defaultModel?: true
   defaultEffort?: true
   defaultMaxTurns?: true
+  defaultAttemptDeadlineSeconds?: true
+  defaultActiveDeadlineSeconds?: true
   defaultMaxBudgetUsd?: true
   defaultMaxRetries?: true
   defaultGuide?: true
@@ -161,6 +177,8 @@ export type BoardMaxAggregateInputType = {
   defaultModel?: true
   defaultEffort?: true
   defaultMaxTurns?: true
+  defaultAttemptDeadlineSeconds?: true
+  defaultActiveDeadlineSeconds?: true
   defaultMaxBudgetUsd?: true
   defaultMaxRetries?: true
   defaultGuide?: true
@@ -182,6 +200,8 @@ export type BoardCountAggregateInputType = {
   defaultModel?: true
   defaultEffort?: true
   defaultMaxTurns?: true
+  defaultAttemptDeadlineSeconds?: true
+  defaultActiveDeadlineSeconds?: true
   defaultMaxBudgetUsd?: true
   defaultMaxRetries?: true
   defaultAllowedTools?: true
@@ -292,6 +312,8 @@ export type BoardGroupByOutputType = {
   defaultModel: string | null
   defaultEffort: string | null
   defaultMaxTurns: number | null
+  defaultAttemptDeadlineSeconds: number | null
+  defaultActiveDeadlineSeconds: number | null
   defaultMaxBudgetUsd: number | null
   defaultMaxRetries: number | null
   defaultAllowedTools: runtime.JsonValue | null
@@ -338,6 +360,8 @@ export type BoardWhereInput = {
   defaultModel?: Prisma.StringNullableFilter<"Board"> | string | null
   defaultEffort?: Prisma.StringNullableFilter<"Board"> | string | null
   defaultMaxTurns?: Prisma.IntNullableFilter<"Board"> | number | null
+  defaultAttemptDeadlineSeconds?: Prisma.IntNullableFilter<"Board"> | number | null
+  defaultActiveDeadlineSeconds?: Prisma.IntNullableFilter<"Board"> | number | null
   defaultMaxBudgetUsd?: Prisma.FloatNullableFilter<"Board"> | number | null
   defaultMaxRetries?: Prisma.IntNullableFilter<"Board"> | number | null
   defaultAllowedTools?: Prisma.JsonNullableFilter<"Board">
@@ -364,6 +388,8 @@ export type BoardOrderByWithRelationInput = {
   defaultModel?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultEffort?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultMaxTurns?: Prisma.SortOrderInput | Prisma.SortOrder
+  defaultAttemptDeadlineSeconds?: Prisma.SortOrderInput | Prisma.SortOrder
+  defaultActiveDeadlineSeconds?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultMaxBudgetUsd?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultMaxRetries?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultAllowedTools?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -393,6 +419,8 @@ export type BoardWhereUniqueInput = Prisma.AtLeast<{
   defaultModel?: Prisma.StringNullableFilter<"Board"> | string | null
   defaultEffort?: Prisma.StringNullableFilter<"Board"> | string | null
   defaultMaxTurns?: Prisma.IntNullableFilter<"Board"> | number | null
+  defaultAttemptDeadlineSeconds?: Prisma.IntNullableFilter<"Board"> | number | null
+  defaultActiveDeadlineSeconds?: Prisma.IntNullableFilter<"Board"> | number | null
   defaultMaxBudgetUsd?: Prisma.FloatNullableFilter<"Board"> | number | null
   defaultMaxRetries?: Prisma.IntNullableFilter<"Board"> | number | null
   defaultAllowedTools?: Prisma.JsonNullableFilter<"Board">
@@ -419,6 +447,8 @@ export type BoardOrderByWithAggregationInput = {
   defaultModel?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultEffort?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultMaxTurns?: Prisma.SortOrderInput | Prisma.SortOrder
+  defaultAttemptDeadlineSeconds?: Prisma.SortOrderInput | Prisma.SortOrder
+  defaultActiveDeadlineSeconds?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultMaxBudgetUsd?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultMaxRetries?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultAllowedTools?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -450,6 +480,8 @@ export type BoardScalarWhereWithAggregatesInput = {
   defaultModel?: Prisma.StringNullableWithAggregatesFilter<"Board"> | string | null
   defaultEffort?: Prisma.StringNullableWithAggregatesFilter<"Board"> | string | null
   defaultMaxTurns?: Prisma.IntNullableWithAggregatesFilter<"Board"> | number | null
+  defaultAttemptDeadlineSeconds?: Prisma.IntNullableWithAggregatesFilter<"Board"> | number | null
+  defaultActiveDeadlineSeconds?: Prisma.IntNullableWithAggregatesFilter<"Board"> | number | null
   defaultMaxBudgetUsd?: Prisma.FloatNullableWithAggregatesFilter<"Board"> | number | null
   defaultMaxRetries?: Prisma.IntNullableWithAggregatesFilter<"Board"> | number | null
   defaultAllowedTools?: Prisma.JsonNullableWithAggregatesFilter<"Board">
@@ -472,6 +504,8 @@ export type BoardCreateInput = {
   defaultModel?: string | null
   defaultEffort?: string | null
   defaultMaxTurns?: number | null
+  defaultAttemptDeadlineSeconds?: number | null
+  defaultActiveDeadlineSeconds?: number | null
   defaultMaxBudgetUsd?: number | null
   defaultMaxRetries?: number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -498,6 +532,8 @@ export type BoardUncheckedCreateInput = {
   defaultModel?: string | null
   defaultEffort?: string | null
   defaultMaxTurns?: number | null
+  defaultAttemptDeadlineSeconds?: number | null
+  defaultActiveDeadlineSeconds?: number | null
   defaultMaxBudgetUsd?: number | null
   defaultMaxRetries?: number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -523,6 +559,8 @@ export type BoardUpdateInput = {
   defaultModel?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultEffort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultMaxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultAttemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultActiveDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -549,6 +587,8 @@ export type BoardUncheckedUpdateInput = {
   defaultModel?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultEffort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultMaxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultAttemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultActiveDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -575,6 +615,8 @@ export type BoardCreateManyInput = {
   defaultModel?: string | null
   defaultEffort?: string | null
   defaultMaxTurns?: number | null
+  defaultAttemptDeadlineSeconds?: number | null
+  defaultActiveDeadlineSeconds?: number | null
   defaultMaxBudgetUsd?: number | null
   defaultMaxRetries?: number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -597,6 +639,8 @@ export type BoardUpdateManyMutationInput = {
   defaultModel?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultEffort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultMaxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultAttemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultActiveDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -620,6 +664,8 @@ export type BoardUncheckedUpdateManyInput = {
   defaultModel?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultEffort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultMaxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultAttemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultActiveDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -643,6 +689,8 @@ export type BoardCountOrderByAggregateInput = {
   defaultModel?: Prisma.SortOrder
   defaultEffort?: Prisma.SortOrder
   defaultMaxTurns?: Prisma.SortOrder
+  defaultAttemptDeadlineSeconds?: Prisma.SortOrder
+  defaultActiveDeadlineSeconds?: Prisma.SortOrder
   defaultMaxBudgetUsd?: Prisma.SortOrder
   defaultMaxRetries?: Prisma.SortOrder
   defaultAllowedTools?: Prisma.SortOrder
@@ -660,6 +708,8 @@ export type BoardAvgOrderByAggregateInput = {
   dailyBudgetUsd?: Prisma.SortOrder
   maxConcurrent?: Prisma.SortOrder
   defaultMaxTurns?: Prisma.SortOrder
+  defaultAttemptDeadlineSeconds?: Prisma.SortOrder
+  defaultActiveDeadlineSeconds?: Prisma.SortOrder
   defaultMaxBudgetUsd?: Prisma.SortOrder
   defaultMaxRetries?: Prisma.SortOrder
 }
@@ -675,6 +725,8 @@ export type BoardMaxOrderByAggregateInput = {
   defaultModel?: Prisma.SortOrder
   defaultEffort?: Prisma.SortOrder
   defaultMaxTurns?: Prisma.SortOrder
+  defaultAttemptDeadlineSeconds?: Prisma.SortOrder
+  defaultActiveDeadlineSeconds?: Prisma.SortOrder
   defaultMaxBudgetUsd?: Prisma.SortOrder
   defaultMaxRetries?: Prisma.SortOrder
   defaultGuide?: Prisma.SortOrder
@@ -696,6 +748,8 @@ export type BoardMinOrderByAggregateInput = {
   defaultModel?: Prisma.SortOrder
   defaultEffort?: Prisma.SortOrder
   defaultMaxTurns?: Prisma.SortOrder
+  defaultAttemptDeadlineSeconds?: Prisma.SortOrder
+  defaultActiveDeadlineSeconds?: Prisma.SortOrder
   defaultMaxBudgetUsd?: Prisma.SortOrder
   defaultMaxRetries?: Prisma.SortOrder
   defaultGuide?: Prisma.SortOrder
@@ -711,6 +765,8 @@ export type BoardSumOrderByAggregateInput = {
   dailyBudgetUsd?: Prisma.SortOrder
   maxConcurrent?: Prisma.SortOrder
   defaultMaxTurns?: Prisma.SortOrder
+  defaultAttemptDeadlineSeconds?: Prisma.SortOrder
+  defaultActiveDeadlineSeconds?: Prisma.SortOrder
   defaultMaxBudgetUsd?: Prisma.SortOrder
   defaultMaxRetries?: Prisma.SortOrder
 }
@@ -819,6 +875,8 @@ export type BoardCreateWithoutControllerInput = {
   defaultModel?: string | null
   defaultEffort?: string | null
   defaultMaxTurns?: number | null
+  defaultAttemptDeadlineSeconds?: number | null
+  defaultActiveDeadlineSeconds?: number | null
   defaultMaxBudgetUsd?: number | null
   defaultMaxRetries?: number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -844,6 +902,8 @@ export type BoardUncheckedCreateWithoutControllerInput = {
   defaultModel?: string | null
   defaultEffort?: string | null
   defaultMaxTurns?: number | null
+  defaultAttemptDeadlineSeconds?: number | null
+  defaultActiveDeadlineSeconds?: number | null
   defaultMaxBudgetUsd?: number | null
   defaultMaxRetries?: number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -884,6 +944,8 @@ export type BoardUpdateWithoutControllerInput = {
   defaultModel?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultEffort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultMaxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultAttemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultActiveDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -909,6 +971,8 @@ export type BoardUncheckedUpdateWithoutControllerInput = {
   defaultModel?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultEffort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultMaxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultAttemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultActiveDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -933,6 +997,8 @@ export type BoardCreateWithoutJobsInput = {
   defaultModel?: string | null
   defaultEffort?: string | null
   defaultMaxTurns?: number | null
+  defaultAttemptDeadlineSeconds?: number | null
+  defaultActiveDeadlineSeconds?: number | null
   defaultMaxBudgetUsd?: number | null
   defaultMaxRetries?: number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -958,6 +1024,8 @@ export type BoardUncheckedCreateWithoutJobsInput = {
   defaultModel?: string | null
   defaultEffort?: string | null
   defaultMaxTurns?: number | null
+  defaultAttemptDeadlineSeconds?: number | null
+  defaultActiveDeadlineSeconds?: number | null
   defaultMaxBudgetUsd?: number | null
   defaultMaxRetries?: number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -998,6 +1066,8 @@ export type BoardUpdateWithoutJobsInput = {
   defaultModel?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultEffort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultMaxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultAttemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultActiveDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -1023,6 +1093,8 @@ export type BoardUncheckedUpdateWithoutJobsInput = {
   defaultModel?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultEffort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultMaxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultAttemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultActiveDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -1047,6 +1119,8 @@ export type BoardCreateWithoutEventsInput = {
   defaultModel?: string | null
   defaultEffort?: string | null
   defaultMaxTurns?: number | null
+  defaultAttemptDeadlineSeconds?: number | null
+  defaultActiveDeadlineSeconds?: number | null
   defaultMaxBudgetUsd?: number | null
   defaultMaxRetries?: number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -1072,6 +1146,8 @@ export type BoardUncheckedCreateWithoutEventsInput = {
   defaultModel?: string | null
   defaultEffort?: string | null
   defaultMaxTurns?: number | null
+  defaultAttemptDeadlineSeconds?: number | null
+  defaultActiveDeadlineSeconds?: number | null
   defaultMaxBudgetUsd?: number | null
   defaultMaxRetries?: number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -1112,6 +1188,8 @@ export type BoardUpdateWithoutEventsInput = {
   defaultModel?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultEffort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultMaxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultAttemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultActiveDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -1137,6 +1215,8 @@ export type BoardUncheckedUpdateWithoutEventsInput = {
   defaultModel?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultEffort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultMaxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultAttemptDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  defaultActiveDeadlineSeconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -1202,6 +1282,8 @@ export type BoardSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
   defaultModel?: boolean
   defaultEffort?: boolean
   defaultMaxTurns?: boolean
+  defaultAttemptDeadlineSeconds?: boolean
+  defaultActiveDeadlineSeconds?: boolean
   defaultMaxBudgetUsd?: boolean
   defaultMaxRetries?: boolean
   defaultAllowedTools?: boolean
@@ -1229,6 +1311,8 @@ export type BoardSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extensi
   defaultModel?: boolean
   defaultEffort?: boolean
   defaultMaxTurns?: boolean
+  defaultAttemptDeadlineSeconds?: boolean
+  defaultActiveDeadlineSeconds?: boolean
   defaultMaxBudgetUsd?: boolean
   defaultMaxRetries?: boolean
   defaultAllowedTools?: boolean
@@ -1252,6 +1336,8 @@ export type BoardSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensi
   defaultModel?: boolean
   defaultEffort?: boolean
   defaultMaxTurns?: boolean
+  defaultAttemptDeadlineSeconds?: boolean
+  defaultActiveDeadlineSeconds?: boolean
   defaultMaxBudgetUsd?: boolean
   defaultMaxRetries?: boolean
   defaultAllowedTools?: boolean
@@ -1275,6 +1361,8 @@ export type BoardSelectScalar = {
   defaultModel?: boolean
   defaultEffort?: boolean
   defaultMaxTurns?: boolean
+  defaultAttemptDeadlineSeconds?: boolean
+  defaultActiveDeadlineSeconds?: boolean
   defaultMaxBudgetUsd?: boolean
   defaultMaxRetries?: boolean
   defaultAllowedTools?: boolean
@@ -1287,7 +1375,7 @@ export type BoardSelectScalar = {
   updatedAt?: boolean
 }
 
-export type BoardOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "slug" | "repoPath" | "pausedAt" | "pausedBy" | "dailyBudgetUsd" | "maxConcurrent" | "defaultModel" | "defaultEffort" | "defaultMaxTurns" | "defaultMaxBudgetUsd" | "defaultMaxRetries" | "defaultAllowedTools" | "defaultPluginPaths" | "defaultGuide" | "defaultBase" | "defaultCheck" | "defaultWorkflow" | "createdAt" | "updatedAt", ExtArgs["result"]["board"]>
+export type BoardOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "slug" | "repoPath" | "pausedAt" | "pausedBy" | "dailyBudgetUsd" | "maxConcurrent" | "defaultModel" | "defaultEffort" | "defaultMaxTurns" | "defaultAttemptDeadlineSeconds" | "defaultActiveDeadlineSeconds" | "defaultMaxBudgetUsd" | "defaultMaxRetries" | "defaultAllowedTools" | "defaultPluginPaths" | "defaultGuide" | "defaultBase" | "defaultCheck" | "defaultWorkflow" | "createdAt" | "updatedAt", ExtArgs["result"]["board"]>
 export type BoardInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   jobs?: boolean | Prisma.Board$jobsArgs<ExtArgs>
   events?: boolean | Prisma.Board$eventsArgs<ExtArgs>
@@ -1349,12 +1437,20 @@ export type $BoardPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs 
      * wins: a Job may not exceed `dailyBudgetUsd`, and it may freely override `defaultModel`.
      * 
      * Resolution is in `src/spec.ts`: the Job's own value wins, the Board's default fills a null,
-     * the built-in is the last resort. `timeoutMs` deliberately has no twin here — nothing has asked
+     * the built-in is the last resort. The deadlines have twins here now — something asked
      * for one, and each default costs a column, a flag and a line of provenance in `kb show`.
      */
     defaultModel: string | null
     defaultEffort: string | null
     defaultMaxTurns: number | null
+    /**
+     * The two deadlines, in seconds. `defaultAttemptDeadlineSeconds` fills a Job that named no
+     * per-attempt clock; `defaultActiveDeadlineSeconds` gives a board a Job-wide ceiling every Job
+     * filed here inherits. Both are *defaults*, freely overridden on the Job — a ceiling nobody can
+     * exceed is `dailyBudgetUsd` and `maxConcurrent`, and these are not that.
+     */
+    defaultAttemptDeadlineSeconds: number | null
+    defaultActiveDeadlineSeconds: number | null
     defaultMaxBudgetUsd: number | null
     defaultMaxRetries: number | null
     /**
@@ -1838,6 +1934,8 @@ export interface BoardFieldRefs {
   readonly defaultModel: Prisma.FieldRef<"Board", 'String'>
   readonly defaultEffort: Prisma.FieldRef<"Board", 'String'>
   readonly defaultMaxTurns: Prisma.FieldRef<"Board", 'Int'>
+  readonly defaultAttemptDeadlineSeconds: Prisma.FieldRef<"Board", 'Int'>
+  readonly defaultActiveDeadlineSeconds: Prisma.FieldRef<"Board", 'Int'>
   readonly defaultMaxBudgetUsd: Prisma.FieldRef<"Board", 'Float'>
   readonly defaultMaxRetries: Prisma.FieldRef<"Board", 'Int'>
   readonly defaultAllowedTools: Prisma.FieldRef<"Board", 'Json'>

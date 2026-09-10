@@ -9,11 +9,11 @@ covers:
   - path: src/labels.ts
     sha: b524ef31fce5611a1a676dfb4631aaa83ecba926
   - path: src/hkb.ts
-    sha: 07cc5da2cf62b8a7cb356558d805b9c2a29ba5b7
+    sha: ca8e6b1d5396b3506c01828c247249ed12590c54
   - path: prisma/schema.prisma
-    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
+    sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
   - path: src/templates.ts
-    sha: 5377df2c14203132e63b836c3685a7f6b0e9d9bc
+    sha: 84e68dad2edc226425dfb0b8880e9765b2628686
 related:
   [
     architecture/the-board,
@@ -22,7 +22,7 @@ related:
     features/workflow-templates,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: ff67f87
+generated_at_commit: 48b5ee1
 last_refreshed: 2026-09-09
 ---
 

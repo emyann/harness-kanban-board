@@ -159,8 +159,19 @@ meet one in the git history, that is what it was.
 - **Lease** — who holds a Job right now, with a `holder`, a `token` and an `expiresAt`; the `@@id` on
   it is the compare-and-swap, and an expired one is what makes a dead holder reclaimable
   (`prisma/schema.prisma`, `reclaimExpired`, `src/controller.ts`). Its duration is derived from the
-  run it covers — `timeoutMs` plus a grace — never chosen independently
+  run it covers — `attemptDeadlineSeconds` plus a grace — never chosen independently
   (*concepts/leases-and-liveness*, *architecture/job-kind*).
+- **`activeDeadlineSeconds`** — how long a Job's sessions may actually RUN, summed across every
+  attempt (`Job.activeDeadlineSeconds`, `activeMs` and `deadlineExceeded` in `src/limits.ts`).
+  Deliberately not wall clock: Kubernetes measures from `startTime`, but an hkb Job pends for hours
+  at `maxConcurrent: 1` and counting that would bound luck rather than cost.
+  Kubernetes' `JobSpec` field and its rule: it **outranks the retry budget**, so a Job past it ends
+  `deadline_exceeded` with no further attempt however many retries remain. Unset by default, which
+  is Kubernetes' default too — a default that silently ends work is not a default.
+- **`attemptDeadlineSeconds`** — **one attempt's** wall clock (`Job.attemptDeadlineSeconds`),
+  Kubernetes' `template.spec.activeDeadlineSeconds`. A session that outruns it is stopped and the
+  attempt is RETRIED like any other failure — which is the whole difference from the field above.
+  Built-in 1800, frozen onto the Attempt at claim time, and the lease is derived from it.
 - **Level-triggered** — the property that makes the controller safe: `reconcile()` reads observed
   state, compares it to desired state and takes one step, so it may be run repeatedly, interrupted,
   or run while another host runs it (`src/controller.ts`). Nothing may depend on having seen an

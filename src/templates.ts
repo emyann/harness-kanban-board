@@ -90,6 +90,10 @@ export const TEMPLATE_KEYS: Record<string, Kind> = {
   'max-turns': 'string',
   'max-budget': 'string',
   'max-retries': 'string',
+  // Both deadlines, in seconds. A workflow is the natural home for "this kind of work needs an
+  // hour": the number is a property of the shape of the work, not of one Job.
+  'attempt-deadline': 'string',
+  deadline: 'string',
   'no-isolate': 'boolean',
   triage: 'boolean',
   propose: 'boolean',

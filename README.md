@@ -336,9 +336,18 @@ which means the session completed, and neither is `hkb rm`, which deletes the re
 `hkb boards` lists every board on this machine; `hkb boards add <slug> --repo <path>` points one at a
 repository.
 
+A Job also carries **two wall clocks**, both in seconds and both named after Kubernetes'
+`activeDeadlineSeconds`. `--attempt-deadline` bounds one session: a run that outruns it is stopped and
+**retried**, like any other failure, and it defaults to 1800. `--deadline` bounds how long the whole Job may actually RUN,
+summed across every attempt (not wall clock: an hkb Job queues for hours and that should not burn it) — and it **outranks `--max-retries`**, exactly as it does in
+Kubernetes: a Job past it ends `deadline_exceeded` with no further attempt, however many retries
+remain. It ships unset, because a default that silently ends work is not a default. Both refuse zero
+and negatives by name.
+
 `hkb boards set <slug>` carries the board's **ceilings** — `--max-concurrent` (0 drains it), `--daily-budget`
 — *and* its **spec defaults**: `--model`, `--effort`, `--max-turns`, `--max-budget`, `--max-retries`,
-`--guide`, `--base`, `--check`, and `--workflow` for the steps every hand-filed Job here finishes with. A
+`--guide`, `--base`, `--check`, `--attempt-deadline`, `--deadline`, and `--workflow` for the steps every
+hand-filed Job here finishes with. A
 board that runs cheap, high-volume work says so once instead of on every `hkb new`.
 
 Resolution is three-deep: the Job's own value wins, the board's default fills what the Job left unset, the

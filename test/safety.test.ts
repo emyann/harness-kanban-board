@@ -96,7 +96,7 @@ test('spend already recorded counts against the ceiling', async () => {
   const b = await freshBoard();
   const spent = await b.job('already-spent');
   await db.attempt.create({
-    data: { jobId: spent.id, k: 1, startedAt: new Date(), endedAt: new Date(), outcome: 'completed', costUsd: 4, maxBudgetUsd: 4 },
+    data: { jobId: spent.id, k: 1, startedAt: new Date(), endedAt: new Date(), outcome: 'completed', costUsd: 4, maxBudgetUsd: 4 , attemptDeadlineSeconds: 1800},
   });
   await db.job.update({ where: { id: spent.id }, data: { phase: 'succeeded' } });
 
@@ -113,7 +113,7 @@ test('spend outside the rolling window does not count', async () => {
   const old = await b.job('yesterday');
   const longAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
   await db.attempt.create({
-    data: { jobId: old.id, k: 1, startedAt: longAgo, endedAt: longAgo, outcome: 'completed', costUsd: 99, maxBudgetUsd: 99 },
+    data: { jobId: old.id, k: 1, startedAt: longAgo, endedAt: longAgo, outcome: 'completed', costUsd: 99, maxBudgetUsd: 99 , attemptDeadlineSeconds: 1800},
   });
   await db.job.update({ where: { id: old.id }, data: { phase: 'succeeded' } });
 
@@ -277,7 +277,7 @@ test('money promised to ANOTHER host\'s run in flight refuses, and names it', as
   const theirs = await b.job('theirs', { maxBudgetUsd: 6 });
   // The cap is on the ATTEMPT, frozen when another host claimed it — that is the number this gate
   // charges, and it is why the refusal below can name $6 without re-resolving anyone's spec.
-  await db.attempt.create({ data: { jobId: theirs.id, k: 1, host: 'another-host', maxBudgetUsd: 6 } });
+  await db.attempt.create({ data: { jobId: theirs.id, k: 1, host: 'another-host', maxBudgetUsd: 6 , attemptDeadlineSeconds: 1800} });
   await db.job.update({ where: { id: theirs.id }, data: { phase: 'running' } });
 
   const mine = await b.job('mine', { maxBudgetUsd: 6 });
@@ -323,20 +323,49 @@ test('a shutdown mid-pass stops every run, not just one, and none of them spends
 // These run at the SHIPPED DEFAULTS. The earlier G5 test passed only because it pinned leaseMs
 // and forced expiry by hand, so it proved a configuration the product does not ship.
 
-test('the lease outlives the run it covers, at the defaults', async () => {
+test('the lease outlives the run it covers — a 60-minute Job is not reclaimed at 35', async () => {
+  // The rule is `attemptDeadlineSeconds + LEASE_GRACE_MS`, and the failure it prevents is a long
+  // Job having its lease expire WHILE ALIVE: another host would then reclaim a run that is still
+  // going. The old version of this test asserted `x + grace > x`, which is true of every number.
+  //
+  // Read while the lease is HELD, because that is the only moment the row exists.
   const b = await freshBoard();
-  const job = await b.job('long-runner');   // no overrides: timeoutMs 30min, no leaseMs
-  await b.run();
-
-  const attempt = await db.attempt.findFirstOrThrow({ where: { jobId: job.id } });
+  const job = await b.job('long-runner', { attemptDeadlineSeconds: 3600 });
   const grace = 5 * 60_000;
-  const started = attempt.startedAt.getTime();
-  // The lease is gone by now (released), so assert the rule that produced it rather than the row.
+  let held: { expiresAt: Date; acquiredAt: Date } | null = null;
+  const watching = {
+    name: 'watching',
+    async run() {
+      held = await db.lease.findUnique({ where: { jobId: job.id } });
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  };
+  await reconcile({ runtime: watching, cwd: REPO, board: b.slug, readPr: false });
+
+  assert.ok(held, 'a lease is held while the run is in flight');
+  // A RANGE, not an equality. `expiresAt` is built from the controller's own `now()` and
+  // `acquiredAt` is Prisma's `@default(now())`, sampled later when the INSERT runs — two clock
+  // reads, so any millisecond boundary crossed between them breaks a strict comparison. The first
+  // version of this test did compare exactly and reddened about one run in six.
+  const life = held!.expiresAt.getTime() - held!.acquiredAt.getTime();
+  const want = 3600 * 1000 + grace;
+  assert.ok(Math.abs(life - want) < 1000, `the lease is the attempt clock plus the grace: ${life} vs ${want}`);
+  assert.ok(life > 35 * 60_000, 'so a 60-minute run is not reclaimed at 35 minutes');
+
+  // And the clock the lease was derived from is frozen on the attempt, in seconds.
+  const attempt = await db.attempt.findFirstOrThrow({ where: { jobId: job.id } });
+  assert.equal(attempt.attemptDeadlineSeconds, 3600);
+});
+
+test('a Job that named no attempt clock is leased on the built-in, not on nothing', async () => {
+  const b = await freshBoard();
+  const job = await b.job('defaulted');
+  await b.run();
+  const attempt = await db.attempt.findFirstOrThrow({ where: { jobId: job.id } });
+  assert.equal(attempt.attemptDeadlineSeconds, 1800, 'the built-in, resolved and frozen');
   const fresh = await db.job.findUniqueOrThrow({ where: { id: job.id } });
-  assert.ok(fresh.timeoutMs + grace > fresh.timeoutMs,
-    'a derived lease is strictly longer than the run it covers');
-  assert.equal(fresh.timeoutMs, 1_800_000, 'the default the bug was measured against');
-  void started;
+  assert.equal(fresh.attemptDeadlineSeconds, null, 'and the column stays null, so a board default can still answer');
 });
 
 test('a lease is renewed while the run is in flight, and renewedAt gets a writer', async () => {
@@ -388,7 +417,7 @@ test('reclaim does not steal a lease renewed between the read and the delete', a
   const b = await freshBoard();
   const job = await b.job('renewed-just-in-time');
   await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
-  await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'alive', maxBudgetUsd: 1 } });
+  await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'alive', maxBudgetUsd: 1 , attemptDeadlineSeconds: 1800} });
   await db.lease.create({
     data: { jobId: job.id, holder: 'alive', token: 't', expiresAt: new Date(Date.now() - 1000) },
   });
@@ -480,7 +509,7 @@ test('a process killed mid-run is reclaimed, its orphan marked lost, and retried
     await db.lease.create({ data: { jobId: ${job.id}, holder: 'doomed-child', token: 'tok',
       expiresAt: new Date(Date.now() + 600000) } });
     await db.job.update({ where: { id: ${job.id} }, data: { phase: 'running' } });
-    await db.attempt.create({ data: { jobId: ${job.id}, k: 1, host: 'doomed-child', maxBudgetUsd: 1 } });
+    await db.attempt.create({ data: { jobId: ${job.id}, k: 1, host: 'doomed-child', maxBudgetUsd: 1 , attemptDeadlineSeconds: 1800} });
     process.send?.('claimed');
     await new Promise(() => {});
   `);
@@ -510,9 +539,9 @@ test('reclaiming does not resurrect a Job that is out of retries', async () => {
   const b = await freshBoard();
   const job = await b.job('exhausted', { maxRetries: 0 });
   await db.attempt.create({
-    data: { jobId: job.id, k: 1, startedAt: new Date(), endedAt: new Date(), outcome: 'crashed', maxBudgetUsd: 1 },
+    data: { jobId: job.id, k: 1, startedAt: new Date(), endedAt: new Date(), outcome: 'crashed', maxBudgetUsd: 1 , attemptDeadlineSeconds: 1800},
   });
-  await db.attempt.create({ data: { jobId: job.id, k: 2, host: 'dead', maxBudgetUsd: 1 } });
+  await db.attempt.create({ data: { jobId: job.id, k: 2, host: 'dead', maxBudgetUsd: 1 , attemptDeadlineSeconds: 1800} });
   await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
   await db.lease.create({
     data: { jobId: job.id, holder: 'dead', token: 't', expiresAt: new Date(Date.now() - 1000) },

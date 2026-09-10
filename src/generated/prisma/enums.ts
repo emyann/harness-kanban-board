@@ -34,6 +34,7 @@ export const Outcome = {
   no_input: 'no_input',
   conflicted: 'conflicted',
   check_failed: 'check_failed',
+  deadline_exceeded: 'deadline_exceeded',
   lost: 'lost',
   stopped: 'stopped'
 } as const

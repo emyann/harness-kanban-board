@@ -9,9 +9,9 @@ covers:
   - path: bin/hkb.ts
     sha: 698dd0e673a442929b7314d6bb409f87f89b8251
   - path: src/hkb.ts
-    sha: 07cc5da2cf62b8a7cb356558d805b9c2a29ba5b7
+    sha: ca8e6b1d5396b3506c01828c247249ed12590c54
   - path: src/controller.ts
-    sha: 3673f449a7ebf15f9b21900915183b3bec63b6e5
+    sha: 43770041da29adc6333f351e74a701673102f9d9
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/db.ts
@@ -25,7 +25,7 @@ covers:
   - path: src/proposals.ts
     sha: fd5e1eee8b847c9b4024d1bf5f635a85907baae4
   - path: src/templates.ts
-    sha: 5377df2c14203132e63b836c3685a7f6b0e9d9bc
+    sha: 84e68dad2edc226425dfb0b8880e9765b2628686
   - path: src/labels.ts
     sha: b524ef31fce5611a1a676dfb4631aaa83ecba926
   - path: src/watch.ts
@@ -37,7 +37,7 @@ covers:
   - path: src/pulls.ts
     sha: a27f00a986f576c2d3ed035902c0a1c9f9a9300c
   - path: prisma/schema.prisma
-    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
+    sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
 related:
   [
     architecture/job-kind,
@@ -48,7 +48,7 @@ related:
     decisions/adr-009-retiring-the-first-system,
     decisions/adr-011-proposals-not-board-access,
   ]
-generated_at_commit: ff67f87
+generated_at_commit: 48b5ee1
 last_refreshed: 2026-09-09
 ---
 

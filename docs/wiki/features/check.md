@@ -7,20 +7,20 @@ audience: [dev]
 read_when: "a Job failed as `check_failed`, you are adding anything that runs before/beside/after the agent, or you are about to change what makes an attempt succeed"
 covers:
   - path: src/hkb.ts
-    sha: 07cc5da2cf62b8a7cb356558d805b9c2a29ba5b7
+    sha: ca8e6b1d5396b3506c01828c247249ed12590c54
   - path: src/check.ts
     sha: d5d2e273d51d281992cfa4dbb34e92458150e0d2
   - path: src/controller.ts
-    sha: 3673f449a7ebf15f9b21900915183b3bec63b6e5
+    sha: 43770041da29adc6333f351e74a701673102f9d9
   - path: src/spec.ts
-    sha: 8792a804835fd0602a992aeccf978e110fe2a98f
+    sha: 5f549ec7407fcf1af8d80266ad35b9e90ab1620a
   - path: src/brief.ts
     sha: a56db1e2f49d60c695034ecd14f73c5c258cce85
   - path: src/templates.ts
-    sha: 5377df2c14203132e63b836c3685a7f6b0e9d9bc
+    sha: 84e68dad2edc226425dfb0b8880e9765b2628686
   - path: prisma/schema.prisma
-    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
-generated_at_commit: ff67f87
+    sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
+generated_at_commit: 48b5ee1
 last_refreshed: 2026-09-09
 related:
   [
@@ -268,9 +268,9 @@ the operator to run the command in.
 ## Two numbers, and why those
 
 - **Ten minutes** (`CHECK_TIMEOUT_MS`). A hung check must not hold the pass for ever. Ten minutes
-  is a third of the default `timeoutMs` for the agent itself, and this repository's own
+  is a third of the default attempt deadline for the agent itself, and this repository's own
   `npm run lint && npm test` is under two. It is *longer* than the five-minute `LEASE_GRACE_MS`
-  the lease gets past a run's own `timeoutMs`, and that is fine because the **renewer** is what
+  the lease gets past a run's own attempt deadline, and that is fine because the **renewer** is what
   covers it — the grace is the margin for teardown, not the budget for the check.
 - **4 KB of the tail, PER STREAM** (`CHECK_TAIL_BYTES`). The tail because a runner puts its
   verdict last; 4 KB because it is paid for twice — in `hkb show`, and on every request of the

@@ -71,12 +71,14 @@ function refuse(message: string): never {
  */
 export const SETTABLE = [
   'name', 'brief', 'model', 'effort', 'maxTurns', 'maxBudgetUsd', 'maxRetries',
+  'attemptDeadlineSeconds', 'activeDeadlineSeconds',
   'base', 'guide', 'gate', 'allowedTools', 'pluginPaths', 'labels',
   'exports', 'results', 'artifacts', 'inputs', 'check',
 ] as const;
-// `timeoutMs` is deliberately absent: no flag reaches it, and the column is non-nullable, so a
-// caller clearing it would get a raw Prisma error instead of a refusal. The list is what the CLI
-// can set, and a test holds the two together in both directions.
+// Both deadlines ARE settable, and that is what card #53 closed. They used to be absent with the
+// note "no flag reaches it, and the column is non-nullable" — which was true and was the bug: the
+// only way to change a Job's wall clock was `update Job set timeoutMs` in SQL. Both columns are
+// nullable now, so `none` clears them back to the board's answer like every other spec field.
 
 export type Settable = (typeof SETTABLE)[number];
 

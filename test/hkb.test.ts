@@ -258,10 +258,10 @@ test('show prints how long each attempt took, and marks one still running', asyn
   await db.attempt.create({
     data: {
       jobId: j.id, k: 1, startedAt: started, endedAt: new Date(started.getTime() + 3_840_000),
-      outcome: 'completed', costUsd: 0.4, maxBudgetUsd: 1,
+      outcome: 'completed', costUsd: 0.4, maxBudgetUsd: 1, attemptDeadlineSeconds: 1800,
     },
   });
-  await db.attempt.create({ data: { jobId: j.id, k: 2, startedAt: new Date(Date.now() - 90_000), maxBudgetUsd: 1 } });
+  await db.attempt.create({ data: { jobId: j.id, k: 2, startedAt: new Date(Date.now() - 90_000), maxBudgetUsd: 1 , attemptDeadlineSeconds: 1800} });
   const r = await hkb('show', String(j.id));
   // $0.40 means very little without "and it took an hour" beside it.
   assert.match(r.out, /completed\s+1h04m \$0\.4000/);
@@ -444,7 +444,7 @@ test('an attempt still open on an unleased Job is closed, not left climbing for 
   // lease is left for the reclaim to find, so the operator is the only thing that can conclude it.
   const j = json((await hkb('new', 'stranded', '--brief', 'b', '--board', 'byhand', '--json')).out);
   await db.job.update({ where: { id: j.id }, data: { phase: 'running' } });
-  await db.attempt.create({ data: { jobId: j.id, k: 1, host: 'host/9@daemon', maxBudgetUsd: 1 } });
+  await db.attempt.create({ data: { jobId: j.id, k: 1, host: 'host/9@daemon', maxBudgetUsd: 1 , attemptDeadlineSeconds: 1800} });
   await hkb('done', String(j.id), 'the PR it opened was merged', '--board', 'byhand');
   const a = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: j.id, k: 1 } } });
   assert.ok(a.endedAt, 'closed');
@@ -966,12 +966,14 @@ test('hkb boards set carries the spec defaults, and none clears one', async () =
     'boards', 'set', 'defaults', '--model', 'claude-haiku-4-5', '--effort', 'low',
     '--max-turns', '8', '--max-budget', '0.25', '--max-retries', '0',
     '--allow-tools', 'Read,Grep', '--default-plugin-dirs', '.claude', '--guide', 'CLAUDE.md',
-    '--base', 'origin/develop', '--check', 'npm test', '--workflow', 'implement', '--json',
+    '--base', 'origin/develop', '--check', 'npm test', '--workflow', 'implement',
+    '--attempt-deadline', '3600', '--deadline', '14400', '--json',
   )).out);
   assert.deepEqual(set.defaults, {
     model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 0,
     allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'], guide: 'CLAUDE.md', base: 'origin/develop',
     check: 'npm test', workflow: 'implement',
+    attemptDeadlineSeconds: 3600, activeDeadlineSeconds: 14400,
   });
 
   const cleared = json((await hkb('boards', 'set', 'defaults', '--model', 'none', '--json')).out);
@@ -981,6 +983,8 @@ test('hkb boards set carries the spec defaults, and none clears one', async () =
   assert.deepEqual(cleared.defaults.pluginPaths, ['.claude'], 'and the board-wide grant survives clearing a model');
   assert.equal(cleared.defaults.guide, 'CLAUDE.md', 'and so does the guide (ADR-013)');
   assert.equal(cleared.defaults.check, 'npm test', 'and so does the board-wide completion check (ADR-016)');
+  assert.equal(cleared.defaults.attemptDeadlineSeconds, 3600, 'and both deadlines');
+  assert.equal(cleared.defaults.activeDeadlineSeconds, 14400);
 
   // A shell command with an option-looking word in it is a command, not a flag: `boards set` stores
   // it verbatim, because what it does is not hkb's business — only what it exits with.
@@ -1094,7 +1098,7 @@ test('hkb show reports the cap an attempt was FROZEN at, not what the board says
   await db.attempt.create({
     data: {
       jobId: id, k: 1, startedAt: new Date(), endedAt: new Date(),
-      outcome: 'max_budget', costUsd: 3, maxBudgetUsd: 3,
+      outcome: 'max_budget', costUsd: 3, maxBudgetUsd: 3, attemptDeadlineSeconds: 1800,
     },
   });
   // The operator reacts to the bill by lowering the board's default. The attempt is history.
@@ -1117,7 +1121,7 @@ test('hkb retry does not crash on a Job whose cap came from the board', async ()
   await db.attempt.create({
     data: {
       jobId: id, k: 1, startedAt: new Date(), endedAt: new Date(),
-      outcome: 'max_budget', costUsd: 3, maxBudgetUsd: 3,
+      outcome: 'max_budget', costUsd: 3, maxBudgetUsd: 3, attemptDeadlineSeconds: 1800,
     },
   });
   await db.job.update({ where: { id }, data: { phase: 'failed' } });
@@ -1164,7 +1168,7 @@ test('hkb boards prints a defaults line only for the boards that have one', asyn
   const bare = rows.find((r) => r.board !== 'listed-defaults' && !r.hasDefaults);
   assert.ok(bare, 'a board with no defaults exists in this suite');
   assert.deepEqual(bare.defaults,
-    { model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null, base: null, check: null, workflow: null },
+    { model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null, base: null, check: null, workflow: null, attemptDeadlineSeconds: null, activeDeadlineSeconds: null },
     '--json carries the key either way: a consumer inferring absence from a missing key reads a shape, not a record');
 });
 
@@ -1256,7 +1260,7 @@ test('hkb ls says so when a succeeded Job produced nothing, and stays quiet when
   });
   await db.attempt.create({
     data: {
-      jobId: shipped.id, k: 1, host: 'h', maxBudgetUsd: 1,
+      jobId: shipped.id, k: 1, host: 'h', maxBudgetUsd: 1, attemptDeadlineSeconds: 1800,
       branch: `kb-${shipped.id}-1`, prNumber: 7, prUrl: 'https://github.com/x/y/pull/7',
     },
   });
@@ -1322,7 +1326,7 @@ test('a run that only filed a proposal does not report "nothing pending"', async
   // files, and what is under test here is the reporting rather than the proposing.
   await db.attempt.create({
     data: {
-      jobId: j.id, k: 1, maxBudgetUsd: 1, outcome: 'completed', endedAt: new Date(),
+      jobId: j.id, k: 1, maxBudgetUsd: 1, attemptDeadlineSeconds: 1800, outcome: 'completed', endedAt: new Date(),
       proposal: { jobs: [{ name: 'first', brief: 'x' }, { name: 'second', brief: 'y' }], clamped: [] },
     },
   });
@@ -1367,11 +1371,12 @@ test('the board defaults line names every grant, including the ones nobody can o
       model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 0,
       allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'], guide: 'CLAUDE.md', base: 'origin/develop',
       check: 'npm test', workflow: 'implement',
+      attemptDeadlineSeconds: 5400, activeDeadlineSeconds: 14400,
     }),
-    'model=claude-haiku-4-5 effort=low maxTurns=8 maxBudget=$0.25 maxRetries=0 allowTools=Read|Grep plugins=.claude guide=CLAUDE.md base=origin/develop check=npm test workflow=implement',
+    'model=claude-haiku-4-5 effort=low maxTurns=8 maxBudget=$0.25 maxRetries=0 attemptDeadline=5400s deadline=14400s across every attempt allowTools=Read|Grep plugins=.claude guide=CLAUDE.md base=origin/develop check=npm test workflow=implement',
   );
   assert.equal(
-    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null, base: null, check: null, workflow: null }),
+    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null, base: null, check: null, workflow: null, attemptDeadlineSeconds: null, activeDeadlineSeconds: null }),
     '(none)',
   );
   // An empty list is a value and says so; a null is an absence and says nothing.
@@ -2262,7 +2267,7 @@ test('hkb show prints both tails, labelled, and nothing for a stream that said n
   const j = json((await hkb('new', 'tailed', '--brief', 'x', '--board', b, '--json')).out);
   await db.attempt.create({
     data: {
-      jobId: j.id, k: 1, startedAt: new Date(), endedAt: new Date(), outcome: 'check_failed', maxBudgetUsd: 1,
+      jobId: j.id, k: 1, startedAt: new Date(), endedAt: new Date(), outcome: 'check_failed', maxBudgetUsd: 1, attemptDeadlineSeconds: 1800,
       check: {
         command: 'cargo test', exitCode: 101, kind: 'exit', ms: 4000,
         stdout: 'test result: FAILED. 1 passed; 2 failed', stderr: 'warning: unused variable',
@@ -2278,7 +2283,7 @@ test('hkb show prints both tails, labelled, and nothing for a stream that said n
   const k = json((await hkb('new', 'one-sided', '--brief', 'x', '--board', b, '--json')).out);
   await db.attempt.create({
     data: {
-      jobId: k.id, k: 1, startedAt: new Date(), endedAt: new Date(), outcome: 'check_failed', maxBudgetUsd: 1,
+      jobId: k.id, k: 1, startedAt: new Date(), endedAt: new Date(), outcome: 'check_failed', maxBudgetUsd: 1, attemptDeadlineSeconds: 1800,
       check: { command: 'npm test', exitCode: 1, kind: 'exit', ms: 10, stdout: '', stderr: '1 failing' },
     },
   });
@@ -2464,4 +2469,62 @@ test('hkb job set --check "" reports the opt-out as what it means, not as a blan
   const j = json((await hkb('new', 'opt', '--brief', 'x', '--board', b, '--check', 'npm test', '--json')).out) as { id: number };
   const r = await hkb('job', 'set', String(j.id), '--board', b, '--check', '');
   assert.match(r.out, /npm test → \(none — opted out\)/);
+});
+
+// ---------------------------------------------------------------- the deadline flags
+
+/**
+ * The knob card #53 closed, asked what it REFUSES.
+ *
+ * The wall clock was the one starvation cap with no flag: `Job.timeoutMs` was non-nullable with a
+ * database default, so the only way to change it was `update Job set timeoutMs` in SQL. Both
+ * refusals below are about the same trap — `--deadline 0` reads to a person as "no deadline" and
+ * means "already expired" to the arithmetic.
+ */
+test('--deadline refuses zero, negatives and fractions, each by name', async () => {
+  const r = scratchRepo('deadline-refusals');
+  await hkb('boards', 'add', 'dl', '--repo', r);
+  for (const [flag, value, pattern] of [
+    ['--deadline', '0', /positive/],
+    ['--deadline', '-5', /positive/],
+    ['--deadline', '1.5', /whole number of seconds/],
+    ['--attempt-deadline', '0', /positive/],
+    ['--attempt-deadline', '-1', /positive/],
+  ] as [string, string, RegExp][]) {
+    const e = await hkb('new', 'refused', '--brief', 'x', flag, value, '--board', 'dl').catch((x: Error) => x);
+    assert.ok(e instanceof Error, `${flag} ${value} was accepted`);
+    assert.match(e.message, pattern, `${flag} ${value}`);
+  }
+  // And zero says the thing that is actually confusing about it.
+  const zero = await hkb('new', 'z', '--brief', 'x', '--deadline', '0', '--board', 'dl').catch((x: Error) => x) as Error;
+  assert.match(zero.message, /already expired/);
+});
+
+test('a deadline resolves job > board > built-in, and none clears it back', async () => {
+  const r = scratchRepo('deadline-resolve');
+  await hkb('boards', 'add', 'dlr', '--repo', r);
+  await hkb('boards', 'set', 'dlr', '--attempt-deadline', '2700', '--deadline', '7200');
+
+  const inherited = json((await hkb('new', 'inherits', '--brief', 'x', '--board', 'dlr', '--json')).out) as { id: number };
+  const shown = json((await hkb('show', String(inherited.id), '--board', 'dlr', '--json')).out);
+  assert.equal(shown.spec.attemptDeadlineSeconds.value, 2700);
+  assert.equal(shown.spec.attemptDeadlineSeconds.from, 'board');
+  assert.equal(shown.spec.activeDeadlineSeconds.value, 7200);
+
+  const own = json((await hkb('new', 'its own', '--brief', 'x', '--attempt-deadline', '600', '--board', 'dlr', '--json')).out) as { id: number };
+  assert.equal(json((await hkb('show', String(own.id), '--board', 'dlr', '--json')).out).spec.attemptDeadlineSeconds.from, 'job');
+
+  await hkb('job', 'set', String(own.id), '--attempt-deadline', 'none', '--board', 'dlr');
+  const cleared = json((await hkb('show', String(own.id), '--board', 'dlr', '--json')).out);
+  assert.equal(cleared.spec.attemptDeadlineSeconds.value, 2700, 'none puts it back to the board`s answer');
+  assert.equal(cleared.spec.attemptDeadlineSeconds.from, 'board');
+
+  // A board with no opinion at all falls to the built-in, which is the old database default.
+  const r2 = scratchRepo('deadline-builtin');
+  await hkb('boards', 'add', 'dlb', '--repo', r2);
+  const bare = json((await hkb('new', 'bare', '--brief', 'x', '--board', 'dlb', '--json')).out) as { id: number };
+  const b = json((await hkb('show', String(bare.id), '--board', 'dlb', '--json')).out);
+  assert.equal(b.spec.attemptDeadlineSeconds.value, 1800);
+  assert.equal(b.spec.attemptDeadlineSeconds.from, 'built-in');
+  assert.equal(b.spec.activeDeadlineSeconds.value, null, 'and no Job-wide deadline ships');
 });

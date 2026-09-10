@@ -9,16 +9,16 @@ covers:
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
-    sha: 3673f449a7ebf15f9b21900915183b3bec63b6e5
+    sha: 43770041da29adc6333f351e74a701673102f9d9
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/worktree.ts
     sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
   - path: src/limits.ts
-    sha: 61b65c43e2fd7c28f952c403e02d073ca9907561
+    sha: 18849fb4775cabb4c5d65784f506d61d90c66f1f
   - path: prisma/schema.prisma
-    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
-generated_at_commit: f8ea774
+    sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
+generated_at_commit: 48b5ee1
 last_refreshed: 2026-09-09
 related: [architecture/the-loop, architecture/the-board, architecture/job-kind, concepts/ceilings]
 ---
@@ -35,7 +35,7 @@ related: [architecture/the-loop, architecture/the-board, architecture/job-kind, 
 ## Two clocks, and only one of them sleeps
 
 A lease row carries an `expiresAt` (`prisma/schema.prisma:608-638`). A run carries
-a `timeoutMs`, which becomes a `setTimeout` — and Node's timers are monotonic: on
+an attempt deadline, which becomes a `setTimeout` — and Node's timers are monotonic: on
 Linux they do not advance while the machine is suspended
 (`src/liveness.ts:5-16`). The two therefore disagree across a laptop sleep. A
 worker five minutes into a thirty-minute Job wakes up correctly believing it has
@@ -140,12 +140,12 @@ somebody else, and existence is the only question being asked
 
 ## The duration is derived from the run, never chosen
 
-`leaseFor(timeoutMs) = timeoutMs + LEASE_GRACE_MS`, with the grace at five
+`leaseFor(attemptDeadlineSeconds × 1000) = that + LEASE_GRACE_MS`, with the grace at five
 minutes (`src/controller.ts:463,153-155`). The invariant is **the lease outlives
 the run**.
 
 This is the one number in the system that must not be picked independently, and
-the history says why: a fixed 15 minutes against a 30-minute `timeoutMs` meant
+the history says why: a fixed 15 minutes against a 30-minute attempt clock meant
 every long Job's lease expired *while the run was alive*, reclaim marked the live
 attempt `lost` and re-queued the Job — a double run at the shipped defaults
 (`src/controller.ts:499-504`). The grace is sized off measured teardown (an 8s
@@ -283,7 +283,7 @@ local holder and no remote one.
 |---|---|---|
 | What it decides | who runs this Job | which daemon leads this board |
 | Key / CAS | `jobId` `@id` | `boardId` `@id` |
-| Duration | `timeoutMs + 5min` (`src/controller.ts:504`) | `max(3 × intervalMs, 90s)` (`src/daemon.ts:63-64`) |
+| Duration | `attemptDeadlineSeconds × 1000 + 5min` (`src/controller.ts`) | `max(3 × intervalMs, 90s)` (`src/daemon.ts:63-64`) |
 | Acquisition stamp read for the boot check | `acquiredAt` | `startedAt` |
 | Fence | `token` (renew and release) | the `holder` read a moment earlier (`src/daemon.ts:131-137`) |
 

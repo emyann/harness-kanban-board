@@ -31,7 +31,7 @@ import {
 import {
   PROPOSAL_ARTIFACT, proposalGate, readProposal, storedProposal, type Proposal,
 } from './proposals.ts';
-import { gateClaim, windowStart, type ClaimGate } from './limits.ts';
+import { activeMs, deadlineExceeded, deadlineShortfall, gateClaim, windowStart, type ClaimGate } from './limits.ts';
 import { resolveSpec } from './spec.ts';
 import { holderId, holderLiveness } from './liveness.ts';
 import type { Runtime, RuntimeEvent, WorkerOutcome } from './runtime/index.ts';
@@ -179,7 +179,7 @@ const LEASE_GRACE_MS = 5 * 60_000;
  */
 export type Decision = {
   phase: 'succeeded' | 'failed' | 'pending' | 'suspended';
-  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped' | 'no_output' | 'no_input' | 'conflicted' | 'check_failed';
+  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped' | 'no_output' | 'no_input' | 'conflicted' | 'check_failed' | 'deadline_exceeded';
   resumable: boolean;
   /**
    * What to write on the Job's `lastError`, when the reason it stopped is something a *human* has
@@ -238,7 +238,34 @@ export function nextPhase(
    * The controller runs it after the rebase and calls back in with what it said.
    */
   failedCheck?: CheckRecord | null,
+  /**
+   * The Job's own wall clock, already decided (`deadlineExceeded`, `src/limits.ts`).
+   *
+   * Passed in rather than computed here for the reason `failedCheck` is: this function is pure and
+   * a clock is not. The controller measures from the first attempt's `startedAt` and calls back in.
+   */
+  jobDeadline?: { jobId: number; exceeded: boolean; ranForMs: number; seconds: number } | null,
 ): Decision {
+  // **First, above the check and above `completed`, because Kubernetes puts it there.** Once a Job
+  // reaches `activeDeadlineSeconds` its Pods are terminated and it becomes `Failed` with
+  // `DeadlineExceeded` — the deadline outranks `backoffLimit`, so retries left do not matter.
+  //
+  // Above `completed` too, and that is the ordering worth stating: an attempt that finished cleanly
+  // *after* the Job's clock ran out still ended a Job nobody may spend more wall time on. Ordering
+  // it below would make the deadline mean "unless the last attempt happened to work", which is a
+  // race with the scheduler rather than a ceiling.
+  //
+  // Not resumable, and no session is kept: what ran out is the Job's clock, not this attempt's, so
+  // there is nothing a resumed session could do about it. `hkb job set --deadline` then `hkb retry`
+  // is the way back, and the message says so.
+  if (jobDeadline?.exceeded) {
+    return {
+      phase: 'failed',
+      outcome: 'deadline_exceeded',
+      resumable: false,
+      lastError: deadlineShortfall(jobDeadline.jobId, jobDeadline.ranForMs, jobDeadline.seconds),
+    };
+  }
   // First, and it outranks `completed` — which is exactly the point. A check only ever runs after a
   // session that ended cleanly and produced everything it declared, so `outcome.status` here is
   // always `completed`; taking that as the answer is what having no exit code MEANS, and this is
@@ -435,7 +462,10 @@ async function checkWasInterrupted(db: ReturnType<typeof openBoard>, jobId: numb
   return false;
 }
 
-const CHECKLESS_OUTCOMES: ReadonlySet<string> = new Set(['stopped', 'lost', 'crashed', 'timed_out', 'max_turns', 'max_budget']);
+// `deadline_exceeded` is here because such an attempt never ran a check: the check block is gated
+// on `ran.phase === 'succeeded'` and the deadline verdict lands after it. Without it the walk-backs
+// stop on a deadline row and silently drop an unanswered check refusal from an earlier attempt.
+const CHECKLESS_OUTCOMES: ReadonlySet<string> = new Set(['stopped', 'lost', 'crashed', 'timed_out', 'max_turns', 'max_budget', 'deadline_exceeded']);
 
 /**
  * The most recent check refusal that nothing has answered yet, **in the session it refused**.
@@ -765,10 +795,37 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // having never once failed.
     const charged = done.filter((a) => a.outcome !== 'stopped' && a.outcome !== 'completed').length + 1;
 
+    // ---- the deadline, BEFORE a slot, a worktree or a session is spent on this Job.
+    //
+    // The post-run verdict alone is not enough and the gap is expensive: a Job already past its
+    // deadline would be claimed, cut a checkout, run a full paid attempt and only then be told it
+    // was over. The `hkb retry` the deadline's own message points at would do exactly that. A
+    // ceiling that only refuses after the money is gone is not a ceiling — which is the argument
+    // `gateClaim` is built on, one field over.
+    if (spec.activeDeadlineSeconds.value != null) {
+      const all = await db.attempt.findMany({
+        where: { jobId: job.id }, select: { startedAt: true, endedAt: true },
+      });
+      const ran = activeMs(all, now());
+      if (deadlineExceeded(ran, spec.activeDeadlineSeconds.value)) {
+        const why = deadlineShortfall(job.id, ran, spec.activeDeadlineSeconds.value);
+        await db.job.update({ where: { id: job.id }, data: { phase: 'failed', lastError: why, finishedAt: now() } });
+        await db.event.create({
+          data: { kind: 'deadline_exceeded', jobId: job.id, boardId: job.boardId, actor: host, payload: { ranForMs: ran } },
+        });
+        report.failed.push(job.id);
+        say(`deadline  ${why}`);
+        continue;
+      }
+    }
+
     // ---- acquire. `@@id(jobId)` on Lease is the compare-and-swap: a second holder loses here,
     // and losing is a normal outcome, not an error.
     const token = `${host}:${k}:${now().getTime()}`;
-    const leaseMs = leaseFor(job.timeoutMs);
+    // Seconds on the column, milliseconds in the arithmetic. The lease is still
+    // `<attempt clock> + LEASE_GRACE_MS`, so a longer clock lengthens the lease by exactly as much
+    // and the renewer covers the rest — a 60-minute Job is not reclaimed at 35.
+    const leaseMs = leaseFor(spec.attemptDeadlineSeconds.value * 1000);
     // The concurrency slot: the lowest non-negative integer no other LIVE lease holds. Machine-wide,
     // because one board file serves one machine and ports do not respect board boundaries.
     //
@@ -803,6 +860,9 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       data: {
         jobId: job.id, k, host, runtime: deps.runtime.name, startedAt: now(),
         maxBudgetUsd: spec.maxBudgetUsd.value,
+        // Frozen at claim time beside the cap, and for the same reason: raising the clock afterwards
+        // must not rewrite what stopped an earlier attempt.
+        attemptDeadlineSeconds: spec.attemptDeadlineSeconds.value,
         // Copied off the Lease so the fact survives the release — `hkb show` can say which slot a
         // past attempt held, which is what makes a port collision diagnosable after the fact.
         slot,
@@ -1410,7 +1470,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
           // let a Job write a hook its own next attempt executes. Against the repository, a merge is
           // the only way to change what a grant loads.
           plugins: grantedPlugins,
-          timeoutMs: job.timeoutMs,
+          timeoutMs: spec.attemptDeadlineSeconds.value * 1000,
           resume: job.lastSessionId ?? undefined,
           signal: deps.signal,
         }, deps.onRuntimeEvent)
@@ -1444,6 +1504,20 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       // The operator's intent outranks whatever the runtime made of being cut off. A stopped run
       // reports `timeout` or `error` depending on where the abort landed, and recording either would
       // be a lie about why it ended AND would spend a retry on it.
+      // ---- the Job's own deadline, over the time its sessions have actually RUN.
+      //
+      // The query is behind the null check on purpose: at the shipped default there is no Job-wide
+      // deadline, and a per-Job read whose result is thrown away is what CLAUDE.md's third value
+      // forbids. Sum, not "since the first attempt started" — see `deadlineExceeded`.
+      const deadlineSeconds = spec.activeDeadlineSeconds.value;
+      const jobDeadline = deadlineSeconds == null ? null : await (async () => {
+        const all = await db.attempt.findMany({
+          where: { jobId: job.id }, select: { startedAt: true, endedAt: true },
+        });
+        const ran = activeMs(all, now());
+        return { jobId: job.id, exceeded: deadlineExceeded(ran, deadlineSeconds), ranForMs: ran, seconds: deadlineSeconds };
+      })();
+
       // `let`, because one thing may still change it after the fact: a stop that lands while the
       // completion check is in flight. See the check block below.
       let ran: Decision = inputShortfall
@@ -1456,6 +1530,11 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // Both from the resolved spec, so the budget advice names the cap this attempt actually ran
         // under — which may be the board's. Quoting the raw column would print `$0.00` and send the
         // operator to raise a limit that was never the one they hit.
+        // NOT given the deadline here. A Job past it is over — but the attempt that just finished
+        // was paid for, and everything it DECLARED is collected before the verdict lands, because
+        // the collection below is gated on `ran.phase === 'succeeded'` and `clearResults` deletes
+        // the directory either way. The deadline is applied after, where it still outranks the
+        // check and `completed` in what gets RECORDED.
         : nextPhase(outcome, charged, spec.maxRetries.value, spec.maxBudgetUsd.value);
 
       // ---- the declared outputs, out of the sandbox BEFORE it is torn down. The order is the whole
@@ -1803,11 +1882,42 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
           ? { phase: 'suspended', outcome: 'completed', resumable: true, lastError: null }
           : ran;
 
+      // ---- and the Job's own deadline, LAST in precedence and last in code, which are two
+      // different orderings and both deliberate.
+      //
+      // Last in precedence: it outranks the check, the gate and `completed` alike — an attempt that
+      // finished cleanly after the Job's deadline ran out still ended a Job nobody may spend more on.
+      // Ordering it lower would make the deadline mean "unless the last attempt happened to work",
+      // which is a race with the scheduler rather than a ceiling.
+      //
+      // Last in code so that everything the attempt DECLARED has already been collected above. The
+      // work was paid for; discarding a report because a clock expired thirty seconds earlier loses
+      // real output and buys nothing. The Job still ends `deadline_exceeded`.
+      //
+      // Re-measured rather than reused: the value read before the run does not include the run.
+      const spent = jobDeadline
+        ? await (async () => {
+          const all = await db.attempt.findMany({
+            where: { jobId: job.id }, select: { startedAt: true, endedAt: true },
+          });
+          const ran2 = activeMs(all, now());
+          return { ...jobDeadline, exceeded: deadlineExceeded(ran2, jobDeadline.seconds), ranForMs: ran2 };
+        })()
+        : null;
+      const final: Decision = spent?.exceeded
+        ? {
+          phase: 'failed',
+          outcome: 'deadline_exceeded',
+          resumable: false,
+          lastError: deadlineShortfall(spent.jobId, spent.ranForMs, spent.seconds),
+        }
+        : decision;
+
       await db.attempt.update({
         where: { jobId_k: { jobId: job.id, k } },
         data: {
           endedAt: now(),
-          outcome: decision.outcome,
+          outcome: final.outcome,
           sessionId: outcome?.sessionId ?? null,
           summary: outcome?.text?.slice(0, 2000) ?? null,
           // The shortfall wins: when a declared output is missing, that is why this attempt ended as
@@ -1863,36 +1973,36 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       await db.job.update({
         where: { id: job.id },
         data: {
-          phase: decision.phase,
+          phase: final.phase,
           // Why it is waiting, in the operator's own words — not derivable from any runtime, which is
           // why the column exists. Cleared on any other transition so a resumed Job does not keep
           // claiming to be waiting for something that already happened.
           // A proposing Job says how much it is asking for, because that is the question. The
           // operator's own `--gate` text stays the fallback, and is all there is until a proposal
           // has actually been validated.
-          suspendedFor: decision.phase === 'suspended' ? (proposal ? proposalGate(proposal.jobs.length) : job.gate) : null,
+          suspendedFor: final.phase === 'suspended' ? (proposal ? proposalGate(proposal.jobs.length) : job.gate) : null,
           // Keep the session only while continuing it would help; a cold retry must start clean.
           // A gate fires on SUCCESS, and `nextPhase` calls a completed run not-resumable — so the
           // suspended decision sets `resumable: true` itself, which is what keeps the session the
           // approver's instruction is meant to continue. Without that the session would be discarded
           // at the exact moment the Job suspends waiting for it.
-          lastSessionId: decision.resumable ? (outcome?.sessionId ?? null) : null,
+          lastSessionId: final.resumable ? (outcome?.sessionId ?? null) : null,
           // The decision's own line wins where it has one: for a stop only a human can undo, "what
           // to change" is worth more than whatever the runtime called it.
           // Null for a Job that is waiting as well as one that finished. The gate fires only on a
           // success that produced everything it declared, so there is no error to carry — and the
-          // fallback to `decision.outcome` put the word `completed` in the error column of every
+          // fallback to `final.outcome` put the word `completed` in the error column of every
           // suspended Job, which `hkb show` printed as `error completed`.
           //
           // And never the word `completed` for a run that did complete but is `pending` again because
           // its check was interrupted — there is nothing for a human to change there either.
-          lastError: decision.phase === 'succeeded' || decision.phase === 'suspended' || decision.outcome === 'completed'
+          lastError: final.phase === 'succeeded' || final.phase === 'suspended' || final.outcome === 'completed'
             ? null
-            : (decision.lastError ?? outcome?.error ?? decision.outcome),
+            : (final.lastError ?? outcome?.error ?? final.outcome),
           // Neither pending nor suspended is finished. A suspended Job is waiting on a person, which
           // is the one state that can last days — stamping it finished would make every "how long did
           // this take" answer include the time somebody spent deciding.
-          finishedAt: decision.phase === 'pending' || decision.phase === 'suspended' ? null : now(),
+          finishedAt: final.phase === 'pending' || final.phase === 'suspended' ? null : now(),
         },
       });
 
@@ -1902,8 +2012,8 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
       await db.event.create({
         data: {
-          kind: decision.outcome, jobId: job.id, boardId: job.boardId, actor: host,
-          payload: { k, phase: decision.phase, ...(checkInterrupted ? { checkInterrupted: true } : {}) },
+          kind: final.outcome, jobId: job.id, boardId: job.boardId, actor: host,
+          payload: { k, phase: final.phase, ...(checkInterrupted ? { checkInterrupted: true } : {}) },
         },
       });
 
@@ -1935,8 +2045,8 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // costs a whole repository on disk to hold work no session will return to, and the message
         // said "attempt 2 resumes in it" about an attempt that cannot happen. `removeWorktree` still
         // refuses to take unpushed commits, so a proposer that committed anyway keeps its tree.
-        const resumesHere = (decision.resumable && decision.phase === 'pending')
-          || (decision.phase === 'suspended' && !job.proposes);
+        const resumesHere = (final.resumable && final.phase === 'pending')
+          || (final.phase === 'suspended' && !job.proposes);
         if (resumesHere) {
           unlockWorktree(cwd, wt);
           say(`kept ${wt.path} — attempt ${k + 1} resumes in it`);
@@ -1963,12 +2073,12 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         }
       }
 
-      if (decision.phase === 'succeeded') report.succeeded.push(job.id);
-      else if (decision.phase === 'failed') report.failed.push(job.id);
-      else if (decision.phase === 'suspended') report.suspended.push(job.id);
-      else if (decision.outcome === 'stopped' || checkInterrupted) report.stopped.push(job.id);
+      if (final.phase === 'succeeded') report.succeeded.push(job.id);
+      else if (final.phase === 'failed') report.failed.push(job.id);
+      else if (final.phase === 'suspended') report.suspended.push(job.id);
+      else if (final.outcome === 'stopped' || checkInterrupted) report.stopped.push(job.id);
       else report.retrying.push(job.id);
-      say(`${decision.phase.padEnd(9)} ${decision.outcome}${decision.resumable ? ' (resumable)' : ''}`);
+      say(`${final.phase.padEnd(9)} ${final.outcome}${final.resumable ? ' (resumable)' : ''}`);
     } catch (e) {
       // Our own plumbing, not the work: the run itself already returns its failures as a
       // `WorkerOutcome` and never throws (`.catch(() => null)` above). What lands here is a board

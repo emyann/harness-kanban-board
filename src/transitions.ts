@@ -343,6 +343,17 @@ export async function retryJob(
   if (budget !== undefined && !(budget > 0)) {
     refuse(`--max-budget wants dollars above zero, got ${budget} — a Job with no budget cannot run at all`);
   }
+  // The same guard for the same shape, one ceiling over. A Job that ended on its own deadline has
+  // spent that deadline; re-queueing it without raising one is refused at the claim anyway, so
+  // accepting it here would only move the refusal somewhere the operator is not standing.
+  if (last?.outcome === 'deadline_exceeded') {
+    const dl = resolveSpec(job, job.board).activeDeadlineSeconds.value;
+    refuse(
+      `#${id} ended on its own deadline${dl == null ? '' : ` of ${dl}s`}, which a retry does not `
+      + `refill — it would be refused again before a session was bought. Give it more first: `
+      + `\`hkb job set ${id} --deadline ${dl == null ? '<seconds>' : dl * 2}\`, then \`hkb retry ${id}\`.`,
+    );
+  }
 
   // Recorded, because "the cap was raised, by whom, from what" is the one fact that makes a second
   // $2 attempt legible six weeks later.

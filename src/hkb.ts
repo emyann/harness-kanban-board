@@ -176,6 +176,15 @@ const HELP = `hkb — run one agent against one brief
                         the values and editing the file later changes nothing already filed.
        --model <m>  --effort low|medium|high|xhigh|max
        --max-turns <n>  --max-budget <usd>  --max-retries <n>
+       --attempt-deadline <s>  one attempt's wall clock, in seconds. Kubernetes'
+                        \`template.spec.activeDeadlineSeconds\`: a session that outruns it is
+                        stopped, and the attempt is RETRIED like any other failure. 1800 unless
+                        the board says otherwise.
+       --deadline <s>   the whole JOB's wall clock, across every attempt, from the first one's
+                        start. Kubernetes' \`activeDeadlineSeconds\`, and its rule comes with it:
+                        this OUTRANKS --max-retries. A Job past it ends \`deadline_exceeded\`
+                        with no further attempt, however many retries remain. Unset by default —
+                        the per-attempt clock always applies; this one when somebody asks.
        --no-isolate     run in the current checkout instead of its own worktree
        --base <ref>     the ref this Job branches from, and is kept on top of. Defaults to the
                         repository's default branch. A step that starts from an earlier Job's
@@ -264,6 +273,8 @@ const HELP = `hkb — run one agent against one brief
        --max-budget <usd>  required when it stopped on max_budget: the same cap
                            would stop it in the same place
        --max-turns <n>  --max-retries <n>
+       --attempt-deadline <s>|none  --deadline <s>|none  seconds; "none" clears it back to
+                        the board's answer
   hkb queue <id> ["…"]      a triage item is work after all: queue it, optionally re-briefed
   hkb triage <id>           the other way — file a pending Job back under "not yet"
   hkb approve <id> ["…"]    let a gated Job go on, in the same session, with your words
@@ -304,6 +315,10 @@ const HELP = `hkb — run one agent against one brief
        --daily-budget <usd>|none
        --model <m>|none  --effort <e>|none  --max-turns <n>|none
        --max-budget <usd>|none  --max-retries <n>|none
+       --attempt-deadline <s>|none  the per-attempt wall clock every Job here inherits
+       --deadline <s>|none  a Job-wide wall clock for every Job filed here. Unset ships
+                        nothing: this is the one deadline that ENDS a Job rather than
+                        retrying it, and a default that silently ends work is not a default
        --allow-tools <a,b>|none  the default tool surface for Jobs that name none. Same
                         rule as --allow-tool above and one level more dangerous: a board
                         default that omits \`Skill\` turns skill invocation off for every
@@ -555,6 +570,12 @@ export function describeDefaults(d: ReturnType<typeof boardDefaults>): string {
     d.maxTurns !== null ? `maxTurns=${d.maxTurns}` : null,
     d.maxBudgetUsd !== null ? `maxBudget=$${d.maxBudgetUsd}` : null,
     d.maxRetries !== null ? `maxRetries=${d.maxRetries}` : null,
+    // Both wall clocks, in the seconds the flags take. The Job-wide one is the louder of the two
+    // and is printed as such: it is the only default here that ENDS a Job rather than shaping it,
+    // and a board silently capping every Job's total wall time is exactly the kind of surprise this
+    // line exists to prevent.
+    d.attemptDeadlineSeconds !== null ? `attemptDeadline=${d.attemptDeadlineSeconds}s` : null,
+    d.activeDeadlineSeconds !== null ? `deadline=${d.activeDeadlineSeconds}s across every attempt` : null,
     // The two list-valued defaults, which said nothing here until now. A board-wide grant nobody
     // can see is the kind of state that becomes a surprise: `allowedTools` decides what every Job
     // on this board may DO, and `pluginPaths` what every Job may READ (ADR-012).
@@ -592,6 +613,43 @@ const num = (v: unknown, flag: string): number | undefined => {
   if (!Number.isFinite(n)) throw usage(`${flag} wants a number, got ${JSON.stringify(v)}`);
   return n;
 };
+
+/** The word that clears a nullable spec field back to "ask the next level". Two verbs spell it. */
+const CLEARED = 'none';
+
+/**
+ * A deadline flag, in **seconds** — the unit Kubernetes named `activeDeadlineSeconds` in.
+ *
+ * `undefined` when the flag is absent (the board's default answers) and `null` for the word `none`
+ * (clear it), which is the shape every other clearable spec field uses. Everything else must be a
+ * whole number of seconds greater than zero: Kubernetes says "value must be a positive integer",
+ * and both refusals are worth having by name rather than as a Prisma error four layers down —
+ * `--deadline 0` reads as "no deadline" to a person and would mean "already expired" to the
+ * arithmetic, which is the most expensive way to be wrong here.
+ */
+function seconds(v: unknown, flag: string): number | null | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v === 'string' && v.trim() === CLEARED) return null;
+  const n = num(v, flag);
+  if (n === undefined) return undefined;
+  if (!Number.isInteger(n)) throw usage(`${flag} wants a whole number of seconds, got ${n} — Kubernetes' activeDeadlineSeconds is an integer and so is this.`);
+  // Above this a `setTimeout` delay exceeds 2^31 ms, which Node clamps to 1 — so the longest
+  // possible clock would abort every session the instant it started, with a TimeoutOverflowWarning
+  // nobody reads. Refused by name rather than left to be discovered as "my 30-day Job times out
+  // immediately". ~24.8 days.
+  const MAX = Math.floor((2 ** 31 - 1) / 1000);
+  if (n > MAX) {
+    throw usage(`${flag} wants at most ${MAX} seconds (~24 days) — above that the runtime's own timer overflows and fires immediately, got ${n}.`);
+  }
+  if (n <= 0) {
+    throw usage(
+      `${flag} wants a positive number of seconds, got ${n}. `
+      + `${n === 0 ? '0 does not mean "no deadline" — it means "already expired". ' : ''}`
+      + `Pass "${CLEARED}" to clear it and let the board answer.`,
+    );
+  }
+  return n;
+}
 
 const UNIT_MS: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 };
 const UNITS = 's (seconds), m (minutes), h (hours) or d (days)';
@@ -689,6 +747,8 @@ const OPTIONS = {
       'max-turns': { type: 'string' },
       'max-budget': { type: 'string' },
       'max-retries': { type: 'string' },
+      'attempt-deadline': { type: 'string' },
+      deadline: { type: 'string' },
       'max-concurrent': { type: 'string' },
       'daily-budget': { type: 'string' },
       status: { type: 'boolean' },
@@ -1163,6 +1223,8 @@ export async function main(argv: string[]): Promise<number> {
           maxTurns: num(values['max-turns'], '--max-turns') ?? null,
           maxBudgetUsd: num(values['max-budget'], '--max-budget') ?? null,
           maxRetries: num(values['max-retries'], '--max-retries') ?? null,
+          attemptDeadlineSeconds: seconds(values['attempt-deadline'], '--attempt-deadline'),
+          activeDeadlineSeconds: seconds(values.deadline, '--deadline'),
         },
       });
       await db.event.create({
@@ -1327,7 +1389,12 @@ export async function main(argv: string[]): Promise<number> {
           console.log(`  ended    by ${job.endedBy}${job.finishedAt ? `, ${job.finishedAt.toISOString()}` : ''}`);
           console.log(`           ${job.endedFor}`);
         }
-        console.log(`  spec     isolate=${job.isolate} timeoutMs=${job.timeoutMs}`);
+        // Both deadlines, resolved and traced like every other spec field. Seconds, because that is
+        // the unit Kubernetes named them in and the one the flags take.
+        const deadline = spec.activeDeadlineSeconds;
+        console.log(`  spec     isolate=${job.isolate}`);
+        console.log(`  attempt-deadline ${spec.attemptDeadlineSeconds.value}s  [${spec.attemptDeadlineSeconds.from}]`);
+        console.log(`  deadline ${deadline.value == null ? '(none — the Job may run as long as its retries allow)' : `${deadline.value}s across every attempt`}  [${deadline.from}]`);
         // The surface the run will actually get, RESOLVED — the list itself rather than the words
         // `(runtime default)`, which named neither what is on it nor what is missing. An operator
         // debugging a refused skill read that line and learned nothing; the source is still printed
@@ -1427,6 +1494,12 @@ export async function main(argv: string[]): Promise<number> {
           const cost = a.costUsd != null
             ? ` $${a.costUsd.toFixed(4)} of $${a.maxBudgetUsd.toFixed(2)}`
             : ` up to $${a.maxBudgetUsd.toFixed(2)}`;
+          // The clock this attempt was frozen at, printed beside the cap it was frozen at — and
+          // that is the whole justification for the column existing. A frozen value nothing reads
+          // is two records of one fact answering no question, which is the trap `maxBudgetUsd`'s
+          // own comment names; it earns its place by being the number an operator wants next to
+          // `timed_out` when the board's default has moved since.
+          const clock = ` / ${a.attemptDeadlineSeconds}s`;
           // An attempt in flight has no `endedAt`, and elapsed-so-far is exactly what you want to
           // know about one: the trailing `+` says the number is still climbing.
           const took = formatDuration((a.endedAt ?? new Date()).getTime() - a.startedAt.getTime())
@@ -1434,7 +1507,7 @@ export async function main(argv: string[]): Promise<number> {
           // 13, not 11: `check_failed` is twelve characters and overflowed the column, so the row
           // an operator is reading precisely because something went wrong was the one that lost its
           // alignment. The width is the longest Outcome plus the gutter.
-          console.log(`  k=${a.k}      ${(a.outcome ?? 'running').padEnd(13)}${took.padStart(7)}${cost}  ${a.sessionId ?? '—'}`);
+          console.log(`  k=${a.k}      ${(a.outcome ?? 'running').padEnd(17)}${took.padStart(7)}${cost}${clock}  ${a.sessionId ?? '—'}`);
           // What the run actually did, for the attempt whose value is not a diff. Printed only when
           // the runtime measured it — an attempt refused at the gate has no turn count, and `0 turns`
           // would be a claim about a run that never happened. Denials are shown only when non-zero:
@@ -1870,6 +1943,10 @@ export async function main(argv: string[]): Promise<number> {
         setNumber('max-turns', 'defaultMaxTurns', (n) => Number.isInteger(n) && n >= 1, 'a whole number of turns, 1 or more');
         setNumber('max-budget', 'defaultMaxBudgetUsd', (n) => n > 0, 'dollars above zero');
         setNumber('max-retries', 'defaultMaxRetries', (n) => Number.isInteger(n) && n >= 0, 'a whole number of retries, 0 or more');
+        for (const [flag, field] of [['attempt-deadline', 'defaultAttemptDeadlineSeconds'], ['deadline', 'defaultActiveDeadlineSeconds']] as const) {
+          const v = seconds(values[flag], `--${flag}`);
+          if (v !== undefined) data[field] = v;
+        }
         // A list, so it takes the comma-separated form rather than the repeatable one: `boards set`
         // is a single statement about the board, and a repeatable flag here would read as adding to
         // a list rather than replacing it.
@@ -2203,6 +2280,13 @@ export async function main(argv: string[]): Promise<number> {
       number('max-turns', 'maxTurns', (n) => Number.isInteger(n) && n >= 1, 'a whole number of turns, 1 or more');
       number('max-budget', 'maxBudgetUsd', (n) => n > 0, 'dollars above zero');
       number('max-retries', 'maxRetries', (n) => Number.isInteger(n) && n >= 0, 'a whole number of retries, 0 or more');
+      // Through `seconds()`, the same parser `hkb new` uses, which is this verb's own stated rule:
+      // "a value that could never have been filed cannot be set either". Four inline copies of the
+      // predicate meant `--deadline 0` explained itself on one verb and not on the other.
+      for (const [flag, field] of [['attempt-deadline', 'attemptDeadlineSeconds'], ['deadline', 'activeDeadlineSeconds']] as const) {
+        const v = seconds(values[flag], `--${flag}`);
+        if (v !== undefined) changes[field] = v;
+      }
       list('plugin-dir', 'pluginPaths', checkPluginPath);
       list('export', 'exports', checkExportPath);
       list('result', 'results', checkResultName);
