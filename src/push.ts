@@ -35,8 +35,17 @@ import { boardDir } from './db-url.ts';
  *
  * ## Where the hook lives, and why it is not in the worktree
  *
- * `core.hooksPath` is set **on the attempt's worktree only**, pointing at `~/.hkb/hooks` — outside
- * every checkout a worker can write. A hook under `.git/hooks` or a repository's own `.githooks`
+ * `core.hooksPath` is set **on the repository**, pointing at a directory beside the board — outside
+ * every checkout a worker can write.
+ *
+ * It was set on the attempt's worktree only, with `git config --worktree`, so that the operator's
+ * own checkout was untouched. That scope was measured wrong (#63): the harness cuts a subagent its
+ * own worktree at `<repo>/.claude/worktrees/agent-<id>`, which hkb never sees and which inherited
+ * no per-worktree config — so a push refused from `.hkb/worktrees/kb-1-1` SUCCEEDED from the
+ * agent's, and `Agent` plus `Bash` could write the trunk. The narrow scope was narrow in the wrong
+ * dimension. The policy is filed per REPOSITORY now and found from every worktree of it, and the
+ * operator is kept out of it by `mainWorktree` in the policy rather than by config scope: the hook
+ * allows anything pushed from the main checkout and governs every other one. A hook under `.git/hooks` or a repository's own `.githooks`
  * would be a file the worker edits with the tool it edits everything else with, which is a guard
  * that asks permission from the thing it guards. Per-worktree rather than repository-wide
  * (`extensions.worktreeConfig`) so that the operator's own checkout is completely unaffected: their
@@ -182,8 +191,8 @@ export const hooksHome = (): string => path.join(boardDir(), 'hooks');
  * not something this code gets to assume. A hook that resolved the wrong board's directory would
  * find no policy and admit the push — silently, which is the one failure mode a guard may not have.
  */
-export const policyFile = (worktree: string, home = hooksHome()): string =>
-  path.join(home, 'policy', `${crypto.createHash('sha1').update(real(worktree)).digest('hex')}.json`);
+export const policyFile = (repoRoot: string, home = hooksHome()): string =>
+  path.join(home, 'policy', `${crypto.createHash('sha1').update(real(repoRoot)).digest('hex')}.json`);
 
 const real = (p: string): string => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
 
@@ -208,6 +217,7 @@ const git = (cwd: string, args: string[]) =>
  */
 export function installPushHook(root: string, worktree: string, policy: PushPolicy): string | null {
   const home = hooksHome();
+  const main = real(root);
   try {
     fs.mkdirSync(path.join(home, 'policy'), { recursive: true });
     // Removed before it is written, both here and below: these files are left read-only on purpose,
@@ -218,32 +228,45 @@ export function installPushHook(root: string, worktree: string, policy: PushPoli
     fs.rmSync(hook, { force: true });
     fs.writeFileSync(hook, shim(), { mode: 0o755 });
     fs.chmodSync(hook, 0o555);
-    const file = policyFile(worktree, home);
-    // Rewritten every claim, so a resumed attempt on a re-used worktree is governed by the branch
-    // THIS attempt was given rather than by the one the last attempt ended on.
+    // Keyed by the REPOSITORY, not by the attempt's worktree — that is the whole fix. A subagent
+    // gets a worktree of its own, cut by the harness under `<repo>/.claude/worktrees/agent-<id>`,
+    // and a policy filed under the attempt's path was simply not found from there: measured in #63,
+    // a push refused from `.hkb/worktrees/kb-1-1` SUCCEEDED from the agent's checkout, so `Agent`
+    // plus `Bash` could write the trunk. One policy per repository is found from every worktree of
+    // it, however many the harness makes and whatever it names them.
+    const file = policyFile(root, home);
     fs.rmSync(file, { force: true });
-    fs.writeFileSync(file, `${JSON.stringify({ ...policy, worktree: real(worktree) }, null, 2)}\n`, { mode: 0o444 });
+    // `mainWorktree` is what keeps the operator out of it: the hook allows anything pushed from
+    // there and governs every other checkout of the repository. That was the point of the
+    // per-worktree config this replaces, and it survives without it.
+    const body = { ...policy, mainWorktree: main, chain: foreignHooks(root, home) };
+    fs.writeFileSync(file, `${JSON.stringify(body, null, 2)}\n`, { mode: 0o444 });
   } catch (e) {
     return `hkb could not install its \`pre-push\` hook under ${home}: ${(e as Error).message}`;
   }
 
-  // `extensions.worktreeConfig` is what makes `--worktree` legal in a linked worktree, and it is
-  // set on the repository once. Its one documented hazard is a repository that keeps `core.bare` or
-  // `core.worktree` in the shared config, where enabling the extension changes which worktree those
-  // apply to — so that case is refused by name rather than silently converted.
-  for (const key of ['core.bare', 'core.worktree']) {
-    const v = git(root, ['config', '--local', '--get', key]);
-    if (v.status === 0 && v.stdout.trim() && v.stdout.trim() !== 'false') {
-      return `${root} sets \`${key}\` in its shared config, and hkb's sandbox needs `
-        + '`extensions.worktreeConfig`, which changes what that setting applies to. Move it to '
-        + '`.git/config.worktree` by hand first — see `git config --help`, "CONFIGURATION FILE".';
-    }
-  }
-  const ext = git(root, ['config', '--local', 'extensions.worktreeConfig', 'true']);
-  if (ext.status !== 0) return `hkb could not enable \`extensions.worktreeConfig\` in ${root}: ${short(ext.stderr)}`;
-  const set = git(worktree, ['config', '--worktree', 'core.hooksPath', home]);
-  if (set.status !== 0) return `hkb could not point ${worktree} at its \`pre-push\` hook: ${short(set.stderr)}`;
+  // Repository-wide, because a worktree hkb never sees must inherit it. `extensions.worktreeConfig`
+  // is not enabled any more and nothing sets `--worktree core.hooksPath`: that scope was chosen to
+  // leave the operator's checkout alone, and `mainWorktree` above does that job without also
+  // exempting every checkout hkb did not create.
+  const set = git(root, ['config', '--local', 'core.hooksPath', home]);
+  if (set.status !== 0) return `hkb could not point ${root} at its \`pre-push\` hook: ${short(set.stderr)}`;
   return null;
+}
+
+/**
+ * A `core.hooksPath` the repository already had, so ours can hand off to it rather than replace it.
+ *
+ * Pointing the whole repository at hkb's hooks would otherwise silently disable a repository's own
+ * — husky, lefthook, a committed `.githooks` — for the operator as well as for workers. Recorded at
+ * install time and run by the shim AFTER our own refusal passes, so hkb's rule is never the thing
+ * that gets skipped and theirs is never the thing that gets lost.
+ */
+function foreignHooks(root: string, home: string): string | null {
+  const v = git(root, ['config', '--local', '--get', 'core.hooksPath']);
+  const had = v.status === 0 ? v.stdout.trim() : '';
+  if (!had || real(had) === real(home)) return null;
+  return path.isAbsolute(had) ? had : path.join(real(root), had);
 }
 
 const short = (s: string): string => String(s ?? '').trim().split('\n')[0] ?? '';
@@ -274,12 +297,20 @@ function shim(): string {
   ].join('\n');
 }
 
-/** Read back the policy governing a worktree, or null when nothing governs it. */
-export function readPolicy(worktree: string, home?: string): PushPolicy | null {
+/** What the hook reads back: the policy, plus the two facts only the installer knows. */
+export type StoredPolicy = PushPolicy & { mainWorktree: string; chain: string | null };
+
+/** Read back the policy governing a REPOSITORY, or null when nothing governs it. */
+export function readPolicy(repoRoot: string, home?: string): StoredPolicy | null {
   try {
-    const raw = JSON.parse(fs.readFileSync(policyFile(worktree, home), 'utf8')) as Partial<PushPolicy>;
+    const raw = JSON.parse(fs.readFileSync(policyFile(repoRoot, home), 'utf8')) as Partial<StoredPolicy>;
     if (typeof raw.branch !== 'string' || !raw.branch) return null;
-    return { branch: raw.branch, defaultBranch: typeof raw.defaultBranch === 'string' ? raw.defaultBranch : '' };
+    return {
+      branch: raw.branch,
+      defaultBranch: typeof raw.defaultBranch === 'string' ? raw.defaultBranch : '',
+      mainWorktree: typeof raw.mainWorktree === 'string' ? raw.mainWorktree : '',
+      chain: typeof raw.chain === 'string' ? raw.chain : null,
+    };
   } catch {
     return null;
   }

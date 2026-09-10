@@ -225,7 +225,8 @@ test('the hook refuses at git, whatever the command line looked like', (t) => {
   const wt = path.join(root, '.hkb', 'worktrees', 'kb-7-1');
   run(root, ['worktree', 'add', '-b', 'kb-7-1', wt, 'main']);
   assert.equal(installPushHook(root, wt, P), null, 'the hook did not install');
-  assert.ok(fs.existsSync(policyFile(wt)), 'no policy was pinned to the worktree');
+  // Keyed by the REPOSITORY now, so every worktree of it — including ones hkb never made — finds it.
+  assert.ok(fs.existsSync(policyFile(root)), 'no policy was pinned to the repository');
 
   fs.writeFileSync(path.join(wt, 'b.txt'), 'b\n');
   run(wt, ['add', '-A']);
@@ -265,7 +266,32 @@ test('the hook refuses at git, whatever the command line looked like', (t) => {
   const lease = spawnSync('git', ['push', '--force-with-lease', 'origin', 'kb-7-1'], { cwd: wt, encoding: 'utf8' });
   assert.equal(lease.status, 0, `the controller's lease push was refused: ${lease.stdout}${lease.stderr}`);
 
-  // The operator's own checkout is governed by nothing: no policy file, no refusal, their own hooks.
+  // The operator's own checkout is governed by nothing: their pushes, their hooks. The policy is
+  // filed per REPOSITORY now, so without the `mainWorktree` exemption this would refuse them for as
+  // long as a Job held a lease.
   const fromRoot = spawnSync('git', ['push', 'origin', 'main'], { cwd: root, encoding: 'utf8' });
   assert.equal(fromRoot.status, 0, `the main checkout was caught by the hook: ${fromRoot.stdout}${fromRoot.stderr}`);
+
+  // ---- and the hole #63 measured: ANOTHER worktree of the same repository.
+  //
+  // The harness cuts one for a subagent at `<repo>/.claude/worktrees/agent-<id>`, which hkb never
+  // sees and cannot install anything on. While `core.hooksPath` was set with `git config
+  // --worktree` on the attempt's checkout, that worktree inherited NOTHING — measured in #63: a
+  // push refused from `.hkb/worktrees/kb-7-1` succeeded from the agent's, so `Agent` plus `Bash`
+  // could write the trunk. It is governed by the repository's policy now, like every checkout that
+  // is not the operator's own.
+  const agent = path.join(root, '.claude', 'worktrees', 'agent-abc123');
+  run(root, ['worktree', 'add', '-b', 'agent-work', agent, 'main']);
+  // It needs something to push: a push that would move nothing is admitted because it moves
+  // nothing, which is the hook judging effects rather than spellings.
+  fs.writeFileSync(path.join(agent, 'c.txt'), 'c\n');
+  run(agent, ['add', '-A']);
+  run(agent, ['commit', '-m', 'agent work']);
+  const fromAgent = spawnSync('git', ['push', 'origin', 'HEAD:main'], { cwd: agent, encoding: 'utf8' });
+  assert.notEqual(fromAgent.status, 0, 'a subagent worktree pushed the trunk — the fence #63 found broken');
+  assert.match(`${fromAgent.stdout}${fromAgent.stderr}`, /hkb:/, 'and it is hkb that refused it');
+  // Its own branch is refused too: a subagent is cut from origin/main and its work never comes back
+  // (#63), so nothing it pushes is a sanctioned flow.
+  const own = spawnSync('git', ['push', '-u', 'origin', 'agent-work'], { cwd: agent, encoding: 'utf8' });
+  assert.notEqual(own.status, 0, 'a subagent owns no branch on the remote');
 });

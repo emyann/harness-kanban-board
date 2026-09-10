@@ -13,11 +13,11 @@ covers:
   - path: src/runtime/surface.ts
     sha: e7660f0ce513bfc804cc31a0a92040e5bdc7fa1a
   - path: src/push.ts
-    sha: 79181173571e3f6359402de26638e1e5fef904ac
+    sha: 62a3bb15af8693c612fd9bd1af68ad04ec430925
   - path: src/pre-push.ts
-    sha: 589393dab0dfb3bff5d7b4edf16c7b808b85e1c7
-generated_at_commit: ff67f87
-last_refreshed: 2026-09-09
+    sha: 1991b7553db12789fa7f05d448c0b5d02e2be015
+generated_at_commit: 80f691f
+last_refreshed: 2026-09-10
 related: [architecture/runtime-layer, architecture/job-kind, features/skill-invocation, decisions/adr-007-workload-scheduler, decisions/adr-017-the-workflow-is-content, gotchas/prompt-is-not-a-guarantee]
 ---
 
@@ -164,12 +164,33 @@ have stopped being different: git's own `pre-push` hook.
   checkout a worker can write, because a hook under `.git/hooks` or a repository's
   own `.githooks` is a file the worker edits with the tool it edits everything
   else with;
-- it points that worktree at it with `git config --worktree core.hooksPath`
-  (`extensions.worktreeConfig`), so the **operator's own checkout is completely
-  unaffected** — their hooks, their pushes, no hkb in the middle;
+- it points the **repository** at it with `git config --local core.hooksPath`, so
+  that every worktree of it is governed — including ones hkb never made;
+- the policy is filed per repository and records the **main worktree**, which is
+  what keeps the operator out of it: the hook allows anything pushed from their
+  own checkout and governs every other one;
 - the policy is **pinned at claim time** to the branch the controller created the
-  worktree on. Reading it back out of the checkout is what let attempt 1's
-  `git switch develop` license attempt 2 to push `develop`.
+  attempt's worktree on. Reading it back out of the checkout is what let attempt
+  1's `git switch develop` license attempt 2 to push `develop`;
+- a `core.hooksPath` the repository already had is recorded and **chained** — our
+  hook runs its `pre-push` after ours passes, so pointing the repository here
+  never silently disables husky, lefthook or a committed `.githooks`.
+
+### The scope that was wrong, and how it was found
+
+That config was set with `git config --worktree` on the attempt's checkout alone,
+so the operator's own was untouched by construction. Card #63 measured what a
+subagent actually gets and the scope turned out to be narrow in the wrong
+dimension: the harness cuts a subagent its own worktree at
+`<repo>/.claude/worktrees/agent-<id>`, which hkb never sees and which inherited no
+per-worktree config. **A push refused from `.hkb/worktrees/kb-1-1` succeeded from
+the agent's** — `Agent` plus `Bash` could write the trunk.
+
+The tool-surface half of the fence held across the spawn in the same measurement:
+a subagent's `Write` came back with hkb's own "not part of this workload's tool
+surface", and `permission_denials` counted both agents'. So the gate generalises
+to a nested session and a git hook installed per worktree does not — which is the
+argument for keeping the two guards at the two layers they are at.
 
 The decision is still a pure module — `refusePush`, for the reason `src/limits.ts`
 and `src/liveness.ts` are — but what it reads is git's resolved ref list rather
