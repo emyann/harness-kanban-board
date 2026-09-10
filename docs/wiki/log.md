@@ -387,3 +387,5 @@ history.
 ## 2026-09-10 — refreshed architecture/the-seam (the CLI does NOT always pass a brief producer — `brief: undefined` is what lets a workflow body or a triage note become the brief; the read now sits immediately before the two side effects, and the one refusal that cannot be hoisted is a workflow's unfilled placeholder), concepts/ceilings (a re-pointed citation had landed on the `stop`/`start` block instead of `--max-concurrent`) — the review of #431
 
 ## 2026-09-10 — added decisions/adr-018-the-boundary (the machinery/board line as a rule with a greppable test, one store not two on Tekton's evidence, and the measured SDK/CLI facts: extraArgs reaches --worktree, the harness already does worktrees and will not sweep ours, canUseTool fires with a string prompt but bare allowedTools shadow it)
+
+## 2026-09-10 — refreshed decisions/adr-018-the-boundary (the ask measured in both modes: AskUserQuestion reaches canUseTool with its full options, deny+message answers in-session, deny+interrupt parks for $0.001 keeping the session id, and a resume of that id continues it — plus the trap that such a stop reports error_during_execution)

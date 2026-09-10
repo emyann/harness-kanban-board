@@ -18,7 +18,7 @@ covers:
     sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
   - path: src/controller.ts
     sha: 456ffbc1b5d82177b8769cf86bc22ea8b3ea6e70
-generated_at_commit: 06b4a7c
+generated_at_commit: 94f79c6
 last_refreshed: 2026-09-10
 related:
   [
@@ -164,6 +164,31 @@ having been alive when the question was asked. So:
   arrives as a resumed session. This survives a restart, which is the property that matters.
 - **The held ask is an optimisation** for a person who is actually watching, and it is the only
   thing that would justify streaming input mode. It is not the default and nothing may depend on it.
+
+### A decision, not just a permission — and both modes measured
+
+The interesting case is not "may it run `rm`" but "which of these should I do", which is what a board
+is *for*. Claude Code has a tool for exactly that — `AskUserQuestion`, whose input carries 1–4
+questions each with 2–4 labelled options and descriptions (`sdk-tools.d.ts`) — and it is an ordinary
+tool, so it arrives at `canUseTool` with its full structure. `onUserDialog` does **not** fire for it
+(measured); nothing has to be scraped out of prose.
+
+`PermissionResult` supplies both modes exactly:
+
+| | mechanism | measured |
+|---|---|---|
+| **held** | `{behavior: 'deny', message: '<the answer>'}` | the model reads the message as the tool's result and carries on in the same session — asked TOML-or-YAML, answered TOML, concluded `CHOSE=TOML`, $0.061 |
+| **durable** | `{behavior: 'deny', message, interrupt: true}` | the run stops at once, spending **$0.001**, and the session id survives; resuming that id with the human's answer as the prompt produced `CHOSE=TOML` on the same session |
+
+So the board's suspended card can show the real question with its real options, and answering it
+resumes the very session that asked. Parking is effectively free, which matters because a Job may
+park several times in one piece of work.
+
+**One trap, and it is the same one `statusOf` already documents for aborts:** a run stopped this way
+comes back as `error_during_execution` with an `[ede_diagnostic]` message — the SDK has no "stopped
+to ask" terminal state. The controller must label that outcome from *its own* knowledge that it
+denied-with-interrupt, exactly as it already does for the operator's stop, or every question a Job
+asks is recorded as a crash and burns a retry.
 
 ## Consequences
 
