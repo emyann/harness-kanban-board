@@ -246,17 +246,6 @@ test('a real record survives the round trip, and missing fields become safe ones
   assert.equal(storedCheck({ command: 'npm test', kind: 'exit', exitCode: null })?.kind, 'unfinished');
 });
 
-test('the base the tree was on rides along, or is absent together', () => {
-  // Both or neither: `onBase` with no ref names nothing anybody can act on.
-  const on = storedCheck({ command: 'npm test', exitCode: 1, kind: 'exit', onBase: false, base: 'origin/main' });
-  assert.equal(on?.onBase, false);
-  assert.equal(on?.base, 'origin/main');
-  assert.equal(storedCheck({ command: 'npm test', onBase: false })?.onBase, undefined);
-  assert.match(describeCheck(on!), /NOT on origin\/main/, 'and `hkb show` says so');
-  const merged = storedCheck({ command: 'npm test', exitCode: 1, kind: 'exit', onBase: true, base: 'origin/main' });
-  assert.match(describeCheck(merged!), /— on origin\/main$/);
-});
-
 // ---------------------------------------------------------------- the one piece of I/O
 
 test('it runs through the shell, in the directory it was given', async () => {

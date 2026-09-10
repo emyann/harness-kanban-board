@@ -1149,7 +1149,7 @@ test('self: hands a Job facts about itself, and slot is a small integer it can b
     'frozen onto the attempt, so a past run can still say which slot it held');
 });
 
-test('a self: field this Job does not have is REFUSED, not rendered empty', async () => {
+test('a self: field that is not a field is refused before a session is bought', async () => {
   const b = await db.board.findUniqueOrThrow({ where: { slug: 'inputs' } });
   let called = 0;
   const spy = {
@@ -1162,22 +1162,29 @@ test('a self: field this Job does not have is REFUSED, not rendered empty', asyn
     },
   } as never;
 
-  // `--no-isolate`, so there is no branch. Rendering an empty string would put a Job in the position
-  // of acting on a fact that is not true, which is the failure every other declaration refuses.
+  // A `self:` field that is not a field is refused at FILE time, which is the only path that
+  // exists: `declaredInputs` reads back the fields a Job can have, so nothing else reaches a claim.
+  // `branch` is the case worth naming — it WAS a field, and ADR-018 removed it with the git
+  // protocol, so somebody typing it from memory is the realistic mistake.
+  const { checkInputSpec } = await import('../src/inputs.ts');
+  for (const gone of ['branch', 'base', 'worktree']) {
+    assert.throws(() => checkInputSpec(`x=self:${gone}`), new RegExp(`self:${gone}`),
+      `self:${gone} went with the git protocol and must be refused by name, before a session is bought`);
+  }
+  assert.throws(() => checkInputSpec('x=self:nonsense'), /not a field a Job has/);
+
+  // And a field it DOES have costs nothing to declare.
   const job = await db.job.create({
     data: {
-      boardId: b.id, name: 'no branch here', brief: 'x', isolate: false, maxRetries: 0,
-      inputs: [{ name: 'branch', valueFrom: { jobRef: { field: 'branch' } } }],
+      boardId: b.id, name: 'reads its own slot', brief: 'x', isolate: false, maxRetries: 0,
+      inputs: [{ name: 'slot', valueFrom: { jobRef: { field: 'slot' } } }],
     },
   });
   await reconcile({ runtime: spy, cwd: REPO, board: 'inputs' });
 
-  assert.equal(called, 0);
+  assert.equal(called, 1, 'a resolvable self: field does not stop the run');
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
-  assert.equal(after.attempts[0].outcome, 'no_input');
-  assert.match(after.lastError ?? '', /no longer exists/,
-    'and it says where the field WENT, not merely that it is absent — a workflow author who asked '
-    + 'for `self:branch` needs to know the core stopped having an opinion about branches (ADR-018)');
+  assert.equal(after.attempts[0].outcome, 'completed');
 });
 
 test('concurrent runs get DIFFERENT slots, and a slot is released with its lease', async () => {

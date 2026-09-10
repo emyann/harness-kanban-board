@@ -160,18 +160,6 @@ export type CheckRecord = {
   ms: number;
   /** Why it never produced an exit code, when it did not. A complete predicate — see above. */
   why?: string;
-  /**
-   * **Kept for rows already on the board, and never written again.**
-   *
-   * The check used to run after a rebase, and these two qualified the verdict: *was the tree it
-   * judged actually sitting on what would merge?* Nothing replays a branch any more (ADR-018), so
-   * the check judges the tree as the session left it and says so plainly instead of qualifying a
-   * claim it no longer makes. `storedCheck` still reads them back so an old attempt's record still
-   * renders the way it did when it was written.
-   */
-  onBase?: boolean;
-  /** The base ref `onBase` was about, e.g. `origin/main`. Historical, like `onBase`. */
-  base?: string;
 };
 
 export type CheckResult = ({ ok: true; record: null } | { ok: false; record: CheckRecord }) & {
@@ -557,14 +545,7 @@ export function describeCheck(r: CheckRecord): string {
   const said = r.kind === 'exit'
     ? `exited ${r.exitCode} after ${Math.round(r.ms / 1000)}s`
     : (r.why ?? `ended after ${Math.round(r.ms / 1000)}s without an exit code`);
-  // Only on a historical row: nothing writes these now, and `hkb show` on an attempt from before
-  // the rebase left the core should still read the way it did.
-  const where = r.onBase === undefined || !r.base
-    ? ''
-    : r.onBase
-      ? ` — on ${r.base}`
-      : ` — NOT on ${r.base}: the branch was not replayed onto it, so this is the tree as it stands`;
-  return `check \`${r.command}\` ${said}${where}`;
+  return `check \`${r.command}\` ${said}`;
 }
 
 /**
@@ -603,9 +584,5 @@ export function storedCheck(value: unknown): CheckRecord | null {
     stderr: typeof v.stderr === 'string' ? v.stderr : '',
     ms: typeof v.ms === 'number' ? v.ms : 0,
     ...(typeof v.why === 'string' && v.why ? { why: v.why } : {}),
-    // Both or neither: `onBase` without the ref it is about says nothing anybody can act on.
-    ...(typeof v.onBase === 'boolean' && typeof v.base === 'string' && v.base
-      ? { onBase: v.onBase, base: v.base }
-      : {}),
   };
 }

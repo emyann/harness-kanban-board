@@ -33,25 +33,6 @@ import { resolveSpec } from './spec.ts';
 import { holderId, holderLiveness } from './liveness.ts';
 import type { Runtime, RuntimeEvent, WorkerOutcome } from './runtime/index.ts';
 
-/**
- * The `self:` fields the Job kind can answer about itself — and the three that left with the git
- * protocol (ADR-018).
- *
- * `branch`, `worktree` and `base` used to be here, filled from a checkout the controller cut before
- * the run. Both halves of that are gone: the controller no longer cuts anything, and the workspace
- * is provisioned *by the runtime as the session starts*, so there is no branch to report at the
- * moment a declared input is resolved. There is also nothing left to report it about — `Job.base`
- * went with the protocol, so a workspace always starts from the repository's default branch.
- *
- * A step that genuinely needs to know is standing in the workspace and can ask git itself. That is
- * the honest version of ADR-017 decision 5: the workflow's content owns the question, and the core
- * supplies neither the answer nor the vocabulary.
- */
-const RETIRED_FIELDS = new Map([
-  ['branch', 'the core no longer cuts a branch — the workspace is the runtime\'s (ADR-018)'],
-  ['worktree', 'use `self:repo`; the session already runs in its own workspace'],
-  ['base', '`Job.base` is gone — a workspace starts from the repository\'s default branch'],
-]);
 
 /**
  * The controller for the Job kind.
@@ -186,7 +167,7 @@ const LEASE_GRACE_MS = 5 * 60_000;
  */
 export type Decision = {
   phase: 'succeeded' | 'failed' | 'pending' | 'suspended';
-  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped' | 'no_output' | 'no_input' | 'conflicted' | 'check_failed' | 'deadline_exceeded';
+  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped' | 'no_output' | 'no_input' | 'check_failed' | 'deadline_exceeded';
   resumable: boolean;
   /**
    * What to write on the Job's `lastError`, when the reason it stopped is something a *human* has
@@ -1092,20 +1073,10 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
             repo: cwd,
           };
           const got = self[vf.jobRef.field];
-          // A field this kind does not answer is refused BY NAME, and a field it used to answer is
-          // refused with where it went (ADR-018). Rendering either as an empty string would be the
-          // one thing every other declaration in hkb refuses to do — and for the three retired ones
-          // it would silently hand a workflow the wrong branch rather than telling its author that
-          // the core stopped having an opinion about branches.
+          // Refused BY NAME rather than rendered as an empty string, which is the one thing every
+          // other declaration in hkb refuses to do.
           if (got == null) {
-            const retired = RETIRED_FIELDS.get(vf.jobRef.field);
-            unread.push({
-              name: want.name,
-              source,
-              why: retired
-                ? `\`self:${vf.jobRef.field}\` no longer exists — ${retired}`
-                : `this Job has no \`${vf.jobRef.field}\``,
-            });
+            unread.push({ name: want.name, source, why: `this Job has no \`${vf.jobRef.field}\`` });
           } else {
             readInputs.push({ name: want.name, source, text: got });
           }

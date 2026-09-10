@@ -1,5 +1,4 @@
 import { spawnSync } from 'node:child_process';
-import fs from 'node:fs';
 import path from 'node:path';
 
 /**
@@ -28,19 +27,11 @@ export const workspaceName = (jobId: number): string => `kb-${jobId}`;
 /**
  * The workspace name a directory belongs to, or null if it is not one of ours.
  *
- * Two shapes, because a board that predates ADR-018 has checkouts on disk from the scheme before it:
- *
- *   - `kb-<jobId>`        — what hkb asks for now, one workspace per Job.
- *   - `kb-<jobId>-<k>`    — the old per-attempt checkout under `.hkb/worktrees/`. Recognised so the
- *                           sweep can collect it; otherwise every workspace an upgrading board
- *                           already had would be orphaned on disk for ever, which is a worse
- *                           upgrade than the one this replaces.
- *
- * Matched on the *directory name* and mapped back to a Job id, so the TTL question can be asked
- * about it like any other.
+ * `kb-<jobId>`, matched on the *directory name* and mapped back to a Job id, so the TTL question can
+ * be asked about it like any other. Anything else is not ours and is never a candidate.
  */
 export function workspaceJobId(dir: string): number | null {
-  const m = /^kb-(\d+)(?:-\d+)?$/.exec(path.basename(dir));
+  const m = /^kb-(\d+)$/.exec(path.basename(dir));
   return m ? Number(m[1]) : null;
 }
 
@@ -169,29 +160,4 @@ export function removeWorkspace(root: string, dir: string): Swept {
     return { name, removed: true, why: '' };
   }
   return { name, removed: false, why: why.slice(0, 200) };
-}
-
-/**
- * Disarm what the deleted `pre-push` fence left on this machine.
- *
- * **This is the one part of ADR-018 that a code change alone does not finish**, and it breaks a live
- * board rather than merely leaving litter. The old fence set `core.hooksPath` to `~/.hkb/hooks` on
- * each attempt's worktree — per-worktree, via `extensions.worktreeConfig`, so the operator's own
- * checkout was untouched — and wrote a shim there that `exec`s `dist/src/pre-push.js`. That file is
- * gone, and the tarball no longer ships it. A push from any surviving worktree would fail with a
- * hook that cannot start: hkb breaking a repository on the way out.
- *
- * Removing the directory is what fixes it, and it fixes it completely. A `core.hooksPath` pointing
- * at somewhere that does not exist is not an error to git — it simply finds no hooks — so every
- * stale per-worktree setting becomes inert the moment this runs, with nothing to unset and no need
- * to enumerate worktrees hkb may no longer know about.
- *
- * Idempotent, and silent when there is nothing there, because it runs on an upgrade path that most
- * boards will take exactly once.
- */
-export function retireLegacyPushHooks(boardDir: string): string | null {
-  const hooks = path.join(boardDir, 'hooks');
-  if (!fs.existsSync(hooks)) return null;
-  fs.rmSync(hooks, { recursive: true, force: true });
-  return hooks;
 }
