@@ -400,8 +400,8 @@ async function reclaimExpired(db: ReturnType<typeof openBoard>, at: Date, report
  * that has to answer it. They are walked past rather than treated as answers.
  *
  * What is NOT in this set is the point of it: `completed` (the check ran and passed, or the Job has
- * none) and `no_output`, `conflicted`, `refused`, `max_budget` — all of which end the walk because
- * the attempt has a cause of its own that the next one should be reading instead.
+ * none) and `no_output`, `refused`, `max_budget` — all of which end the walk because the attempt has
+ * a cause of its own that the next one should be reading instead.
  *
  * Membership is not the whole test, and it deliberately cannot be — see `lastRefusedCheck`, where
  * the session the refusal belongs to is checked as well. `crashed` is exactly why: a *runtime-error*
@@ -449,8 +449,7 @@ const CHECKLESS_OUTCOMES: ReadonlySet<string> = new Set(['stopped', 'lost', 'cra
  * Walks back from `k - 1` past attempts that could not have answered a check, and stops at the first
  * one that could: if that one ended `check_failed` its record is what the next attempt is briefed
  * with, and if it ended any other way the check was either satisfied or beside the point. The same
- * shape as `newestWorktree`, which walks back for the checkout because the numbering has exactly
- * this hole in it.
+ * It walks back because the attempt numbering has exactly this hole in it.
  *
  * **And the session has to still be the one.** `withCheckFailure` says "the work is still there:
  * the same session, and normally the same checkout" and it suppresses the plain `withCheck` line on
@@ -973,8 +972,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       // everything else here: a controller that is level-triggered cannot depend on having seen the
       // failure happen, and a flag consumed on a transition is wrong after a restart.
       //
-      // **Walked back**, the way `newestWorktree` walks back for the checkout — and for the same
-      // reason, because it is the same gap. `k` counts every ended attempt, so reading only `k - 1`
+      // **Walked back**, because `k` counts every ended attempt and the numbering has a hole in it. `k` counts every ended attempt, so reading only `k - 1`
       // meant one `stopped` (`hkb down`), `lost` (a reclaim) or pre-run `crashed` attempt in between
       // silently dropped the briefing: none of those runs a check, none of them writes the column,
       // and none of them clears `lastSessionId` — so the next attempt resumed the very session the
@@ -1546,25 +1544,25 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       //   - Nothing replays a branch onto a moved base, so the check below judges the tree **as the
       //     session left it**. It no longer claims to test what would merge, and it no longer says
       //     it does.
-      //   - The `conflicted` outcome has no writer. The enum value stays for rows that already
-      //     carry it.
+      //   - The `conflicted` outcome is gone from the enum, not merely unwritten. It described a
+      //     branch that would not replay onto its base; nothing replays a branch, and the board had
+      //     no row carrying it — checked before removing, since a value still on a row would have
+      //     made this a migration rather than a deletion.
 
       // ---- the completion CHECK: the exit code hkb does not have (ADR-016 §3, `src/check.ts`).
       //
       // Nothing runs at the shipped defaults — `BUILT_IN.check` is null, so this whole block is a
       // null test on a board nobody has configured, which is the property the tests hold.
       //
-      // **After the rebase, and after its push.** Two reasons, and both of them are about agreement:
-      // it must test what would actually MERGE rather than what the branch was cut from, and the tree
-      // it runs in has to agree with what is on the remote — `src/rebase.ts` explains why a tree ahead
-      // of its branch strands the next attempt, and a check that ran before the replay would be
-      // reporting on a tree the resumed attempt never sees. It runs in the worktree, or in the
-      // repository itself for a `--no-isolate` Job, which is the same "where the work happened" either
-      // way.
+      // **On the tree as the session left it**, in the workspace the runtime reported — or in the
+      // repository itself for a Job that asked for none, which is the same "where the work happened"
+      // either way. It used to run after a rebase and its push, and the whole argument for that
+      // placement was that it therefore tested what would MERGE. Nothing replays a branch (ADR-018),
+      // so that claim would now be false and is not made.
       //
-      // Gated exactly like the rebase above it: only a run that otherwise succeeded, only while we
-      // still hold the lease (this executes a command in a checkout, and a checkout a new holder is
-      // working in is not ours to touch), and only when nothing has already failed the attempt —
+      // Gated: only a run that otherwise succeeded, only while we still hold the lease (this executes
+      // a command in a workspace, and a workspace a new holder is working in is not ours to touch),
+      // and only when nothing has already failed the attempt —
       // running a suite over a tree that is missing a declared output would spend ten minutes to
       // report a second cause for a failure that already has one.
       //
@@ -1635,11 +1633,10 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       // **Gated on the CHECK, and on nothing else that failed.** Moving the copy down here to sit
       // after the check quietly took the shortfall with it, which changed the shipped-default rule:
       // an export that IS present stopped being delivered because a *different* declared output was
-      // missing, or because the rebase conflicted — and in the conflict case the attempt is not
-      // resumable, so nothing ever delivers it. The rebase block one screen up already states the
-      // principle it broke: what an attempt produced "is a durable record of what happened and is
-      // worth keeping whether or not its diff still applies". The check is the one exception, and it
-      // is the only reason this block moved: an attempt a check went on to REFUSE must not have
+      // missing. The principle it broke: what an attempt produced is a durable record of what
+      // happened, and is worth keeping whether or not everything else about the run held up. The
+      // check is the one exception, and it is the only reason this block moved: an attempt a check
+      // went on to REFUSE must not have
       // already written into the operator's repository.
       //
       // A stop that landed mid-check copies too, and `runSucceeded` is what says so: the run finished

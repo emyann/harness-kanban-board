@@ -11,15 +11,15 @@ supersedes: [decisions/adr-004-roles-and-adoption, decisions/adr-005-control-pla
 superseded_by: ~
 covers:
   - path: package.json
-    sha: 0ba34d2cf5ae7e5fc2107bc0ebd9dea0d337ca3d
+    sha: e3697b083d6d126bca20424e8351de6f300bc443
   - path: bin/hkb.ts
     sha: 698dd0e673a442929b7314d6bb409f87f89b8251
   - path: src/hkb.ts
-    sha: 7b95039ab59dbcf5234373c716a5db86a15db8fb
+    sha: c06820804f259a976336c80742b3068586df9d84
   - path: scripts/smoke-pack.mjs
     sha: abccc0340f0034e8f40aa9a30796fac84655f603
-generated_at_commit: f063b7a
-last_refreshed: 2026-09-09
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 related: [decisions/adr-007-workload-scheduler, architecture/overview, architecture/job-kind]
 ---
 
@@ -66,6 +66,13 @@ closed before the reset, and the decision not to bring them back is recorded in 
 3. **Kept.** The `kb-<jobId>-<k>` branch prefix, unchanged: it names branches and worktrees that exist on
    remotes and in checkouts, and renaming it would orphan them to buy nothing. The board's git ref at
    `refs/kb/boards/default` stays as an archive — it is history, and it costs nothing.
+
+   > Since ADR-018 (2026-09-10) hkb names no branches at all. What survives of the prefix is the
+   > **workspace** name it asks the runtime for, `kb-<jobId>` — per Job rather than per attempt, so
+   > a resumed session comes back to the tree it left (`workspaceName`, `src/workspaces.ts`). The
+   > branch that appears inside it is the harness's own `worktree-kb-<jobId>`, not hkb's. The
+   > "renaming would orphan them" reasoning is spent: nothing hkb writes carries the name onto a
+   > remote any more.
 4. **The tarball ships `dist/` and `prisma/` only.** The TypeScript sources were dead weight in it: Node
    refuses to strip types under `node_modules` (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`, by design),
    so nothing an installed `hkb` runs could ever resolve to them. The packed artifact is 117 kB.

@@ -7,15 +7,17 @@ audience: [dev]
 read_when: "adding a flag, adding a verb that joins positionals, or wondering why a value arrived as one word — or as the word `true`, or as another flag"
 covers:
   - path: src/hkb.ts
-    sha: 5dc47f4b0e302d2eba5ca1d0895104f4f6e00bcb
+    sha: c06820804f259a976336c80742b3068586df9d84
+  - path: src/flags.ts
+    sha: 7140df95e7457ce3f2ed4fe3fe38e19476728dd1
 related:
   [
     architecture/transitions,
     features/workflow-templates,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: 5279b8a
-last_refreshed: 2026-09-09
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 ---
 
 # What `parseArgs` does quietly, and the bugs it shipped
@@ -186,13 +188,18 @@ consumed, so nothing fell through as a positional). What catches it is the value
 — on every flag that shares it. Not every leading dash: a brief that opens with a Markdown bullet
 (`--brief "- add a test"`) and a negative number are values, and a first version refused the bullet.
 
-Nothing legitimate is lost. A shell line, a git ref, a repo-relative path, a model name and a
+Nothing legitimate is lost. A shell line, a repo-relative path, a model name and a
 comma-separated list all begin with something else, and a value that really does start with a dash
 is reachable as `--check " -x"` — a leading space, which `given` tests for *before* it trims (a
 first version trimmed first and refused its own escape with the same message; `--check=-x` and
-`--` do not work, because the parser hands the flag `-x` either way). Where a checker existed already — `checkRef` refuses
-a ref beginning with a dash, because a ref reaches git as a bare argv token and `--upload-pack=…`
-runs a command — this guard now speaks first, with a different sentence and the same refusal.
+`--` do not work, because the parser hands the flag `-x` either way).
+
+> The sharpest instance of that guard has since been deleted along with the flag it protected.
+> `--base` took a git ref, and `checkRef` refused one beginning with a dash for a reason `given`
+> only generalises: a ref reaches git as a bare argv token, so `--upload-pack=…` passed as a "ref"
+> runs a command. ADR-018 removed `Job.base`, `--base` and `src/worktree.ts` where `checkRef`
+> lived, so nothing in hkb hands a user-supplied token to git as a ref any more, and `given`
+> (`src/flags.ts`) is the whole of the defence for every string flag that is left.
 
 **The rule this leaves:** a string flag's value is not just "a string". `given` is where all four of
 these questions are asked once, and a new flag gets the answers by using it — *every* string flag,
@@ -202,6 +209,13 @@ on it), and `hkb job set`'s list helper cast to `string[]` after the second. A n
 same trap in a different coat: a bare `--max-turns` is `true`, `Number(true)` is `1`, and a ceiling
 of one turn was filed silently — `num` refuses a non-string by name and a value that is a flag,
 while a negative number stays a number.
+
+`num` deliberately stops there and leaves the *range* to the caller, which is how the three verbs
+came to disagree: `hkb job set` and `hkb boards set` both refused `--max-budget 0`, a negative and a
+fractional `--max-turns`, and `hkb new` accepted all of them — so a Job could be filed with a spec it
+could never be set to, and a $0 cap is not inert (`pick` compares against null, not truthiness, so it
+resolves and every attempt dies on budget with nothing naming the cause). `inRange` and `RANGES`
+(`src/flags.ts:212-229`) are the one copy of each predicate, for the reason three copies drifted.
 
 ## Why all four of these are the same bug
 

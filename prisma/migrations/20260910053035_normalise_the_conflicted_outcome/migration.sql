@@ -1,0 +1,15 @@
+-- `conflicted` was removed from `enum Outcome` when the rebase left the core (ADR-018): nothing has
+-- written it since, and the board it was removed on carried no row holding it.
+--
+-- Removing a value from a Prisma SQLite enum emits no SQL of its own — the column is TEXT — so a
+-- board that DOES hold one is left with a value the client cannot deserialize, and every read of
+-- that attempt fails with `Value 'conflicted' not found in enum 'Outcome'`: a raw Prisma error with
+-- no exit code of ours and nothing in it naming a fix.
+--
+-- This is not compatibility code. It runs once, leaves nothing behind, and is a no-op on every board
+-- that never had one. It is the half of the deletion that a schema edit could not do.
+--
+-- `no_output` is the closest survivor: both are terminal, neither is a crash, and both mean the
+-- session ended without the board getting what it needed. What the attempt actually hit is still in
+-- `Attempt.reason`, which the old outcome never carried anyway.
+UPDATE "Attempt" SET "outcome" = 'no_output' WHERE "outcome" = 'conflicted';

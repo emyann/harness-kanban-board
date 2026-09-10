@@ -8,16 +8,16 @@ read_when: "adding anything that runs before, beside or after the agent; naming 
 status: accepted
 date: 2026-09-07
 supersedes: ~
-superseded_by: ~
+superseded_by: decisions/adr-018-the-boundary (in part — three rows of decision 1's map table)
 covers:
   - path: prisma/schema.prisma
-    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
+    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
   - path: src/controller.ts
-    sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
+    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
   - path: src/inputs.ts
-    sha: 140cf48b8b323742a57e3e604b6853f829c72b6c
-generated_at_commit: 8aa5ade
-last_refreshed: 2026-09-09
+    sha: 6ed576d25bf9db5f8b76e3752c17a250725df3b6
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 related:
   [
     decisions/adr-007-workload-scheduler,
@@ -27,10 +27,46 @@ related:
     architecture/job-kind,
     features/declared-outputs,
     decisions/adr-017-the-workflow-is-content,
+    decisions/adr-018-the-boundary,
   ]
 ---
 
 # ADR-016: The Pod spec is the map for a workload's environment
+
+> **Superseded in part by [ADR-018](./adr-018-the-boundary.md) (2026-09-10).** The *method* this
+> record establishes — take the Pod spec's answers row by row, and say plainly where hkb is off the
+> map — stands, and is the method ADR-018 itself uses. Three rows of decision 1's table do not, and
+> ADR-018 names the first of them as the reason it had to be written: *"ADR-016 mapped the Pod spec
+> and filed a deadline under `resources.limits`."*
+>
+> - **`resources.limits` → `maxBudgetUsd`, `maxTurns`, `timeoutMs`.** A deadline is not a resource
+>   limit. `Job.timeoutMs` is gone, replaced by two fields in the units and with the precedence
+>   Kubernetes gave them: `Job.attemptDeadlineSeconds` (`template.spec.activeDeadlineSeconds` — one
+>   attempt's wall clock, retried like any other failure) and `Job.activeDeadlineSeconds` (the
+>   JobSpec's own — the whole Job's clock, which **outranks** `backoffLimit` and ends it
+>   `deadline_exceeded`). `prisma/schema.prisma`, `BUILT_IN` in `src/spec.ts`. The row that survives
+>   is `maxBudgetUsd` and `maxTurns`.
+> - **`emptyDir` → the worktree; the artifacts directory.** ADR-018 decision 2 moves the workspace
+>   off the Job kind: a PodSpec *declares* `volumes:` and never provisions storage, so the workspace
+>   is declared on the runtime seam (`WorkerSpec.workspace`) and cut by the driver, and
+>   `WorkerOutcome.workspacePath` reports where it landed. What hkb keeps is a row this table did
+>   not have — **`ttlSecondsAfterFinished`**, as a built-in rather than a spec field
+>   (`BUILT_IN_TTL_SECONDS`, `src/workspaces.ts`). The artifacts-directory half of the row still
+>   stands (`src/artifacts.ts`).
+> - **`ConfigMap / Secret → files` → `.worktreeinclude`.** That file belongs to the harness, not to
+>   hkb — ADR-018's measurement table records it as *"the same filename, invented twice"* — and the
+>   `features/worktree-includes` page this row cites no longer exists.
+>
+> Two smaller things: §4's aside that hkb's checkout-failure path *"leaves the Job `pending` and
+> retries for ever"* describes code deleted with the checkout, and §1's `Pod` row now means an
+> Attempt with no `branch`, `prNumber` or `prUrl` on it. §3 (`check` is the exit code hkb does not
+> have) and §6 (`self:slot` is off the map) are untouched and are what `src/check.ts` and
+> `src/inputs.ts` still implement.
+>
+> **One row ADR-018 adds that this table wanted: `podFailurePolicy` — unmapped.** Which outcomes
+> spend a retry is hardcoded inside `nextPhase` (`src/controller.ts`) and classified from the
+> runtime's own words, which is exactly the field Kubernetes made a spec field so that a stop caused
+> by the *system* rather than the workload can be given `action: Ignore`.
 
 ## Context
 

@@ -11,14 +11,18 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/runtime/index.ts
-    sha: 97a047f6055dc1dba1689f2e0fd09e0a574bb4df
+    sha: a325ddd4b03fd864bb2c556aaa7925ed1a95a0e9
   - path: src/runtime/claude.ts
-    sha: 54d9896f11384fa0de1ddfcb34745750568506aa
+    sha: e3afb9de9e34d90f222e7bf9865cbad39e99044b
   - path: prisma/schema.prisma
-    sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
+    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
   - path: src/controller.ts
-    sha: 456ffbc1b5d82177b8769cf86bc22ea8b3ea6e70
-generated_at_commit: e4b48ae
+    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
+  - path: src/workspaces.ts
+    sha: b709212e781376f570a613907a209648dab91526
+  - path: src/exports.ts
+    sha: afa23e85d0df61d1d0d91587d425df2ad7a872a0
+generated_at_commit: 62135e9
 last_refreshed: 2026-09-10
 related:
   [
@@ -234,3 +238,42 @@ and would have to carry the questions, not just how many there were.
   nowhere to go — that is expected, and it is the reason those features pause rather than being
   reimplemented inside the core "for now".
 - Cards #46, #50 and #67 had pencilled ADR-018/019/020 for other subjects; those numbers move.
+
+## What has landed since — 2026-09-10
+
+The Consequences above are written in the future tense, so a reader needs to know which of them
+happened. **Decisions 1–3 are implemented; decision 4 is designed and has no code.**
+
+- **The git protocol left the core.** `src/worktree.ts`, `src/push.ts`, `src/pre-push.ts`,
+  `src/rebase.ts` and `src/pulls.ts` are deleted, and `Job.base`, `Board.defaultBase` and
+  `Attempt.branch`/`prNumber`/`prUrl` are dropped by
+  `prisma/migrations/20260910033358_the_git_protocol_leaves_the_job_kind`. The context paragraph
+  above — *"`Job` today carries … and `base`"* — is therefore a description of the day this record
+  was written, not of the schema now.
+- **The workspace is declared, not cut.** `WorkerSpec.workspace` and `WorkerOutcome.workspacePath`
+  (`src/runtime/index.ts`); asked for by name and collected on a TTL (`workspaceName`,
+  `BUILT_IN_TTL_SECONDS`, `src/workspaces.ts`). The name is `kb-<jobId>` — per **Job**, not per
+  attempt — because the harness reopens a tree that already carries that name, which is the
+  judgement `newestWorktree` used to make by hand.
+- **`extraArgs` is verified in the controller, not only in the live test.** `test/workspace.live.test.ts`
+  is gated on `HKB_LIVE_SDK=1`, so `isolationShortfall` (`src/controller.ts`) additionally fails a
+  *completed* run whose reported workspace realpaths to the repository itself — keeping the session,
+  so `hkb retry` continues rather than re-buys it.
+- **The boundary is a test.** `test/boundary.test.ts` refuses the five deleted module names and any
+  import of them from a closed list of the Job kind's files. That is the thing this record says
+  ADR-015, ADR-016 and ADR-017 each lacked.
+- **`exportOutputs` moved to `src/exports.ts`** with `checkExportPath`, out of the deleted
+  `src/worktree.ts`, and collects from `WorkerOutcome.workspacePath` rather than from a path the
+  controller computed.
+
+**One correction to the text above.** `enum Outcome` no longer carries `conflicted` — it was removed
+from `prisma/schema.prisma` rather than kept, though comments in `src/controller.ts` still say the
+value stays for rows that already carry it. The migration does not rewrite the `outcome` TEXT
+column, so pre-existing rows keep the string.
+
+**Decision 4 is unbuilt, so its trap cannot fire yet.** `permissionMode: 'dontAsk'` and the bare
+`allowedTools` names are both still passed (`src/runtime/claude.ts`), `WorkerOutcome.denials` is
+still a bare count (`src/runtime/index.ts`), and nothing writes a question at ask-time. Nothing
+parks, so nothing spins — the retry loop this record measured is what would arrive *with* the ask if
+the three points above it are not built at the same time. `podFailurePolicy` remains unadopted:
+which outcomes spend a retry is still hardcoded in `nextPhase` (`src/controller.ts`).

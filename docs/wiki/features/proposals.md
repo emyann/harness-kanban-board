@@ -9,19 +9,22 @@ covers:
   - path: src/proposals.ts
     sha: fd5e1eee8b847c9b4024d1bf5f635a85907baae4
   - path: src/controller.ts
-    sha: 55cb278593ae0b3d0692712e4fcff643c29e4a4e
+    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
   - path: src/brief.ts
-    sha: a56db1e2f49d60c695034ecd14f73c5c258cce85
+    sha: b3eddf6aebd95fdab1f38424b24851d6a4e3e5a2
   - path: prisma/schema.prisma
-    sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
+    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
   - path: src/hkb.ts
-    sha: 5dc47f4b0e302d2eba5ca1d0895104f4f6e00bcb
-generated_at_commit: 5279b8a
-last_refreshed: 2026-09-09
+    sha: c06820804f259a976336c80742b3068586df9d84
+  - path: src/workspaces.ts
+    sha: b709212e781376f570a613907a209648dab91526
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 related:
   [
     decisions/adr-011-proposals-not-board-access,
     decisions/adr-010-the-human-gate,
+    decisions/adr-018-the-boundary,
     architecture/job-kind,
     architecture/the-loop,
     concepts/admission-control,
@@ -41,21 +44,33 @@ related:
 |---|---|---|
 | Ask | the worker | writes `proposal.json` into its artifact directory (`withProposal`, `src/brief.ts`) |
 
-An isolated proposing Job gets the **worktree note** rather than the sandbox contract
-(`withWorktree`, `src/brief.ts`): the worktree is still the sandbox, but a proposal is not a diff,
-and a prompt that said both *commit what you have* and *write the file and stop* was not an
-instruction. ADR-008 decided this generally — what a Job is told to produce should be selected by
-the spec rather than implied by having a worktree — and ADR-017 decision 5 finished it from the
-other end: the core no longer mentions a pull request to *any* Job. The same exclusion is why a
-proposing Job is not given a board's **default workflow** either — its standing steps would be the
-contradiction arriving by another route. The exclusion is made twice, at `hkb new` and again where
-the steps are actually composed at claim time, because a Job can become a proposer after it is filed
+An isolated proposing Job is told **nothing at all about its workspace**, and that is now the
+general rule rather than a special case. The core used to append a sandbox contract to every
+isolated Job — commit, rebase, push — so a proposer needed an exemption from it (`withWorktree`, a
+"this is a sandbox, not a deliverable" note), because a prompt that said both *commit what you have*
+and *write the file and stop* was not an instruction. ADR-008 decided the general form — what a Job
+is told to produce should be selected by the spec rather than implied by having a worktree —
+ADR-017 decision 5 moved the pull request out, and **ADR-018 deleted the contract and the exemption
+together**: the core requires no commit, push or rebase, so it says none of it to anyone, and
+`withWorktree` is gone with `withSandbox` (`src/brief.ts`). A proposer's prompt is the brief, the
+standing rules, the guide, the declared outputs and `withProposal` — no git in it
+(`src/controller.ts:1197-1246`).
+
+What survives the deletion is the *other* exclusion, and it still has to be made explicitly: a
+proposing Job is not given a board's **default workflow**, because that is where the commit-push-PR
+steps live now and they are exactly the contradiction the note existed to prevent
+(`src/controller.ts:1165`). It is made twice, at `hkb new` and again where the steps are composed at
+claim time, because a Job can become a proposer after it is filed
 (*features/workflow-templates*).
 
-And it does not **keep** that worktree once it suspends, where an ordinary gated Job does: a gated
-Job's approval resumes a session *in* its checkout, while a proposer's approval is applied by the
-controller and no session ever wakes up there (`src/controller.ts`). Keeping it would cost a whole
-repository on disk to hold work nothing will return to.
+> **Its workspace is kept while it is suspended, and that changed.** The controller used to remove a
+> proposer's checkout on suspending — a gated Job's approval resumes a session *in* its tree, while a
+> proposer's approval is applied by the controller and no session ever wakes up there. The tidy block
+> is gone (`src/controller.ts:1869-1884`), and a `suspended` Job has no `finishedAt`, so
+> `collectable` never takes its workspace (`src/workspaces.ts:119-128`). A proposer's checkout
+> therefore stands on disk from the moment it suspends until an hour after the Job finishes. That is
+> the honest cost of replacing four inspect-the-tree branches with one TTL; ADR-018 accepts it, and
+> `ttlSecondsAfterFinished` becoming a spec field is what would let a board tighten it.
 | Refuse or accept | the controller, after the run | `checkProposal` (`src/proposals.ts`), stored on `Attempt.proposal` |
 
 A proposing Job also runs **no completion check**, however the board is configured: it changes
@@ -184,7 +199,7 @@ Four defects came out of that one run, all now fixed and all invisible to a fake
 
 | What the run showed | What was wrong |
 |---|---|
-| the prompt told it to open a draft PR *and* to write the file and stop | the pull-request protocol (as it then was) was applied to a Job that produces no diff |
+| the prompt told it to open a draft PR *and* to write the file and stop | the pull-request protocol (as it then was) was applied to a Job that produces no diff — the whole class of fault ADR-018 ended by removing git from the core's prompt |
 | `hkb run` said `1 to retry` | a suspended Job was counted as retrying — the machine will not pick it up, a person must |
 | `hkb show` said `error completed` | `lastError` fell through to the outcome word for every suspended Job |
 | `hkb ls` said `produced nothing` | a proposer only reaches `succeeded` once its rows are filed, which is not nothing |

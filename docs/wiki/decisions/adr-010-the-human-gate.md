@@ -11,25 +11,26 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: prisma/schema.prisma
-    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
+    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
   - path: src/controller.ts
-    sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
+    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
   - path: src/runtime/index.ts
-    sha: cbfa18bd1871a66bdb1fcd59e77a0f6b7ac5bbb1
+    sha: a325ddd4b03fd864bb2c556aaa7925ed1a95a0e9
   - path: src/hkb.ts
-    sha: 7b95039ab59dbcf5234373c716a5db86a15db8fb
+    sha: c06820804f259a976336c80742b3068586df9d84
   - path: src/inputs.ts
-    sha: 140cf48b8b323742a57e3e604b6853f829c72b6c
+    sha: 6ed576d25bf9db5f8b76e3752c17a250725df3b6
 related:
   [
     decisions/adr-007-workload-scheduler,
     decisions/adr-008-declared-outputs,
     decisions/adr-011-proposals-not-board-access,
+    decisions/adr-018-the-boundary,
     architecture/job-kind,
     architecture/overview,
   ]
-generated_at_commit: f063b7a
-last_refreshed: 2026-09-09
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 ---
 
 # ADR-010: The human gate is a field, not a kind — and groom is a brief
@@ -104,8 +105,9 @@ which is why it genuinely is a kind. Groom does none of them.
    (`lastSessionId`), which already resumes and is proved against the live SDK.
 
 5. **Groom is then a brief plus board arithmetic**, with no new machinery: which Jobs have sat
-   `pending` and why, which succeeded and produced nothing (`producedNothing`, `src/hkb.ts` — which
-   only became computable this week), which keep capping on `max_budget`, which briefs duplicate each
+   `pending` and why, which succeeded and produced nothing (`producedNothing`, `src/read.ts:68` —
+   which only became computable this week; it was written in `src/hkb.ts` and moved with the rest
+   of the read model), which keep capping on `max_budget`, which briefs duplicate each
    other. The arithmetic is LLM-free and comes from one board read; the judgement is the model's; the
    yes is the human's. That is the same division the retired `hkb groom` had, pointed at a different
    object.
@@ -180,7 +182,7 @@ the streaming question needs and does not currently have.
 new machinery, only a brief plus board arithmetic. Half of that is now a mechanism rather
 than a thing to remember: `--input state=board` renders one board read — id, phase,
 attempt count, last outcome, and whether the Job produced nothing — into the prompt with
-no model in the loop (`renderBoard`, `src/inputs.ts:267`), capped at 50 rows and saying so
+no model in the loop (`renderBoard`, `src/inputs.ts:272`), capped at 50 rows and saying so
 when it truncates. It stays arithmetic; what it removes is the step where somebody pastes
 it in.
 
@@ -196,6 +198,34 @@ proposed and the Job goes terminal, because a worker asked to propose again woul
 proposing on top of rows that already exist (`applyProposals`, `src/controller.ts`;
 `features/proposals`). `hkb approve` says which of the two happened rather than making the
 reader guess.
+
+**The open question got a measurement, and it did not settle the way this record guessed.**
+ADR-018 decision 4 (2026-09-10) probed the premise behind the table above — that a *held* ask needs
+streaming input — and found it false: with a **plain string prompt**, `canUseTool` fires, the
+session waits for the answer, and then proceeds. What suppressed it was hkb's own configuration,
+twice over (bare `allowedTools` names auto-approve before the callback is consulted, and
+`permissionMode: 'dontAsk'` on top). So "steering a run that is still going" is not streaming-only
+after all, for the ask-shaped case.
+
+What that record then *keeps* from this one is the more important half: **holding a callback open is
+not how a Job suspends.** `JobSpec.suspend` deletes Pods and recreates them; a Job waiting three days
+for a person must not be a node process holding a session open, and a level-triggered controller may
+not depend on having been alive when the question was asked. ADR-018 therefore makes the **durable**
+ask the default — record the question, deny with a reason, end the session keeping its id, suspend,
+and let the answer arrive as a resumed session — which is decision 4 of *this* record, reached from
+the other direction. The held ask survives only as an optimisation nothing may depend on.
+
+**None of it is implemented.** `permissionMode: 'dontAsk'` and the bare `allowedTools` entries are
+still what ships (`src/runtime/claude.ts`), and nothing writes a question at ask-time, so the gate
+is still reached only by a *completed* attempt. Read ADR-018 decision 4 as a design with
+measurements behind it, not as a description of the code.
+
+**And decision 4's mechanism outlived the prose it cites.** *"a resumed attempt re-sends
+`withProtocol(job.brief, branch)`"* described a wrapper that no longer exists — the core sends the
+brief as filed (ADR-018), and `withSandbox`, `withWorktree` and `withProtocol` are all gone from
+`src/brief.ts`. The hazard the sentence names is unchanged and so is the fix: without
+`approvedPrompt` (`src/brief.ts:144`) an approved Job re-sends the *same* prompt and proposes again
+instead of applying.
 
 <!-- Dual mutability: once status: accepted, NEVER rewrite this record.
 When the decision changes, write a new ADR, set its `supersedes`, and set

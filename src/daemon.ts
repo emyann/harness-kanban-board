@@ -29,7 +29,7 @@ import type { Runtime } from './runtime/index.ts';
  *   - a lease expires, because its holder died without releasing it;
  *   - a run passes its wall clock (the runtime's own timer, but only while something is watching it);
  *   - work scheduled for later becomes due — a kind that does not exist yet;
- *   - a worktree becomes safe to reclaim, because its pull request landed somewhere else and
+ *   - a finished Job's workspace outlives its TTL somewhere else and
  *     nothing here was told. That one is a sweep, on its own slower timer: see `SWEEP_EVERY_MS`.
  *
  * The change-driven half — "a Job was just filed, run it" — is always one `hkb run` away, so it does
@@ -52,7 +52,7 @@ export const DEFAULT_INTERVAL_MS = 45_000;
  * This is the fourth time-driven thing, and it belongs here for the same reason as the other
  * three: a checkout becomes safe to delete *later*, when its pull request lands, and nothing tells
  * us when that happened. Only a clock can ask again. It is rare because the answer changes on the
- * scale of a code review, and because asking costs one `ls-remote`.
+ * scale of a code review, and because asking costs one `git worktree list`.
  */
 export const SWEEP_EVERY_MS = 10 * 60_000;
 
@@ -416,29 +416,36 @@ export async function loop(deps: LoopDeps): Promise<number> {
           // CLAUDE.md: no per-Job calls when a board-wide one exists.
           const present = repo ? existingWorkspaces(repo) : [];
           if (repo && present.length) {
+            // **By id across every board, not by board.** `Board.repoPath` has no unique
+            // constraint and two boards on one repository is a supported, tested arrangement — so
+            // a workspace found here may belong to the OTHER board. Filtering the query by
+            // `boardId` made every one of those look like a Job whose row had been deleted, which
+            // the synthetic row below marks collectable immediately, with no TTL: this board would
+            // delete that board's checkouts out from under live work. Existence is a question about
+            // the machine; ownership is a separate one, asked second.
             const rows = await db.job.findMany({
-              where: { boardId: b.id, id: { in: present.map((w) => w.jobId) } },
-              select: { id: true, finishedAt: true, phase: true, lastSessionId: true },
+              where: { id: { in: present.map((w) => w.jobId) } },
+              select: { id: true, boardId: true, finishedAt: true, phase: true, lastSessionId: true },
             });
+            const known = new Map(rows.map((r) => [r.id, r]));
+            const mine = present.filter((w) => (known.get(w.jobId)?.boardId ?? b.id) === b.id);
             // A workspace whose Job ROW IS GONE is collectable outright, and `hkb rm` is why: it is
             // the normal way to tidy a finished Job, it deletes the row, and without this the whole
-            // checkout it left would match nothing and leak for ever. There is nothing left that
-            // could want it — no phase to be unfinished, no session to resume — so the TTL has
-            // nothing to measure and the answer is immediate.
-            const known = new Map(rows.map((r) => [r.id, r]));
-            const finished = present.map((w) => known.get(w.jobId) ?? {
+            // checkout it left would match nothing and leak for ever. Nothing can want it back — no
+            // phase to be unfinished, no session to resume — so the TTL has nothing to measure.
+            const finished = mine.map((w) => known.get(w.jobId) ?? {
               id: w.jobId, finishedAt: new Date(0), phase: 'gone', lastSessionId: null,
             });
             // **`hkb retry` is what resumes, and it acts on a FAILED Job.** A Job the operator
-            // cancelled or marked done keeps its session id too, and so does one out of retries —
-            // nothing wakes any of them, and calling them resumable would keep a whole checkout per
-            // Job for ever with no reason an operator could see.
+            // cancelled or marked done keeps its session id too, and nothing wakes either — calling
+            // them resumable would keep a whole checkout per Job with no reason an operator could
+            // see. Being resumable DELAYS collection; it does not veto it (`collectable`).
             const candidates = finished.map((j) => ({
               ...j,
               resumable: j.phase === 'failed' && j.lastSessionId != null,
             }));
             const take = new Set(collectable(candidates, new Date(now()), BUILT_IN_TTL_SECONDS));
-            for (const { jobId: id, path: dir } of present.filter((w) => take.has(w.jobId))) {
+            for (const { jobId: id, path: dir } of mine.filter((w) => take.has(w.jobId))) {
               const name = pathBasename(dir);
               // The path git reported, never one rebuilt from a convention.
               const swept = removeWorkspace(repo, dir);

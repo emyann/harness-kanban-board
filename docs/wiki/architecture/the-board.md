@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "adding a column, deciding whether something belongs on the Job or the Attempt, writing a migration, or explaining why a board refuses to open"
 covers:
   - path: prisma/schema.prisma
-    sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
+    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
   - path: src/schema.ts
     sha: ee1920b789eb96be121c8bba20cc92e452ddf818
   - path: src/db.ts
@@ -15,9 +15,9 @@ covers:
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/spec.ts
-    sha: 52a014761b40dc1c364976bb772713febf321641
-generated_at_commit: a72ec46
-last_refreshed: 2026-09-09
+    sha: a83486dc8471b6e0358af03bafba75fa363c4032
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 related:
   [
     architecture/job-kind,
@@ -60,10 +60,10 @@ one delete and why the migration path below has to be so careful about `DROP TAB
 ## Why almost every spec column is nullable
 
 `Job.model`, `effort`, `maxTurns`, `maxBudgetUsd`, `maxRetries`, `allowedTools`, `pluginPaths`,
-`guide`, `base` and `check` are all nullable, and that is not laziness about defaults — **null is the value that means "nobody
-said"**, and it is what makes a board default mean anything (`src/spec.ts`). Three levels resolve in
-one fixed order: the Job's own value wins, the Board's default fills a null, the built-in is the last
-resort.
+`guide`, `attemptDeadlineSeconds`, `activeDeadlineSeconds` and `check` are all nullable, and that is
+not laziness about defaults — **null is the value that means "nobody said"**, and it is what makes a
+board default mean anything (`src/spec.ts`). Three levels resolve in one fixed order: the Job's own
+value wins, the Board's default fills a null, the built-in is the last resort.
 
 The distinction that decides who wins is *default* versus *ceiling*. A default is a value a Job may
 freely override, resolved in `src/spec.ts`. A ceiling is a limit a Job may not exceed, enforced at
@@ -116,9 +116,14 @@ An Attempt is history. Once written, its columns describe a run that happened, s
   have moved since — possibly because of this very attempt. The frozen number is the only one that
   keeps `$0.31 of $2.00` readable a week later (`prisma/schema.prisma`).
 - **`slot`** — the concurrency ordinal, copied off the Lease so it survives the release.
-- **`branch`, `prNumber`, `prUrl`** — what the run produced on the forge. History, so it belongs on
-  the row; the pull request's *state* stays on GitHub, because that is live and a copy could only go
-  stale.
+- **`attemptDeadlineSeconds`** — the per-attempt wall clock this attempt was admitted under, frozen
+  for the same reason and never null. `hkb job set --attempt-deadline` after the fact must not
+  rewrite what stopped an earlier attempt.
+- **`branch`, `prNumber` and `prUrl` used to be here** and are gone, columns and all
+  (*decisions/adr-018-the-boundary*, `prisma/migrations/20260910033358_the_git_protocol_leaves_the_job_kind`).
+  The core stopped cutting branches and stopped reading the forge, so all three had no writer left —
+  and an Attempt is a record of what happened, which is precisely what a column nothing writes is
+  not. `Job.base` and `Board.defaultBase` went in the same migration.
 - **`results`, `artifacts`, `inputs`, `proposal`** — what the run was given and what it handed back.
   `inputs` and `artifacts` are catalogues (name, source or kind, size) rather than content: the
   content is in the prompt and in the transcript the `sessionId` points at.

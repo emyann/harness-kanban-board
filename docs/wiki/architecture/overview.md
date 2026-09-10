@@ -1,6 +1,6 @@
 ---
 title: hkb at a glance
-summary: "The moving parts of a workload scheduler: a CLI over one SQLite board, a level-triggered controller that claims a Job under a lease and runs it inline, a runtime seam over the Agent SDK, and a git worktree as the sandbox. Where state lives, and what is deliberately not here."
+summary: "The moving parts of a workload scheduler: a CLI over one SQLite board, a level-triggered controller that claims a Job under a lease and runs it inline, a runtime seam over the Agent SDK, and a workspace the runtime provisions. Where state lives, and what is deliberately not here."
 category: architecture
 kind: explanation
 audience: [dev]
@@ -9,31 +9,35 @@ covers:
   - path: bin/hkb.ts
     sha: 698dd0e673a442929b7314d6bb409f87f89b8251
   - path: src/hkb.ts
-    sha: 5dc47f4b0e302d2eba5ca1d0895104f4f6e00bcb
+    sha: c06820804f259a976336c80742b3068586df9d84
   - path: src/controller.ts
-    sha: 55cb278593ae0b3d0692712e4fcff643c29e4a4e
+    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
   - path: src/daemon.ts
-    sha: 114665116363d28f7aeecf23e293f0fff050eadc
+    sha: 3de5966ef5a47b7e7c7f0ecc0e6fc7c2b238dc76
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/artifacts.ts
-    sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
+    sha: 74efd4d0fc9f6f0e5bcce4379b55f533b81e9e6d
   - path: src/inputs.ts
-    sha: 140cf48b8b323742a57e3e604b6853f829c72b6c
+    sha: 6ed576d25bf9db5f8b76e3752c17a250725df3b6
   - path: src/proposals.ts
     sha: fd5e1eee8b847c9b4024d1bf5f635a85907baae4
   - path: src/templates.ts
-    sha: 84e68dad2edc226425dfb0b8880e9765b2628686
+    sha: 169ac395a4b608e231beeb978952da3adfc8c82c
   - path: src/labels.ts
     sha: b524ef31fce5611a1a676dfb4631aaa83ecba926
   - path: src/watch.ts
     sha: 992b53f9dc3ef4284c2a1bf0201794490afee393
+  - path: src/workspaces.ts
+    sha: b709212e781376f570a613907a209648dab91526
+  - path: src/exports.ts
+    sha: afa23e85d0df61d1d0d91587d425df2ad7a872a0
   - path: src/brief.ts
-    sha: a56db1e2f49d60c695034ecd14f73c5c258cce85
+    sha: b3eddf6aebd95fdab1f38424b24851d6a4e3e5a2
   - path: prisma/schema.prisma
-    sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
+    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
 related:
   [
     architecture/job-kind,
@@ -44,8 +48,8 @@ related:
     decisions/adr-009-retiring-the-first-system,
     decisions/adr-011-proposals-not-board-access,
   ]
-generated_at_commit: 5279b8a
-last_refreshed: 2026-09-09
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 ---
 
 # hkb at a glance
@@ -66,9 +70,10 @@ seam or 36 CLI verbs is describing code that is gone.
 | `prisma/schema.prisma` + `src/db.ts` | the board — one SQLite file, one memoized client handle |
 | `src/controller.ts` | `reconcile()` — one level-triggered pass over one board |
 | `src/daemon.ts` | that pass on a timer, detached, over *every* board |
-| `src/worktree.ts` | the sandbox: cut a checkout, carry declared files in, get outputs out, sweep |
+| `src/workspaces.ts` | the sandbox, at the two points the core still owns it: what to call it, and when it may be collected |
+| `src/exports.ts` | the declared paths, moved out of the workspace into the repository before it goes |
 | `src/runtime/` | the seam a worker runs behind — the Agent SDK, or a fake that spends nothing |
-| `src/admission.ts` | the `PreToolUse` gate that makes worktree isolation and the tool surface invariants rather than instructions |
+| `src/admission.ts` | the `PreToolUse` gate that makes subagent isolation and the tool surface invariants rather than instructions |
 | `src/results.ts` | the named values a Job hands on, when its output is not a diff |
 | `src/artifacts.ts` | the files a Job hands on that the board keeps and the repository does not |
 | `src/inputs.ts` | what a Job is given: the read side, resolved before the run |
@@ -77,7 +82,6 @@ seam or 36 CLI verbs is describing code that is gone.
 | `src/labels.ts` | the `key=value` pairs a Job carries, and the only thing that selects a set of them |
 | `src/proposals.ts` | what a Job may ask the board to create, and every field it may not set |
 | `src/watch.ts` | the event stream, followed — what the outside world reacts to |
-| `src/pulls.ts` | the only thing that shells out to `gh` |
 
 ## State lives in the board, and only there
 
@@ -128,19 +132,30 @@ Claim under a lease, run, record. The interesting parts are the refusals:
   probed and a wall-clock expiry means nothing across a laptop suspend.
 - **Isolation and the tool surface are enforced, not requested.** `src/admission.ts` is a `PreToolUse`
   gate that rewrites or denies; the prompt asking a worker to stay in its worktree was measured being
-  ignored. The same gate is built from the Job's resolved `allowedTools`, so a Job narrowed to `Read`
+  ignored. The workspace itself is asked for on the seam and *verified afterwards* — an untyped
+  passthrough that silently stopped working would otherwise leave a session running in the operator's
+  repository while the board believed it was isolated (`isolationShortfall`, `src/controller.ts`).
+  The same gate is built from the Job's resolved `allowedTools`, so a Job narrowed to `Read`
   and `Grep` *cannot* write whatever its brief says — which is what makes a propose-then-approve gate
   (ADR-010) a boundary rather than a hope. See *concepts/admission-control*.
 
-## The forge is not the board
+## The forge is not the board, and the core no longer looks at it
 
-GitHub holds pull requests. It holds nothing else. `src/pulls.ts` shells out to `gh` to read them back
-and joins them to a Job by **branch name** — `kb-<jobId>-<k>`, which `src/worktree.ts` derives so nothing
-has to remember it. The worker opens its own *draft* PR and a human merges; `succeeded` means the session
-ended, not that the work is good — and not, on its own, that anything was produced. Nothing in the
-machinery *requires* a pull request, so `hkb ls` marks a succeeded Job that opened none and declared no
-outputs as **produced nothing** (`producedNothing`, `src/read.ts`). It is stated rather than judged: "I
-looked, and there is nothing to change" is a real outcome, and so is a `--no-isolate` Job.
+GitHub holds pull requests. It holds nothing else — and since
+*decisions/adr-018-the-boundary* **nothing in the machinery reads it**: `src/pulls.ts` was the only
+thing that shelled out to `gh`, and it is deleted along with the branch, the rebase and the
+`pre-push` hook. A Job kind that runs a workload which may not be code, in a repository it may not
+have, cannot own the concept of a branch; opening a pull request is a step in a workflow file
+(`.hkb/workflows/implement.md`), which is content rather than machinery
+(*decisions/adr-017-the-workflow-is-content*).
+
+`succeeded` still means the session ended, not that the work is good — and not, on its own, that
+anything was produced. `hkb ls` marks a succeeded Job that declared no outputs as **produced
+nothing** (`producedNothing`, `src/read.ts`); a pull request used to count towards that and no
+longer can, because no column records one. It is stated rather than judged: "I looked, and there is
+nothing to change" is a real outcome, and so is a `--no-isolate` Job. A Job whose deliverable really
+is a pull request declares what it hands back — the URL as a result, say — and the board counts
+that.
 
 A Job can also declare its outputs, which is how it stops being coupled to a commit at all
 ([ADR-008](../decisions/adr-008-declared-outputs.md),
@@ -149,13 +164,14 @@ in **where the output goes**:
 
 | | goes to | shape | capped |
 |---|---|---|---|
-| **`exports`** (`--export <path>`) | the repository | paths, copied out of the worktree before the checkout is torn down | no |
+| **`exports`** (`--export <path>`) | the repository | paths, moved out of the workspace before it is collected (`src/exports.ts`) | no |
 | **`results`** (`--result <name>`) | the board, as a value on the Attempt | a finding, a decision, a URL (`src/results.ts`) | 4 KB each |
 | **`artifacts`** (`--artifact <name>`) | the board, as a file beside it | a report, a dataset, a proposal (`src/artifacts.ts`) | no |
 
 One rule covers all three: **a declared output the run did not produce fails the attempt**, which is
-what makes `succeeded` mean more than "a session ended". Everything else left in the checkout is litter
-and goes with it.
+what makes `succeeded` mean more than "a session ended". Everything else left in the workspace is
+litter and goes with it when the sweep collects it — Bazel's rule, and the reason the copy happens
+before anything may tear the workspace down.
 
 A fourth thing a Job can declare is not an output but a **proposal**: `--propose` makes it write one
 JSON file asking for Jobs it may not create itself, which a person approves and the *controller* then
@@ -216,9 +232,9 @@ declaration is the filer saying "this must exist", and a volunteered value is th
 not ask, but you should know". Hermes' structured handoff is the second layer alone, which is richer
 and guarantees nothing, because a downstream reader cannot rely on a key existing.
 
-Those three are what a Job with nothing to commit produces. `hkb ls` marks a succeeded Job that opened no
-pull request and declared none of them as **produced nothing** (`producedNothing`, `src/read.ts`); with a
-result or an artifact declared, the same Job says what it found instead.
+Those three are what a Job with nothing to commit produces. `hkb ls` marks a succeeded Job that
+declared none of them as **produced nothing** (`producedNothing`, `src/read.ts`); with a result or an
+artifact declared, the same Job says what it found instead.
 
 ## The gate — the one place a Job waits for a person
 
@@ -249,3 +265,6 @@ not know which answered.
   admission gate rather than in a prompt. `docs/rebuild-plan.md` holds the order.
 - **An LLM anywhere in the controller.** The reconcile pass is arithmetic and SQL.
 - **A merge.** hkb never merges. That is the one step a human keeps.
+- **A branch, a push, a rebase or a pull request.** The core knows none of them
+  (*decisions/adr-018-the-boundary*); a workspace is declared on the runtime seam and provisioned by
+  the runtime, and what a repository wants done with the work is its workflow file's content.

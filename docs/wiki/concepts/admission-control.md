@@ -13,10 +13,10 @@ covers:
   - path: src/runtime/surface.ts
     sha: e7660f0ce513bfc804cc31a0a92040e5bdc7fa1a
   - path: src/workspaces.ts
-    sha: 053a0a244193db59d6d0f8a82361cf1b5fc6c577
-generated_at_commit: aaa2c8c
+    sha: b709212e781376f570a613907a209648dab91526
+generated_at_commit: 62135e9
 last_refreshed: 2026-09-10
-related: [architecture/runtime-layer, architecture/job-kind, features/skill-invocation, decisions/adr-007-workload-scheduler, decisions/adr-017-the-workflow-is-content, gotchas/prompt-is-not-a-guarantee]
+related: [architecture/runtime-layer, architecture/job-kind, features/skill-invocation, decisions/adr-007-workload-scheduler, decisions/adr-017-the-workflow-is-content, decisions/adr-018-the-boundary]
 ---
 
 # Admission control
@@ -157,12 +157,15 @@ the filesystem did not.**
 ## The isolation rule follows the parent
 
 `subagentIsolation` is `'force'` or `'forbid'`, and the runtime derives it from
-whether *this attempt* got a worktree (`WorkerSpec.isolated`, set from the same
-`wt` that produced `cwd`). It is not a constant, and it was one:
+whether *this attempt* asked for a workspace at all — `WorkerSpec.isolated`, which
+the controller sets from `workspace !== undefined` rather than from `Job.isolate`,
+so the gate follows what was actually declared on the seam (`src/controller.ts`,
+`admissionPolicy` in `src/runtime/surface.ts`). It is not a constant, and it was one:
 
 - **`'force'`** — the isolated case above. Every spawn is given a worktree.
-- **`'forbid'`** — the Job runs in the operator's own checkout (`isolate: false`),
-  so there is no parent worktree to bring a subagent's work back to. Injecting one
+- **`'forbid'`** — the Job runs in the operator's own checkout (`isolate: false`,
+  so no `workspace` is declared), so there is no parent worktree to bring a
+  subagent's work back to. Injecting one
   would put that work in a checkout nothing reads and nothing merges, and say
   nothing about it. A spawn that asks for `isolation: "worktree"` is **denied**,
   with a reason that says to spawn it without one; a spawn that asks for nothing is

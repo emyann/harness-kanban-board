@@ -11,19 +11,20 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/brief.ts
-    sha: 97737608be17c28aeca4bf859902c9c5b6ec4d89
+    sha: b3eddf6aebd95fdab1f38424b24851d6a4e3e5a2
   - path: src/runtime/claude.ts
-    sha: 5ae775633cae411b71443add232b79f1325c4075
+    sha: e3afb9de9e34d90f222e7bf9865cbad39e99044b
   - path: src/controller.ts
-    sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
-generated_at_commit: f063b7a
-last_refreshed: 2026-09-09
+    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 related:
   [
     decisions/adr-013-the-guide-is-read-not-loaded,
     architecture/runtime-layer,
     concepts/admission-control,
     decisions/adr-008-declared-outputs,
+    decisions/adr-018-the-boundary,
   ]
 ---
 
@@ -71,8 +72,11 @@ rules are taken.**
      diff, a declared result and a pull request. The SDK's own decision table says the further a
      product is from *"a coding agent operating in a repository, with a human watching streaming
      output and steering the work"*, the more it wants its own prompt.
-   - **hkb already has one, and it is better targeted.** `withProtocol`, `withWorktree`, `withGuide`,
-     `withResults`, `withArtifacts`, `withInputs`, `withProposal` and now `withStandingRules` compose
+   - **hkb already has one, and it is better targeted.** `withProtocol`, `withWorktree` (both since
+     deleted — ADR-017 moved the pull request into a workflow file and ADR-018 took the rest of the
+     git protocol out), `withGuide`,
+     `withResults`, `withArtifacts`, `withInputs`, `withProposal` and now `withStandingRules`
+     (`src/brief.ts:320`) compose
      what a worker is told, per Job shape, in this repository, under test. That is a system prompt in
      everything but where it is sent — and unlike the preset it can be versioned, mutation-tested,
      and made to disagree with itself in CI.
@@ -113,6 +117,16 @@ A/B on a live repository for $0.40.
 
 **Two probe Jobs and their pair are on the board** (#27–#30) as the evidence, rather than in a
 scratch directory that will be deleted.
+
+**What has moved since, without changing the decision.** `systemPrompt` is still unset in
+`src/runtime/claude.ts`, and the three standing rules still reach every run
+(`withStandingRules`, `src/brief.ts:320`) — so both halves of the decision hold as written. What
+changed is the *rest* of the composition it argued from: two of the composers named above are gone
+(ADR-017, ADR-018), and the argument survives their deletion intact, because it was never about how
+many there were. It was about who can diff them, and the answer is still "this repository". If
+anything the case strengthened: the composed prompt is now smaller and the git steps a worker is
+told sit in a workflow file (`.hkb/workflows/implement.md`) that a user owns and can read, rather
+than in core prose.
 
 <!-- Dual mutability: once status: accepted, NEVER rewrite this record.
 When the decision changes, write a new ADR, set its `supersedes`, and set

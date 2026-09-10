@@ -7,12 +7,14 @@ audience: [dev]
 read_when: "adding a workload kind, changing retry or lease behaviour, or wondering why the DAG is not in the core"
 covers:
   - path: prisma/schema.prisma
-    sha: 4dfef4f05ae19a42f14630e5a7789943cd7a9b70
+    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
   - path: src/controller.ts
-    sha: 9e4253c556bd7d829c3175d12eb084bd6f2753bb
+    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
-generated_at_commit: f4ec4fe
+  - path: src/workspaces.ts
+    sha: b709212e781376f570a613907a209648dab91526
+generated_at_commit: 62135e9
 last_refreshed: 2026-09-10
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control, features/check, architecture/transitions]
 ---
@@ -55,10 +57,13 @@ Attempt.
 ## One reconcile pass
 
 `reconcile()` (`src/controller.ts`) is the whole control plane for this kind:
-reclaim expired leases, read `pending` jobs, compare-and-swap a lease, make the
-attempt's checkout, run, read back what landed on the forge, record, release,
-tidy. It is a reconciler rather than a queue consumer, which is what makes it safe
-to run repeatedly, safe to interrupt, and safe to run while another host runs it.
+reclaim expired leases, apply approved proposals, read `pending` jobs,
+compare-and-swap a lease, declare a workspace, run, collect what was declared, run
+the Job's check, record, release. It is a reconciler rather than a queue consumer,
+which is what makes it safe to run repeatedly, safe to interrupt, and safe to run
+while another host runs it. There is no tidy step at the end any more, and that is
+the design — a workspace outlives the pass and is collected by the daemon's sweep
+on a TTL (*decisions/adr-018-the-boundary*).
 
 **By default a session runs in a workspace of its own, not in the operator's
 checkout.** `Job.isolate` (default on) makes the controller *declare* one, by name,
@@ -74,6 +79,16 @@ The Claude driver satisfies it by passing the CLI's `--worktree` flag through
 `WorkerOutcome.workspacePath` — so the controller never computes where the session
 stands. The fake runtime satisfies the same declaration with a plain directory, and
 nothing in the Job kind can tell the difference.
+
+**And the controller checks that it happened.** `extraArgs` is an untyped passthrough,
+so a flag renamed upstream or an older CLI on the `PATH` drops the request in silence
+and the session runs in the operator's own repository while everything here still
+believes it is isolated. `isolationShortfall` (`src/controller.ts`) asks the question
+of a run that *completed* and reports no workspace, or one whose real path resolves to
+the repository itself: the attempt fails `no_input` — the machinery around the run, not
+the work — while staying **resumable**, so the transcript of work that may really have
+happened is kept for `hkb retry`. It is asked only of a completed run, because a crash,
+a cap or a timeout legitimately reports no workspace and already carries its own cause.
 
 **The brief gains nothing.** It used to gain a *sandbox contract* — commit on your
 branch, rebase onto your base, push that branch and nothing else — and the test for
@@ -103,7 +118,10 @@ checkout whether it held uncommitted or unpushed work and kept it if so — a qu
 that only had an answer while the core required a push. A Job that has not *finished*
 has no `finishedAt`, so nothing can collect the workspace another attempt may resume
 into; a finished one's survives its TTL, which is the window an operator has to go
-and look.
+and look. The sweep also starts from `git worktree list` rather than from the board, so
+it costs one git call per board per sweep whatever the board holds, and a **failed** Job
+that still has a session is protected from it — that is what `hkb retry` resumes into
+(`src/workspaces.ts`, `src/daemon.ts`; *architecture/the-loop*).
 
 **The claim is the `@@id` on `Lease`.** A second holder's insert fails against the
 primary key, and that failure *is* the answer — the loser is recorded in
@@ -167,6 +185,9 @@ Everything interesting is there:
   records the raise on the event stream, and continues the session rather than
   re-buying what the first attempt already paid for.
 - anything else → `crashed`, retried while budget remains.
+- the Job's **own deadline**, above all of the above including `completed`:
+  `deadline_exceeded`, not resumable, and it outranks the retry budget the way
+  Kubernetes' `activeDeadlineSeconds` outranks `backoffLimit` (*concepts/ceilings*).
 - a **failed check** → `check_failed`, and it is the branch that outranks `completed`
   (`features/check`, ADR-016 §3). The runtime cannot report this outcome — as far as it is
   concerned the session ended — so the controller runs the command and hands the result back
@@ -190,10 +211,11 @@ inputs and outputs added the pair:
   **input** could not be read (`src/inputs.ts`). The mirror of `no_output` and the
   cheap side of it: no session, no tokens. Terminal and not retried, because the same
   read fails identically next time.
-A fifth, `conflicted`, is **historical**: it meant the branch no longer replayed onto
-the base it would be merged into. Nothing replays a branch since the rebase left the
-core (*decisions/adr-018-the-boundary*), so nothing writes it; the enum value stays so
-rows that already carry it still read back.
+A fifth, `conflicted`, is **gone**: it meant the branch no longer replayed onto the
+base it would be merged into, and nothing has replayed a branch since the rebase left
+the core (*decisions/adr-018-the-boundary*). It was kept for one commit as a value
+nothing wrote and then deleted from the enum outright, so a board carrying an old
+`conflicted` row is a board this build no longer reads back.
 
 `no_output` and `no_input` are the two that make `succeeded` mean more than "a session
 ended" for FILES; `check_failed` above is the same question asked for behaviour.
@@ -296,14 +318,16 @@ first one takes to finish.
 ## Defaults, and why they are not ceilings
 
 A Board carries **spec defaults** beside its ceilings: `defaultModel`, `defaultEffort`,
-`defaultMaxTurns`, `defaultMaxBudgetUsd`, `defaultMaxRetries`, `defaultAllowedTools`,
-`defaultPluginPaths`, `defaultGuide`, `defaultBase`, `defaultCheck` and `defaultWorkflow`. A board
-that runs cheap, high-volume work can say so once instead of on every `hkb new`.
+`defaultMaxTurns`, `defaultAttemptDeadlineSeconds`, `defaultActiveDeadlineSeconds`,
+`defaultMaxBudgetUsd`, `defaultMaxRetries`, `defaultAllowedTools`, `defaultPluginPaths`,
+`defaultGuide`, `defaultCheck` and `defaultWorkflow`. A board that runs cheap,
+high-volume work can say so once instead of on every `hkb new`. (`defaultBase` was one
+of these and went with `Job.base` — *decisions/adr-018-the-boundary*.)
 
 `defaultWorkflow` is the odd one and `resolveSpec` never touches it: it names a file in
 `.hkb/workflows/`, and it is read twice at two different times. `hkb new` expands its **frontmatter**
 into the spec fields above when the Job is filed; the controller reads its **body** when the attempt
-is claimed and appends it after the sandbox contract as *standing steps*
+is claimed and appends it to the brief as *standing steps*
 (*features/workflow-templates*). Nothing of the body is stored on the Job, because `hkb queue <id>
 "…"` replaces a brief wholesale and would drop it. It is the board's answer to "how does work here
 finish", which stopped being the core's sentence to write with
@@ -359,7 +383,7 @@ prevent.
 It is also the shape one table over. Admission stamps a Pod with the limits a LimitRange
 supplied; the scheduler then reads the Pod, and a LimitRange edited afterwards does not
 rewrite what is already running. An Attempt is this system's Pod, and it already records
-what *happened* — `costUsd`, `sessionId`, `branch`, `outcome` — rather than what is
+what *happened* — `costUsd`, `sessionId`, `slot`, `outcome` — rather than what is
 configured.
 
 The cost is that `hkb show` reports the frozen number for a past attempt rather than what

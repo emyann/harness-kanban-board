@@ -11,19 +11,19 @@ supersedes: decisions/adr-006-local-store
 superseded_by: ~
 covers:
   - path: prisma/schema.prisma
-    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
+    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
   - path: src/controller.ts
-    sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
+    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
   - path: src/admission.ts
-    sha: ce4e291113aa9868314ce771f7fd1deb97b67ba8
+    sha: 30a869c5ca1609f1e335c0f30854d9b285c31c45
   - path: src/runtime/index.ts
-    sha: cbfa18bd1871a66bdb1fcd59e77a0f6b7ac5bbb1
+    sha: a325ddd4b03fd864bb2c556aaa7925ed1a95a0e9
   - path: package.json
-    sha: 0ba34d2cf5ae7e5fc2107bc0ebd9dea0d337ca3d
-generated_at_commit: 8aa5ade
-last_refreshed: 2026-09-09
+    sha: e3697b083d6d126bca20424e8351de6f300bc443
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 related: [decisions/adr-006-local-store, architecture/job-kind, architecture/runtime-layer, concepts/admission-control, architecture/store-seam]
 ---
 
@@ -121,7 +121,12 @@ returns the messages, `getSessionInfo()` the prompt, cwd and branch).
 **What has moved since, without changing the decision.** `Attempt` gained `branch`,
 `prNumber` and `prUrl`: what a run produced on the forge is a fact about what
 happened, so it is history and belongs on the row — while the pull request's *state*
-stays on GitHub, because that is live and a copy could only go stale. The
+stays on GitHub, because that is live and a copy could only go stale. *Those three
+columns are gone again as of 2026-09-10:* ADR-018 decision 3 took the forge out of the
+Job kind entirely, so an `Attempt` records what a **session** did and nothing about a
+branch (`prisma/migrations/20260910033358_the_git_protocol_leaves_the_job_kind`). The
+reasoning above was about where a fact belongs, and it was overtaken by a decision about
+whether the fact is the core's at all. The
 admission gate moved from `canUseTool` to a `PreToolUse` hook, which is an
 implementation of decision 6 rather than a change to it
 (`concepts/admission-control`).
@@ -141,6 +146,16 @@ terminal `Phase` values an operator writes
 by hand, and three more `Outcome` values — `no_output`, `no_input`, `stopped`
 (`prisma/schema.prisma`). No `Workload` table
 appeared, and no per-Job schema; the closed sets stayed closed sets the database checks.
+
+ADR-018 is the first record to take columns *off* those two tables rather than add
+them, and it does not disturb decision 3: `base`, `defaultBase` and the three forge
+columns left, and `conflicted` left `enum Outcome`, without a table being introduced to
+hold them. Decision 4's seam grew the one field that decision made necessary —
+`WorkerSpec.workspace` in, `WorkerOutcome.workspacePath` back
+(`src/runtime/index.ts`) — which is the seam doing its job rather than a change to it.
+And decision 1 gains a corollary ADR-018 states outright: **one board file, separate
+tables per kind, separate controllers, one-way dependency** — the DAG this record
+deferred still does not exist, and the reason it may share the file is now written down.
 
 **What we deliberately did not decide.** No generic `Workload` table. The second
 kind — most cheaply `/kanban:groom`, because it is a one-shot with a human gate and

@@ -17,7 +17,7 @@ import { boardDir } from './db-url.ts';
  * `producedNothing` (`src/hkb.ts`) can only state, not answer.
  *
  * It is also what a later reader consumes. ADR-008: *"this is what a later graph node reads —
- * 'review the pull request the previous node opened' needs `results.prUrl`, not prose"* — and what
+ * 'review what the previous node produced' needs a typed value, not prose"* — and what
  * a gated Job's approver reads before deciding (ADR-010).
  */
 

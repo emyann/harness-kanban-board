@@ -1,33 +1,35 @@
 ---
 title: check — the exit code hkb does not have
-summary: "A shell command run in the attempt's checkout after the run and after the rebase, whose non-zero exit fails the attempt. Why it sits beside the declared outputs rather than in a hooks list, why the command may never come from the worktree, and why a failed check is transient, resumable, and briefed to the next attempt."
+summary: "A shell command run in the attempt's workspace after the run, whose non-zero exit fails the attempt. Why it sits beside the declared outputs rather than in a hooks list, why the command may never come from the workspace, and why a failed check is transient, resumable, and briefed to the next attempt."
 category: features
 kind: explanation
 audience: [dev]
 read_when: "a Job failed as `check_failed`, you are adding anything that runs before/beside/after the agent, or you are about to change what makes an attempt succeed"
 covers:
   - path: src/hkb.ts
-    sha: 5dc47f4b0e302d2eba5ca1d0895104f4f6e00bcb
+    sha: c06820804f259a976336c80742b3068586df9d84
   - path: src/check.ts
-    sha: d5d2e273d51d281992cfa4dbb34e92458150e0d2
+    sha: 730324bea5aa0fe083bc5fb7244c06ce20a54c2c
   - path: src/controller.ts
-    sha: 55cb278593ae0b3d0692712e4fcff643c29e4a4e
+    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
   - path: src/spec.ts
-    sha: 52a014761b40dc1c364976bb772713febf321641
+    sha: a83486dc8471b6e0358af03bafba75fa363c4032
   - path: src/brief.ts
-    sha: a56db1e2f49d60c695034ecd14f73c5c258cce85
+    sha: b3eddf6aebd95fdab1f38424b24851d6a4e3e5a2
   - path: src/templates.ts
-    sha: 84e68dad2edc226425dfb0b8880e9765b2628686
+    sha: 169ac395a4b608e231beeb978952da3adfc8c82c
+  - path: src/workspaces.ts
+    sha: b709212e781376f570a613907a209648dab91526
   - path: prisma/schema.prisma
-    sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
-generated_at_commit: 5279b8a
-last_refreshed: 2026-09-09
+    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 related:
   [
     decisions/adr-016-the-pod-spec-is-the-map,
     decisions/adr-008-declared-outputs,
+    decisions/adr-018-the-boundary,
     features/declared-outputs,
-    features/rebase-and-verify,
     features/workflow-templates,
     architecture/the-loop,
     architecture/job-kind,
@@ -38,8 +40,8 @@ related:
 
 > A Kubernetes Job is complete when its container exits 0. hkb's container is an agent
 > session, and a session always finishes successfully, because finishing talking is what it
-> does. `check` is the missing number: one shell command, run in the attempt's own checkout
-> after the rebase, read as 0 or not-0 and nothing else.
+> does. `check` is the missing number: one shell command, run in the workspace the session
+> ran in, on the tree as the session left it, read as 0 or not-0 and nothing else.
 
 ## Why it is not a hook
 
@@ -87,17 +89,21 @@ opinion about a shell line it does not parse. What *is* refused, by name and poi
 
 ## Where it runs, and when
 
-In the attempt's worktree — or in `Board.repoPath` for a `--no-isolate` Job, which is the same
-"where the work happened" either way (`src/controller.ts`).
+In the attempt's **workspace** — `outcome.workspacePath`, reported by the runtime rather than
+computed here — or in `Board.repoPath` for a `--no-isolate` Job, which is the same "where the work
+happened" either way (`ranIn`, `src/controller.ts:1305`).
 
-**After `rebaseOntoBase` and its push**, and that ordering carries two arguments:
+**On the tree as the session left it, and the claim narrowed with ADR-018.** The check used to run
+after `rebaseOntoBase` and its push, and its whole justification was that it therefore tested *what
+would actually merge*. Nothing rebases now — `src/rebase.ts`, `src/push.ts` and `src/pulls.ts` are
+deleted and none of them moved into the core — so that claim would be false and it is not made
+(`src/controller.ts:1592-1599`). What the check still is, exactly, is ADR-016 §3's reconstruction of
+an exit code: a command the **row** named, run where the work happened.
 
-- it tests **what would actually merge**, not what the branch was cut from. A branch that was
-  green against a stale base is not evidence about the merge — the same sentence the worker's
-  own protocol uses (`src/brief.ts`);
-- the tree the check ran in **agrees with what is on the remote**. `src/rebase.ts` explains why a
-  tree ahead of its pushed branch strands the next attempt; a check run before the replay would
-  be reporting on a tree the resumed attempt never sees.
+A step that wants the branch rebased before it is reviewed asks for it in the workflow file, which
+is where the whole git protocol lives now (`.hkb/workflows/implement.md`) — so on a board whose
+default workflow says so, the tree the check judges is one the *worker* rebased. That is content
+making a promise rather than machinery keeping one, and the check cannot tell the difference.
 
 It runs only when the attempt would otherwise have succeeded, only while the holder still has its
 lease, and only when nothing has already failed the attempt — a missing declared output outranks
@@ -113,7 +119,7 @@ from the same fact: for up to ten minutes the Job was `running`, with an attempt
 row. `hkb cancel` was accepted in that window and then silently undone by the outcome written on
 the way out; `hkb rm` cascaded the rows away and turned the attempt write into a P2025 that took
 the whole reconcile pass with it; and a daemon killed mid-check stranded the Job for ever, because
-the reclaim scans Lease rows. The claim is now held across the rebase, the check and the record
+the reclaim scans Lease rows. The claim is now held across the check and the record
 writes, verified by token immediately before those writes, and released last
 (`concepts/leases-and-liveness`).
 
@@ -126,7 +132,7 @@ timers, the SDK stream, the in-process admission hook and the signal handlers al
 stalled at their next tool call. Two more properties come with the change:
 
 - **`detached: true`, and the timeout kills the process GROUP.** Signalling only `/bin/sh` left
-  the suite it started orphaned — still running, in the very worktree the resumed attempt
+  the suite it started orphaned — still running, in the very workspace the resumed attempt
   continues in. `SIGTERM` to the group first, `SIGKILL` after `CHECK_KILL_GRACE_MS`.
 - **`deps.signal` is honoured**, so `hkb down` interrupts a check rather than waiting it out. An
   interrupted check records nothing: the operator's intent outranks a verdict the command never
@@ -134,7 +140,7 @@ stalled at their next tool call. Two more properties come with the change:
   do is relabel the run — see "a stop that lands mid-check" below.
 
 `hkb run` wires the same `AbortController` that `hkb up --foreground` does (`src/hkb.ts`). Without
-it, `Ctrl-C` on a foreground pass killed the CLI and left a detached suite running in the worktree
+it, `Ctrl-C` on a foreground pass killed the CLI and left a detached suite running in the workspace
 with nothing left to bound it — `deps.signal` is the only way a stop reaches a check.
 
 ### The process lifecycle: three events, three questions
@@ -157,7 +163,7 @@ Settling on `close` alone was one bug in each direction, and the shape of the fi
 - **the hard kill is UNCONDITIONAL.** `SIGKILL` to the group fires `CHECK_KILL_GRACE_MS` after the
   `SIGTERM` whether or not `close` arrived — cancelling it on `close` meant a runner that traps
   `SIGTERM` and has its stdio redirected let the shell close, cancelled the kill, and went on
-  running in the worktree while the record said it was killed. And a second, *different* stop is
+  running in the workspace while the record said it was killed. And a second, *different* stop is
   let through: an abort after a timeout that could not settle is the operator's last resort.
   **The kill timer is ref'd**: unref'd, a single-pass `hkb run` exited on `finish` before the grace
   elapsed and the `SIGKILL` was never sent — the daemon never noticed because it always has a next
@@ -187,7 +193,7 @@ been collected *and* their collection directory deleted, so the resumed attempt 
 re-produce them, ended `no_output`, and went terminal. Pressing `Ctrl-C` during a test suite ended
 the Job.
 
-## The fence: never from the worktree
+## The fence: never from the workspace
 
 The command comes from the Job row, the board row, or a workflow file under `Board.repoPath`
 (`check:` in `src/templates.ts`). **Never from the checkout the work happened in.** It is the same
@@ -231,11 +237,11 @@ Two things about *which* failure is quoted, and both were wrong first:
   ended attempt, so reading only `k - 1` meant one `stopped` (`hkb down`), `lost` (a reclaim),
   `crashed`, `timed_out` or `max_turns` attempt in between dropped the briefing silently — none of
   those writes the column, so the refusal before them is still unanswered. `lastRefusedCheck`
-  (`src/controller.ts`) walks back the way `newestWorktree` already does for the checkout, and
-  stops at the first attempt that *could* have answered.
+  (`src/controller.ts:464-486`) walks back over `CHECKLESS_OUTCOMES` and stops at the first attempt
+  that *could* have answered.
 - **and it does not walk past a NULLED SESSION.** The walk was written on the premise that nothing
-  it steps over clears `lastSessionId`; that is false for a runtime-error `crashed`, which nulls it
-  and has its worktree swept. The next attempt then starts COLD and was briefed "the work is still
+  it steps over clears `lastSessionId`; that is false for a runtime-error `crashed`, which nulls it.
+  The next attempt then starts COLD and was briefed "the work is still
   there: the same session, and normally the same checkout" — about a session it cannot reach, with
   the plain line saying what it has to pass suppressed in favour of it. So the refusal counts only
   while the attempt that earned it is the attempt whose session the next one will resume
@@ -262,8 +268,11 @@ a one-line fix. One line now sits beside the other output contracts (`withCheck`
 because it *is* one of them. That is not a hole in the fence: the fence is about who **authors**
 the command, and the retry prompt has always quoted it verbatim.
 
-The checkout is kept either way — for the retry to resume into, and, when the retries are gone, for
-the operator to run the command in.
+The workspace is kept either way — for the retry to resume into, and, when the retries are gone, for
+the operator to run the command in. That is now `ttlSecondsAfterFinished` rather than a judgement
+about the tree: a Job with retries left has not finished, and a `failed` one that still holds a
+session id is *resumable*, so neither is a sweep candidate (`collectable`, `src/workspaces.ts`;
+`howto/running-the-daemon`).
 
 ## Two numbers, and why those
 
@@ -309,16 +318,6 @@ not be started, asserted a finding about work nothing had examined. **Only `ETIM
 timeout**: reading `signal` first meant a suite killed by the OOM killer, or one that segfaulted,
 was reported *and briefed to the next attempt* as having run for ten minutes when it ran for three
 seconds.
-
-## Which base the tree was on
-
-The claim above — that the check tests what would actually merge — is true when the rebase
-replayed and not true when it legitimately declined: a pushed branch whose pull request is no
-longer a draft is deliberately not rewritten, and a fetch that failed leaves the base as of
-whenever somebody last pulled. Neither fails the attempt and neither should. So the record carries
-`onBase` and the ref it is about (`src/check.ts`, `src/rebase.ts`), `hkb show` prints it, and the
-log line says so when it is false. The controller's rebase is slated to leave the core anyway;
-until it does, the honest thing is to qualify the verdict rather than to overstate it.
 
 ## Nothing runs by default
 
@@ -378,13 +377,13 @@ the line (`src/templates.ts`), rather than reaching `hkb new` as though it had b
 
 - **The check is not run for a Job that failed for another reason**, so an operator cannot use it
   as a diagnostic on a broken attempt. That is deliberate, and stated above.
-- **A `''` opt-out is available on a Job and not on the other board-defaulted fields.** `base` and
-  `guide` still have the gap this closed for `check` (`features/the-checkout-base` records it),
-  because for those two the empty string genuinely is the absence rather than a third state.
+- **A `''` opt-out is available on a Job and not on `guide`.** `guide` still has the gap this
+  closed for `check`, because there the empty string genuinely is the absence rather than a third
+  state. (`base` was the other one, and ADR-018 deleted the field rather than closing it.)
 - **No `setup` or sidecar yet.** ADR-016 §2 says they are one ordered list when they arrive, and
   §5 says a kept command needs a readiness probe or it ships flaky. Neither is built.
 - **A check that PASSES is not torn down.** The group is killed on the timeout and on a stop, but a
-  shell that exits 0 having left `node server.js` behind leaves it running in the worktree the next
+  shell that exits 0 having left `node server.js` behind leaves it running in the workspace the next
   attempt resumes in. The verdict is right — that is the point of settling on `exit` — and the
   orphan is a second question nobody has answered: a container's descendants die with the pod, and
   hkb's equivalent would be killing the group on every path. Not done, because a check that
@@ -393,6 +392,7 @@ the line (`src/templates.ts`), rather than reaching `hkb new` as though it had b
 ## Related
 
 - [adr-016-the-pod-spec-is-the-map](../decisions/adr-016-the-pod-spec-is-the-map.md)
+- [adr-018-the-boundary](../decisions/adr-018-the-boundary.md) — why the rebase, the push and the
+  forge read left the core, and what the check may still claim without them.
 - [declared-outputs](./declared-outputs.md)
-- [rebase-and-verify](./rebase-and-verify.md)
 - [the-loop](../architecture/the-loop.md)

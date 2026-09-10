@@ -644,17 +644,56 @@ test('the tick collects a finished Job\'s workspace once its TTL has elapsed', a
   assert.deepEqual(
     collectable([{ id: 6, finishedAt: new Date(0), phase: 'gone', resumable: false }], anHourLater, 0),
     [6], 'and a Job that no longer exists cannot want its workspace back');
+  // A retry could resume into this one, so it gets the LONGER window — not a permanent veto, which
+  // would keep a full checkout per failed Job for ever with no time term anywhere.
+  const { RESUMABLE_TTL_SECONDS } = await import('../src/workspaces.ts');
   assert.deepEqual(
     collectable([{ ...done, id: 4, resumable: true }], anHourLater, 0), [],
-    'and NOT one a retry would resume into — `max_budget` ends `failed` keeping its session, so '
-    + '`hkb retry --max-budget` continues it, and collecting the tree would strand that retry');
+    'not on the ordinary TTL — `max_budget` ends `failed` keeping its session, so `hkb retry '
+    + '--max-budget` continues it, and collecting the tree an hour later would strand that retry');
+  assert.deepEqual(
+    collectable([{ ...done, id: 4, resumable: true }],
+      new Date(finishedAt.getTime() + (RESUMABLE_TTL_SECONDS + 1) * 1000), 0),
+    [4], 'but the window is a window: past it, the workspace goes and a retry starts cold');
 
   // The field failing SAFE is the property that matters, because a caller that forgets it must not
   // silently start deleting. Asserted by passing a row that never mentions it.
   const forgot = { id: 5, finishedAt, phase: 'succeeded' } as never;
   assert.deepEqual(collectable([forgot], anHourLater, 0), [],
-    'a row that does not say is PROTECTED, not collected — a guard fails in the cheaper direction');
+    'a row that does not say gets the LONGER window, never the shorter one — a guard fails in the '
+    + 'cheaper direction, and a caller that forgets makes the sweep slow rather than destructive');
 });
+
+test('a board never collects a workspace belonging to another board on the same repository',
+  async () => {
+    // `Board.repoPath` has no unique constraint and two boards on one repository is supported — so a
+    // workspace this sweep finds may not be this board's. An earlier version filtered the Job query
+    // by `boardId`, which made every one of the other board's Jobs look like a row that had been
+    // DELETED, and a deleted row is collectable immediately with no TTL. One board would have taken
+    // the other's checkouts out from under live work.
+    const { collectable } = await import('../src/workspaces.ts');
+
+    // What the daemon computes: existence asked across every board, ownership asked second.
+    const present = [{ jobId: 1, path: '/r/.claude/worktrees/kb-1' },
+                     { jobId: 2, path: '/r/.claude/worktrees/kb-2' }];
+    const rows = [
+      { id: 1, boardId: 10, finishedAt: null, phase: 'running', lastSessionId: null },
+      { id: 2, boardId: 99, finishedAt: null, phase: 'running', lastSessionId: null },
+    ];
+    const known = new Map(rows.map((r) => [r.id, r]));
+    const mine = present.filter((w) => (known.get(w.jobId)?.boardId ?? 10) === 10);
+    assert.deepEqual(mine.map((w) => w.jobId), [1],
+      'the other board\'s live workspace is not this board\'s to consider at all');
+
+    // And the case the ownership check must NOT swallow: a row genuinely gone (`hkb rm`) is still
+    // this board's to collect, because nothing anywhere claims it.
+    const orphan = [{ jobId: 3, path: '/r/.claude/worktrees/kb-3' }];
+    const orphanMine = orphan.filter((w) => (new Map().get(w.jobId)?.boardId ?? 10) === 10);
+    assert.deepEqual(orphanMine.map((w) => w.jobId), [3]);
+    assert.deepEqual(
+      collectable([{ id: 3, finishedAt: new Date(0), phase: 'gone', resumable: false }], new Date(), 0),
+      [3], 'a Job that exists on no board cannot want its workspace back');
+  });
 
 test('the sweep removes the worktree git actually reported, not one rebuilt from a convention',
   async () => {

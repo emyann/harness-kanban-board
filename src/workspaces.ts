@@ -48,6 +48,16 @@ export function workspaceJobId(dir: string): number | null {
 export const BUILT_IN_TTL_SECONDS = 3600;
 
 /**
+ * The longer window a workspace gets while a retry could still resume into it.
+ *
+ * A day, because the operator who reads *"raise it and re-queue: `hkb retry 12 --max-budget 4`"* may
+ * read it tomorrow, and finding the tree gone would make that advice a lie. After it, the workspace
+ * goes and a retry starts cold — which is the honest end state, not a silent one: the session id is
+ * still on the Job, so the retry resumes the transcript and simply works in a fresh checkout.
+ */
+export const RESUMABLE_TTL_SECONDS = 86_400;
+
+/**
  * The workspaces that actually exist, in one call.
  *
  * **The sweep must start here, not from the board.** Asking the board for finished Jobs and trying
@@ -93,10 +103,13 @@ export function existingWorkspaces(root: string): { jobId: number; path: string 
  * and an operator following the advice hkb itself printed is exactly who would hit it.
  *
  * **It is narrower than "has a session".** A Job an operator `cancel`led or marked `done` keeps its
- * `lastSessionId` too, and so does one that exhausted its retries — but nothing is going to resume
- * any of them, and treating them as resumable would mean a workspace per such Job kept for ever with
- * no reason an operator could see. `hkb retry` is what resumes, and it acts on a *failed* Job; that
- * is the whole of the condition (`src/daemon.ts` computes it).
+ * `lastSessionId` too, and nothing is going to resume either. `hkb retry` is what resumes and it
+ * acts on a *failed* Job; that is the whole of the condition (`src/daemon.ts` computes it).
+ *
+ * **And it DELAYS collection rather than vetoing it.** An earlier version made a resumable Job
+ * permanently uncollectable, which is unbounded: a board that accumulates failures accumulates a
+ * full checkout each, for ever, with no time term anywhere. A retry window has to be a window —
+ * generous, because the operator was told to retry and may be asleep, but finite.
  */
 export type Collectable = { id: number; finishedAt: Date | null; phase: string; resumable: boolean };
 
@@ -118,12 +131,15 @@ export type Collectable = { id: number; finishedAt: Date | null; phase: string; 
  */
 export function collectable(jobs: Collectable[], now: Date, ttlSeconds: number): number[] {
   const cutoff = now.getTime() - ttlSeconds * 1000;
-  // `=== false`, not `!j.resumable`: a caller that does not say must PROTECT, never collect. Getting
-  // it wrong one way keeps a workspace that could have gone, which costs disk; the other way deletes
-  // work, which costs an afternoon. A guard has to fail in the cheaper direction — and a caller that
-  // never sets it makes the sweep inert rather than destructive, which the tests below catch.
+  // `=== false`, not `!j.resumable`: a caller that does not say gets the LONGER window, never the
+  // shorter one. Getting it wrong one way keeps a workspace that could have gone, which costs disk;
+  // the other way deletes work, which costs an afternoon. A guard has to fail in the cheaper
+  // direction — and a caller that never sets it makes the sweep slow rather than destructive, which
+  // the tests catch.
+  const resumableCutoff = now.getTime() - Math.max(ttlSeconds, RESUMABLE_TTL_SECONDS) * 1000;
   return jobs
-    .filter((j) => j.resumable === false && j.finishedAt != null && j.finishedAt.getTime() <= cutoff)
+    .filter((j) => j.finishedAt != null
+      && j.finishedAt.getTime() <= (j.resumable === false ? cutoff : resumableCutoff))
     .map((j) => j.id);
 }
 

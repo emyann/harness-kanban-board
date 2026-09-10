@@ -13,7 +13,7 @@ wiki:
 # categories: [architecture, concepts, features, flows, decisions, gotchas, howto]
 
 repo_notes: |
-  hkb (npm: hkb-cli) is a Node >= 22.18 ESM CLI, written in TypeScript that Node runs natively, that schedules agent work. The board is one SQLite file per machine behind Prisma (~/.hkb/board.db) with a Board row per repository. The only workload kind is a Job — one agent, one brief, run to completion — claimed under a lease by a level-triggered controller (src/controller.ts) that runs it inline in a git worktree, behind a runtime seam over the Claude Agent SDK (src/runtime/). Isolation is enforced in a PreToolUse admission gate, not asked for in a prompt. GitHub is the forge (pull requests only, read through src/pulls.ts), never the board. The pre-ADR-007 GitHub-Issues kanban was deleted by ADR-009: anything in git history about refs/kb/boards, a dispatcher tick or a store seam describes code that is gone. Values in priority order: portable, frugal, performance, frictionless, flawless experience.
+  hkb (npm: hkb-cli) is a Node >= 22.18 ESM CLI, written in TypeScript that Node runs natively, that schedules agent work. The board is one SQLite file per machine behind Prisma (~/.hkb/board.db) with a Board row per repository. The only workload kind is a Job — one agent, one brief, run to completion — claimed under a lease by a level-triggered controller (src/controller.ts) that runs it behind a runtime seam over the Claude Agent SDK (src/runtime/). ADR-018 is the boundary and the thing to read first: the Job kind's whole contract is cut a workspace, run one agent session under limits, record what happened, clean up — it has never heard of a branch, a pull request, a review or a card. The workspace is DECLARED on the runtime seam (WorkerSpec.workspace) and provisioned by the runtime, not by the controller; it is collected by ttlSecondsAfterFinished (src/workspaces.ts). The core runs no git beyond that and never reaches a forge; commit, rebase, push and the pull request are content in .hkb/workflows/. Isolation is enforced in a PreToolUse admission gate, not asked for in a prompt. The pre-ADR-007 GitHub-Issues kanban was deleted by ADR-009: anything in git history about refs/kb/boards, a dispatcher tick or a store seam describes code that is gone. Values in priority order: portable, frugal, performance, frictionless, flawless experience.
 
 # Files the wiki may be distilled from. Drives wiki-coverage.mjs.
 scope:
@@ -48,7 +48,7 @@ coverage:
 # The LLM may add pages not listed here; when it does, it adds them back.
 pages:
   - slug: architecture/overview
-    summary: "The moving parts: a CLI over one SQLite board, a level-triggered controller that claims a Job under a lease and runs it inline, a runtime seam, and a worktree as the sandbox."
+    summary: "The moving parts: a CLI over one SQLite board, a level-triggered controller that claims a Job under a lease and runs it inline, a runtime seam, and a workspace the runtime provides."
     status: seeded
   - slug: architecture/job-kind
     summary: "The first workload kind — one agent, one brief, run to completion — mapped onto Job/Pod/Lease/Namespace, with one reconcile pass and a pure retry decision."

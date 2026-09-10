@@ -101,8 +101,7 @@ export function withArtifacts(brief: string, paths: Record<string, string>): str
 /**
  * The results contract, appended to whatever brief the Job already has.
  *
- * Applied only to an
- * isolated Job, because only an isolated Job has a branch. Results are the opposite case — they
+ * Results are the opposite case — they
  * matter most to a Job that produces no commit at all — so this is applied to both.
  *
  * The paths are absolute and outside every checkout (`src/results.ts`), so writing one cannot land

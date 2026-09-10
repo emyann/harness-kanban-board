@@ -11,13 +11,15 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/runtime/claude.ts
-    sha: 5ae775633cae411b71443add232b79f1325c4075
+    sha: e3afb9de9e34d90f222e7bf9865cbad39e99044b
+  - path: src/runtime/surface.ts
+    sha: e7660f0ce513bfc804cc31a0a92040e5bdc7fa1a
   - path: src/admission.ts
-    sha: ce4e291113aa9868314ce771f7fd1deb97b67ba8
+    sha: 30a869c5ca1609f1e335c0f30854d9b285c31c45
   - path: src/spec.ts
-    sha: 8792a804835fd0602a992aeccf978e110fe2a98f
+    sha: a83486dc8471b6e0358af03bafba75fa363c4032
   - path: prisma/schema.prisma
-    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
+    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
 related:
   [
     decisions/adr-007-workload-scheduler,
@@ -25,9 +27,10 @@ related:
     architecture/runtime-layer,
     architecture/overview,
     features/skill-invocation,
+    decisions/adr-018-the-boundary,
   ]
-generated_at_commit: 8aa5ade
-last_refreshed: 2026-09-09
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 ---
 
 # ADR-012: A worker gets a repository's skills by grant, and never its settings
@@ -163,6 +166,30 @@ be smuggled into a record about repository skills.
 **MCP is still untouched.** Nothing passes `mcpServers` to `query()`, and `skipMcpDiscovery` on the
 plugin config exists precisely because a plugin can carry MCP connections the host may not want. The
 plan's ordering holds: MCP as config plus grant is next, and discovery (`hkb capabilities`) after it.
+
+**What has moved since — and one measurement that wants redoing.**
+
+- **Measurement 3 and 7 — *`Options.skills` narrows nothing* — no longer match the shipped
+  contract.** At the same pinned 0.3.261 the SDK's own `sdk.d.ts` documents the opposite: a
+  `string[]` enables *only* the listed skills, and unlisted ones are "hidden from the model's
+  listing and rejected by the Skill tool". hkb now uses it as a fence (`skillFilter`,
+  `src/runtime/surface.ts`), emitting both the bare name and its `:name` suffix because how the SDK
+  canonically names a local plugin's skills is not something this project has measured. The
+  measurement in the table above and the contract that runs disagree, and the code says so where it
+  depends on it. **This is a note, not an edit: the table records what was probed on 2026-09-06, and
+  what it should become wants a fresh probe and probably a superseding record.** What decision 4
+  actually turns on is unaffected — the *grant unit* is still a directory and no per-skill column
+  ships; the fence is derived from the grant plus `allowedTools`, not from a new field.
+- **The fence exists because admitting `Skill` broke this record's own rule.** `Skill` is on the
+  default tool surface now (`DEFAULT_TOOLS`, `src/runtime/surface.ts`). Until it was, *"none of them
+  permitted"* in the Consequences above was true only by accident — the gate denied the tool — and
+  turning it on without the fence would have let any Job invoke the operator's own `~/.claude`
+  skills, which is exactly the "nothing reaches a worker the operator did not grant it" this record
+  decides. See `features/skill-invocation`.
+- **Decision 5 reads "not against the worktree"; the word is now *workspace*.** The fence is the
+  same and so is its reason: a path resolves against `Board.repoPath`, so a worker cannot write a
+  plugin its own next attempt loads. What changed under it is only who cuts the checkout — the
+  runtime, not the controller (ADR-018 decision 2).
 
 <!-- Dual mutability: once status: accepted, NEVER rewrite this record.
 When the decision changes, write a new ADR, set its `supersedes`, and set

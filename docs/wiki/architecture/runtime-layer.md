@@ -7,18 +7,18 @@ audience: [dev]
 read_when: "changing how a worker is launched, deciding what to persist about a run, or adding a second runtime"
 covers:
   - path: src/runtime/index.ts
-    sha: 99ec06b9d41099f47b52a74873edc14b0a7d6567
+    sha: a325ddd4b03fd864bb2c556aaa7925ed1a95a0e9
   - path: src/plugins.ts
     sha: 50314938ab90cd9f5793091dc79faf6a5bd52e65
   - path: src/runtime/claude.ts
-    sha: c19d9065a63bc8265bbad6bcb29f1643bfe72938
+    sha: e3afb9de9e34d90f222e7bf9865cbad39e99044b
   - path: src/runtime/fake.ts
-    sha: 6a1ec6e6f7890b54a254018b3b7d277020b4b23e
+    sha: bd4690f4d6c41bd2d2170ead73eeb6e0236db471
   - path: src/runtime/surface.ts
     sha: e7660f0ce513bfc804cc31a0a92040e5bdc7fa1a
-generated_at_commit: ff67f87
-last_refreshed: 2026-09-09
-related: [decisions/adr-007-workload-scheduler, architecture/job-kind, concepts/admission-control, concepts/worker-identity, features/skill-invocation]
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
+related: [decisions/adr-007-workload-scheduler, architecture/job-kind, concepts/admission-control, features/skill-invocation]
 ---
 
 # The runtime layer
@@ -43,8 +43,9 @@ that can only go stale.
 
 This is what deleted `pid`, `job`, `worktree`, `transcriptPath` and `heartbeatAt`
 from the attempt record: with an in-process runtime the worker is a `for await`
-loop this process holds, so liveness is the promise. See
-`concepts/worker-identity` for what those columns were solving before.
+loop this process holds, so liveness is the promise — the lease and
+`src/liveness.ts` answer what those columns were solving before
+(*concepts/leases-and-liveness*).
 
 **The bound on that simplification:** it holds only while *this* process lives. If
 the runtime dies the iterator dies with it, and `resume: <sessionId>` is the only
@@ -131,6 +132,37 @@ one by hand still can; what is gone is the default that wrote it unasked.
 
 `maxBudgetUsd` is the runaway-cost stop and it covers subagent spend.
 
+## The workspace is declared here and provisioned there
+
+`WorkerSpec.workspace = { name }` is the seam's version of a PodSpec's `volumes:`
+(*decisions/adr-018-the-boundary* decision 2). The caller says it needs a workspace
+and what to call it; **the driver decides what that means**, and
+`WorkerOutcome.workspacePath` reports back where it landed. The controller used to
+cut a git worktree itself and pass its path as `cwd` — roughly a thousand lines
+re-implementing, feature for feature, what the harness already does.
+
+The Claude driver satisfies it with `extraArgs: { worktree: <name> }`
+(`src/runtime/claude.ts`). `Options` has no worktree field, but `extraArgs` is the
+documented passthrough to the CLI the SDK spawns, so the flag is reachable — measured
+rather than assumed: the run created `.claude/worktrees/<name>`, took a
+`git worktree lock` on it for the length of the run, and reported the path back on the
+`init` message, which is the same message the session id is read off. That buys
+creation, the base kept current, `.worktreeinclude` for gitignored files, the lock, and
+a resume that returns to the same tree.
+
+**It is an untyped escape hatch, and that is the one thing to know about it.** A flag
+renamed upstream fails silently rather than at compile time. Two things answer that:
+`test/workspace.live.test.ts` asserts a worktree actually appears (gated on
+`HKB_LIVE_SDK=1`, so it does not run in CI), and the controller verifies the path it
+gets back is not the repository itself — a guard that only runs when somebody remembers
+to run it is not a guard (*architecture/job-kind*).
+
+The fake satisfies the same declaration with `mkdirSync` under `.hkb/workspaces/<name>`
+— an `emptyDir`, literally, which is all the seam promises — and reuses it across
+attempts of the same Job, because a resumed session continues in the tree it left
+(`src/runtime/fake.ts`). Nothing in the Job kind can tell the two apart, which is what
+makes a test that passes against the fake a test that proves the Job kind never looked.
+
 **The tool surface is not a driver detail.** `DEFAULT_TOOLS`, `toolSurface(spec)`
 and `admissionPolicy(spec)` live in `src/runtime/surface.ts` — a pure module, in
 the pattern of `src/limits.ts` and `src/liveness.ts` — because inside the driver
@@ -152,13 +184,13 @@ invocation is a tool call. And `Options.skills` is passed on every run — `[]`
 when nothing was granted — since omitting it is documented as *not* "skills off"
 (`features/skill-invocation`).
 
-Two things in that hook *are* per-run, and both answer the same question — did
-this attempt get a worktree? The subagent isolation policy reads
-`WorkerSpec.isolated`: a parent with no worktree has nowhere to bring a subagent's
-work back to, so spawns are not forced into one there. And
-`admission.sandboxed` turns on the two refusals that keep the worktree's
-`pre-push` hook on the path, `--no-verify` and `core.hooksPath`; the branch rule
-itself is git's rather than the gate's (`concepts/admission-control`).
+One thing in that hook *is* per-run: the subagent isolation policy, which reads
+`WorkerSpec.isolated` — a parent with no workspace has nowhere to bring a subagent's
+work back to, so spawns are not forced into one there, and one that asks for a worktree
+is refused instead. There used to be a second, `admission.sandboxed`, turning on the
+refusals that kept a `pre-push` hook on the path (`--no-verify`, `core.hooksPath`).
+Both the hook and its fence are deleted (*decisions/adr-018-the-boundary*); what
+refuses a push to a protected branch is the forge (`concepts/admission-control`).
 
 ## Why there is a fake
 

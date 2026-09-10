@@ -13,23 +13,25 @@ covers:
   - path: src/guide.ts
     sha: 835b973b5ae725eb1c7a811601260bfbe6e07abb
   - path: src/brief.ts
-    sha: 97737608be17c28aeca4bf859902c9c5b6ec4d89
+    sha: b3eddf6aebd95fdab1f38424b24851d6a4e3e5a2
   - path: src/runtime/claude.ts
-    sha: 5ae775633cae411b71443add232b79f1325c4075
+    sha: e3afb9de9e34d90f222e7bf9865cbad39e99044b
   - path: src/controller.ts
-    sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
+    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
   - path: src/spec.ts
-    sha: 8792a804835fd0602a992aeccf978e110fe2a98f
+    sha: a83486dc8471b6e0358af03bafba75fa363c4032
   - path: prisma/schema.prisma
-    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
-generated_at_commit: f063b7a
-last_refreshed: 2026-09-09
+    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 related:
   [
     decisions/adr-012-skills-by-grant-not-by-settings,
     architecture/runtime-layer,
     concepts/admission-control,
     architecture/job-kind,
+    decisions/adr-017-the-workflow-is-content,
+    decisions/adr-018-the-boundary,
   ]
 ---
 
@@ -143,6 +145,27 @@ instead of the SDK's minimal default. The measurement above says they do not tod
 difference includes the preset's own safety and tool-use guidance — but adopting it changes how every
 worker behaves, costs about 3,300 input tokens per request, and deserves its own record with its own
 evidence. It is in `FINDINGS.md`.
+
+**What has moved since, without changing the decision.** The mechanism is intact — `Job.guide` /
+`Board.defaultGuide` resolving through `src/spec.ts`, read from `Board.repoPath`, one level of
+`@import`, `withGuide` prepending it as instruction (`src/brief.ts:365`, called at
+`src/controller.ts:1225`), a guide that cannot be read failing the attempt as `no_input`, and
+`strictMcpConfig: true` (`src/runtime/claude.ts:158`). One consequence did not survive:
+
+> *"`src/brief.ts` restates the protocol rules that matter most — never push to the default branch,
+> never merge, open a draft PR — and those stay, because they are hkb's contract with a worker
+> rather than the repository's."*
+
+**They did not stay.** ADR-017 decision 5 moved the pull request into a workflow file, and ADR-018
+moved the rest of the git protocol out with it: `withSandbox`, `withWorktree` and `withProtocol` are
+deleted, and the core requires no commit, no push and no rebase, so it says nothing about them. The
+paragraph's *test* — a line belongs in the brief only if the machinery makes it true afterwards — is
+what deleted them, and it is the test `src/brief.ts` still opens with.
+
+The consequence for **this** record is that the gap it narrowed got wider in the other direction:
+whatever git protocol a repository wants is now in that repository's workflow file
+(`.hkb/workflows/implement.md`), which the guide grant does not cover and does not have to — a
+workflow is content, resolved separately (`src/templates.ts`, ADR-017).
 
 <!-- Dual mutability: once status: accepted, NEVER rewrite this record.
 When the decision changes, write a new ADR, set its `supersedes`, and set
