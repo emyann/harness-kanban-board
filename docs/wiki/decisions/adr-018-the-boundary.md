@@ -18,7 +18,7 @@ covers:
     sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
   - path: src/controller.ts
     sha: 456ffbc1b5d82177b8769cf86bc22ea8b3ea6e70
-generated_at_commit: 94f79c6
+generated_at_commit: e4b48ae
 last_refreshed: 2026-09-10
 related:
   [
@@ -184,11 +184,45 @@ So the board's suspended card can show the real question with its real options, 
 resumes the very session that asked. Parking is effectively free, which matters because a Job may
 park several times in one piece of work.
 
-**One trap, and it is the same one `statusOf` already documents for aborts:** a run stopped this way
-comes back as `error_during_execution` with an `[ede_diagnostic]` message — the SDK has no "stopped
-to ask" terminal state. The controller must label that outcome from *its own* knowledge that it
-denied-with-interrupt, exactly as it already does for the operator's stop, or every question a Job
-asks is recorded as a crash and burns a retry.
+### The trap, and the shape of the fix
+
+A run stopped this way comes back as `error_during_execution` carrying
+`terminal_reason: "aborted_streaming"` — **the identical value the operator's own stop produces**.
+`statusOf` maps that to `timeout`, `nextPhase` maps `timeout` to `timed_out`, and `timed_out` is
+*resumable and transient*. So the failure is not a mislabelled record: the Job **retries, asks the
+same question, parks again**, and spins until `maxRetries` is exhausted. Three questions and a Job
+that was working perfectly is `failed`.
+
+The SDK cannot be asked to distinguish the two, because it genuinely cannot: both are somebody
+aborting the stream. So the fix is not a better reading of the runtime's report. It is three things,
+and the first is the one that makes the others honest:
+
+1. **Write the question at ask-time, inside `canUseTool`, before returning the deny.** Not inferred
+   after the run. That is what makes it durable: if the process dies between the ask and the record,
+   the question still exists, and the next pass sees an attempt with an unanswered question instead
+   of reclaiming it as `lost`. A controller that is level-triggered may not depend on having been
+   alive when the question was asked.
+2. **Classify from hkb's own record, not the runtime's.** The precedence ladder already has this
+   exact row for the operator's stop — *"The operator's intent outranks whatever the runtime made of
+   being cut off... recording either would be a lie about why it ended AND would spend a retry on
+   it."* A park is that sentence with one word changed, and it belongs directly above it. Never from
+   `terminal_reason`, and never by parsing the `[ede_diagnostic]` prose.
+3. **A park spends no retry.** `charged` excludes `stopped` and `completed`; it must exclude a park
+   too, or point 2 fixes the label and leaves the spin.
+
+**In Kubernetes terms this is `podFailurePolicy`, and the trap exists because hkb has not adopted
+it.** hkb hardcodes "which outcomes spend a retry" inside `nextPhase`, classified by the runtime's
+own words. Kubernetes made that a spec field precisely so a stop caused by *the system* rather than
+the workload can be matched and given `action: Ignore` — not counted against `backoffLimit`. A park
+is a **disruption, not a failure**: `DisruptionTarget`, ignored. The three points above are the
+instance; adopting the field is the general answer, and it is already on the list.
+
+**One measured convenience that makes all of this testable:** `permission_denials` on the result
+message carries the *entire* parked question — every option with its description, and the
+`tool_use_id`. So the controller has a second, independent read of the same fact, and the **fake
+runtime can produce one**, which means the whole park → suspend → answer → resume path gets a test
+that spends nothing and runs at the shipped defaults. `WorkerOutcome.denials` is a bare count today
+and would have to carry the questions, not just how many there were.
 
 ## Consequences
 

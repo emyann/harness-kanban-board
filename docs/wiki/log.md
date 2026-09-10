@@ -389,3 +389,5 @@ history.
 ## 2026-09-10 — added decisions/adr-018-the-boundary (the machinery/board line as a rule with a greppable test, one store not two on Tekton's evidence, and the measured SDK/CLI facts: extraArgs reaches --worktree, the harness already does worktrees and will not sweep ours, canUseTool fires with a string prompt but bare allowedTools shadow it)
 
 ## 2026-09-10 — refreshed decisions/adr-018-the-boundary (the ask measured in both modes: AskUserQuestion reaches canUseTool with its full options, deny+message answers in-session, deny+interrupt parks for $0.001 keeping the session id, and a resume of that id continues it — plus the trap that such a stop reports error_during_execution)
+
+## 2026-09-10 — refreshed decisions/adr-018-the-boundary (the park trap measured precisely: terminal_reason is aborted_streaming, the SAME value as the operator's stop, so statusOf gives timed_out and the Job SPINS rather than merely mislabelling; the fix is write-at-ask-time, classify from our own record above nextPhase, and spend no retry — podFailurePolicy's DisruptionTarget/Ignore in miniature)
