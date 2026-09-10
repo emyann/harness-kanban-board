@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "changing engines.node, adding a devDependency, editing the tsconfigs or the publish transpile, or making `npm run lint` fail on something that is not a type error"
 covers:
   - path: package.json
-    sha: 0ba34d2cf5ae7e5fc2107bc0ebd9dea0d337ca3d
+    sha: e3697b083d6d126bca20424e8351de6f300bc443
   - path: tsconfig.json
     sha: b080b89e99af5295b81b32d725d2a7272cbb57d9
   - path: tsconfig.build.json
@@ -17,11 +17,11 @@ covers:
   - path: src/paths.ts
     sha: 58c79df19d23cce784b36dc7f462bd1d27d34338
   - path: scripts/smoke-pack.mjs
-    sha: 3eed5fae765c6c2c282f2b3a14780e62621ef6c4
+    sha: abccc0340f0034e8f40aa9a30796fac84655f603
   - path: .github/workflows/test.yml
     sha: dc92f1dac39f60b6cc056eca38c9daf0a56033b9
-generated_at_commit: 32ea87c
-last_refreshed: 2026-09-09
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 related: [decisions/adr-009-retiring-the-first-system, decisions/adr-007-workload-scheduler, architecture/overview]
 ---
 

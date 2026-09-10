@@ -60,7 +60,7 @@ async function freshBoard() {
       db.job.create({ data: { boardId: board.id, name, brief: `do ${name}`, isolate: false, ...extra } }),
     set: (data: Record<string, unknown>) => db.board.update({ where: { id: board.id }, data }),
     run: (extra: Record<string, unknown> = {}) =>
-      reconcile({ runtime: fakeRuntime(), cwd: REPO, board: slug, readPr: false, ...extra }),
+      reconcile({ runtime: fakeRuntime(), cwd: REPO, board: slug, ...extra }),
   };
 }
 
@@ -341,7 +341,7 @@ test('the lease outlives the run it covers — a 60-minute Job is not reclaimed 
                durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
     },
   };
-  await reconcile({ runtime: watching, cwd: REPO, board: b.slug, readPr: false });
+  await reconcile({ runtime: watching, cwd: REPO, board: b.slug });
 
   assert.ok(held, 'a lease is held while the run is in flight');
   // A RANGE, not an equality. `expiresAt` is built from the controller's own `now()` and
@@ -383,7 +383,7 @@ test('a lease is renewed while the run is in flight, and renewedAt gets a writer
                durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
     },
   };
-  await reconcile({ runtime: slow, cwd: REPO, board: b.slug, readPr: false, leaseMs: 3_000 });
+  await reconcile({ runtime: slow, cwd: REPO, board: b.slug, leaseMs: 3_000 });
   assert.equal(seen.renewed, true, 'renewedAt is written during the run, not left null forever');
 });
 
@@ -403,7 +403,7 @@ test('a holder that lost its lease does not overwrite the new holder', async () 
                durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
     },
   };
-  const r = await reconcile({ runtime: thief, cwd: REPO, board: b.slug, readPr: false });
+  const r = await reconcile({ runtime: thief, cwd: REPO, board: b.slug });
 
   assert.ok(r.skipped.includes(job.id), 'the displaced holder skips rather than writing');
   assert.deepEqual(r.succeeded, [], 'and does NOT report success on a Job it no longer holds');
@@ -453,43 +453,50 @@ test('a resumable stop keeps the session, and the retry runs in the same checkou
   let n = 0;
   const capThenFinish = {
     name: 'cap-then-finish',
-    async run(spec: { cwd: string }) {
-      dirs.push(spec.cwd);
+    async run(spec: { cwd: string; workspace?: { name: string } }) {
+      // The workspace this runtime provisions — the same one on both attempts, because the
+      // controller asks for the same NAME (`workspaceName`, per Job rather than per attempt). That
+      // is the whole property under test: resume is not restart, on disk as well as in the
+      // transcript.
+      const dir = spec.workspace
+        ? path.join(SCRATCH, '.hkb', 'workspaces', spec.workspace.name)
+        : spec.cwd;
+      fs.mkdirSync(dir, { recursive: true });
+      dirs.push(dir);
       n += 1;
-      // A worker that runs out of turns has usually done partial work, and that is what keeps its
-      // checkout from being swept as clean. A first attempt that did nothing leaves nothing to
-      // resume INTO, and a fresh worktree is then equivalent — there is no work to lose.
-      if (n === 1) fs.writeFileSync(path.join(spec.cwd, 'wip.txt'), 'partial');
+      // A worker that runs out of turns has usually done partial work, and it is that work the
+      // second attempt must find still there.
+      if (n === 1) fs.writeFileSync(path.join(dir, 'wip.txt'), 'partial');
       return n === 1
         ? { status: 'max_turns', ok: false, sessionId: 'sess-1', text: '', costUsd: 0, turns: 1,
-            durationMs: 0, stopReason: null, denials: 0, error: null }
+            durationMs: 0, stopReason: null, denials: 0, error: null, workspacePath: dir }
         : { status: 'completed', ok: true, sessionId: 'sess-1', text: 'done', costUsd: 0, turns: 2,
-            durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+            durationMs: 0, stopReason: 'end_turn', denials: 0, error: null, workspacePath: dir };
     },
   };
 
-  await reconcile({ runtime: capThenFinish, cwd: SCRATCH, board: b.slug, readPr: false });
+  await reconcile({ runtime: capThenFinish, cwd: SCRATCH, board: b.slug });
   const mid = await db.job.findUniqueOrThrow({ where: { id: job.id } });
   assert.equal(mid.lastSessionId, 'sess-1', 'a turn cap is resumable, so the session is kept');
 
-  await reconcile({ runtime: capThenFinish, cwd: SCRATCH, board: b.slug, readPr: false });
+  await reconcile({ runtime: capThenFinish, cwd: SCRATCH, board: b.slug });
 
   assert.equal(dirs.length, 2);
-  assert.equal(dirs[1], dirs[0], 'the retry resumed in the SAME checkout, not a fresh one');
+  assert.equal(dirs[1], dirs[0], 'the retry resumed in the SAME workspace, not a fresh one');
+  assert.equal(fs.readFileSync(path.join(dirs[1], 'wip.txt'), 'utf8'), 'partial',
+    'and the partial work of attempt 1 was still in it');
 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: { orderBy: { k: 'asc' } } } });
   assert.equal(after.phase, 'succeeded');
-  assert.equal(after.attempts[1].branch, `kb-${job.id}-1`, 'and on the branch where its PR already is');
+  // The workspace it resumed into is asked for by the same NAME on both attempts, which is what
+  // makes a resume land in the tree the transcript describes (`workspaceName`, ADR-018). It is
+  // per-Job rather than per-attempt precisely so attempt 2 asks for something that already exists.
+  const { workspaceName } = await import('../src/workspaces.ts');
+  assert.equal(workspaceName(job.id), `kb-${job.id}`);
 
-  // Left where it is on purpose: it holds the `wip.txt` the first attempt wrote, and
-  // `removeWorktree` is right to refuse a tree that still holds work. It goes with the scratch
-  // repository when `test.after` removes the whole temp directory.
-  const { existingWorktree } = await import('../src/worktree.ts');
-  assert.ok(existingWorktree(SCRATCH, job.id, 1), 'and the checkout it resumed into is still there');
-
-  // Compared as a SET, not by name. This used to assert `existingWorktree(REPO, job.id, 1)` was
+  // Compared as a SET, not by name. This used to assert a worktree in the real repository was
   // null — but `job.id` comes from a scratch database and the path is in the real repository, and
-  // those two numbering schemes are independent. A real `kb-13-1` worktree from an actual Job made
+  // those two numbering schemes are independent. A real `kb-13` worktree from an actual Job made
   // a passing test fail for a reason that had nothing to do with it.
   assert.deepEqual(worktreesIn(REPO), worktreesBefore, 'and this test added nothing to the repo under test');
 });

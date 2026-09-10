@@ -64,7 +64,6 @@ export type BoardMinAggregateOutputType = {
   defaultMaxBudgetUsd: number | null
   defaultMaxRetries: number | null
   defaultGuide: string | null
-  defaultBase: string | null
   defaultCheck: string | null
   defaultWorkflow: string | null
   createdAt: Date | null
@@ -87,7 +86,6 @@ export type BoardMaxAggregateOutputType = {
   defaultMaxBudgetUsd: number | null
   defaultMaxRetries: number | null
   defaultGuide: string | null
-  defaultBase: string | null
   defaultCheck: string | null
   defaultWorkflow: string | null
   createdAt: Date | null
@@ -112,7 +110,6 @@ export type BoardCountAggregateOutputType = {
   defaultAllowedTools: number
   defaultPluginPaths: number
   defaultGuide: number
-  defaultBase: number
   defaultCheck: number
   defaultWorkflow: number
   createdAt: number
@@ -159,7 +156,6 @@ export type BoardMinAggregateInputType = {
   defaultMaxBudgetUsd?: true
   defaultMaxRetries?: true
   defaultGuide?: true
-  defaultBase?: true
   defaultCheck?: true
   defaultWorkflow?: true
   createdAt?: true
@@ -182,7 +178,6 @@ export type BoardMaxAggregateInputType = {
   defaultMaxBudgetUsd?: true
   defaultMaxRetries?: true
   defaultGuide?: true
-  defaultBase?: true
   defaultCheck?: true
   defaultWorkflow?: true
   createdAt?: true
@@ -207,7 +202,6 @@ export type BoardCountAggregateInputType = {
   defaultAllowedTools?: true
   defaultPluginPaths?: true
   defaultGuide?: true
-  defaultBase?: true
   defaultCheck?: true
   defaultWorkflow?: true
   createdAt?: true
@@ -319,7 +313,6 @@ export type BoardGroupByOutputType = {
   defaultAllowedTools: runtime.JsonValue | null
   defaultPluginPaths: runtime.JsonValue | null
   defaultGuide: string | null
-  defaultBase: string | null
   defaultCheck: string | null
   defaultWorkflow: string | null
   createdAt: Date
@@ -367,7 +360,6 @@ export type BoardWhereInput = {
   defaultAllowedTools?: Prisma.JsonNullableFilter<"Board">
   defaultPluginPaths?: Prisma.JsonNullableFilter<"Board">
   defaultGuide?: Prisma.StringNullableFilter<"Board"> | string | null
-  defaultBase?: Prisma.StringNullableFilter<"Board"> | string | null
   defaultCheck?: Prisma.StringNullableFilter<"Board"> | string | null
   defaultWorkflow?: Prisma.StringNullableFilter<"Board"> | string | null
   createdAt?: Prisma.DateTimeFilter<"Board"> | Date | string
@@ -395,7 +387,6 @@ export type BoardOrderByWithRelationInput = {
   defaultAllowedTools?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultPluginPaths?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultGuide?: Prisma.SortOrderInput | Prisma.SortOrder
-  defaultBase?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultCheck?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultWorkflow?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
@@ -426,7 +417,6 @@ export type BoardWhereUniqueInput = Prisma.AtLeast<{
   defaultAllowedTools?: Prisma.JsonNullableFilter<"Board">
   defaultPluginPaths?: Prisma.JsonNullableFilter<"Board">
   defaultGuide?: Prisma.StringNullableFilter<"Board"> | string | null
-  defaultBase?: Prisma.StringNullableFilter<"Board"> | string | null
   defaultCheck?: Prisma.StringNullableFilter<"Board"> | string | null
   defaultWorkflow?: Prisma.StringNullableFilter<"Board"> | string | null
   createdAt?: Prisma.DateTimeFilter<"Board"> | Date | string
@@ -454,7 +444,6 @@ export type BoardOrderByWithAggregationInput = {
   defaultAllowedTools?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultPluginPaths?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultGuide?: Prisma.SortOrderInput | Prisma.SortOrder
-  defaultBase?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultCheck?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultWorkflow?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
@@ -487,7 +476,6 @@ export type BoardScalarWhereWithAggregatesInput = {
   defaultAllowedTools?: Prisma.JsonNullableWithAggregatesFilter<"Board">
   defaultPluginPaths?: Prisma.JsonNullableWithAggregatesFilter<"Board">
   defaultGuide?: Prisma.StringNullableWithAggregatesFilter<"Board"> | string | null
-  defaultBase?: Prisma.StringNullableWithAggregatesFilter<"Board"> | string | null
   defaultCheck?: Prisma.StringNullableWithAggregatesFilter<"Board"> | string | null
   defaultWorkflow?: Prisma.StringNullableWithAggregatesFilter<"Board"> | string | null
   createdAt?: Prisma.DateTimeWithAggregatesFilter<"Board"> | Date | string
@@ -511,7 +499,6 @@ export type BoardCreateInput = {
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultGuide?: string | null
-  defaultBase?: string | null
   defaultCheck?: string | null
   defaultWorkflow?: string | null
   createdAt?: Date | string
@@ -539,7 +526,6 @@ export type BoardUncheckedCreateInput = {
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultGuide?: string | null
-  defaultBase?: string | null
   defaultCheck?: string | null
   defaultWorkflow?: string | null
   createdAt?: Date | string
@@ -566,7 +552,6 @@ export type BoardUpdateInput = {
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  defaultBase?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -594,7 +579,6 @@ export type BoardUncheckedUpdateInput = {
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  defaultBase?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -622,7 +606,6 @@ export type BoardCreateManyInput = {
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultGuide?: string | null
-  defaultBase?: string | null
   defaultCheck?: string | null
   defaultWorkflow?: string | null
   createdAt?: Date | string
@@ -646,7 +629,6 @@ export type BoardUpdateManyMutationInput = {
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  defaultBase?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -671,7 +653,6 @@ export type BoardUncheckedUpdateManyInput = {
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  defaultBase?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -696,7 +677,6 @@ export type BoardCountOrderByAggregateInput = {
   defaultAllowedTools?: Prisma.SortOrder
   defaultPluginPaths?: Prisma.SortOrder
   defaultGuide?: Prisma.SortOrder
-  defaultBase?: Prisma.SortOrder
   defaultCheck?: Prisma.SortOrder
   defaultWorkflow?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
@@ -730,7 +710,6 @@ export type BoardMaxOrderByAggregateInput = {
   defaultMaxBudgetUsd?: Prisma.SortOrder
   defaultMaxRetries?: Prisma.SortOrder
   defaultGuide?: Prisma.SortOrder
-  defaultBase?: Prisma.SortOrder
   defaultCheck?: Prisma.SortOrder
   defaultWorkflow?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
@@ -753,7 +732,6 @@ export type BoardMinOrderByAggregateInput = {
   defaultMaxBudgetUsd?: Prisma.SortOrder
   defaultMaxRetries?: Prisma.SortOrder
   defaultGuide?: Prisma.SortOrder
-  defaultBase?: Prisma.SortOrder
   defaultCheck?: Prisma.SortOrder
   defaultWorkflow?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
@@ -882,7 +860,6 @@ export type BoardCreateWithoutControllerInput = {
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultGuide?: string | null
-  defaultBase?: string | null
   defaultCheck?: string | null
   defaultWorkflow?: string | null
   createdAt?: Date | string
@@ -909,7 +886,6 @@ export type BoardUncheckedCreateWithoutControllerInput = {
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultGuide?: string | null
-  defaultBase?: string | null
   defaultCheck?: string | null
   defaultWorkflow?: string | null
   createdAt?: Date | string
@@ -951,7 +927,6 @@ export type BoardUpdateWithoutControllerInput = {
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  defaultBase?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -978,7 +953,6 @@ export type BoardUncheckedUpdateWithoutControllerInput = {
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  defaultBase?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -1004,7 +978,6 @@ export type BoardCreateWithoutJobsInput = {
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultGuide?: string | null
-  defaultBase?: string | null
   defaultCheck?: string | null
   defaultWorkflow?: string | null
   createdAt?: Date | string
@@ -1031,7 +1004,6 @@ export type BoardUncheckedCreateWithoutJobsInput = {
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultGuide?: string | null
-  defaultBase?: string | null
   defaultCheck?: string | null
   defaultWorkflow?: string | null
   createdAt?: Date | string
@@ -1073,7 +1045,6 @@ export type BoardUpdateWithoutJobsInput = {
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  defaultBase?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -1100,7 +1071,6 @@ export type BoardUncheckedUpdateWithoutJobsInput = {
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  defaultBase?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -1126,7 +1096,6 @@ export type BoardCreateWithoutEventsInput = {
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultGuide?: string | null
-  defaultBase?: string | null
   defaultCheck?: string | null
   defaultWorkflow?: string | null
   createdAt?: Date | string
@@ -1153,7 +1122,6 @@ export type BoardUncheckedCreateWithoutEventsInput = {
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultGuide?: string | null
-  defaultBase?: string | null
   defaultCheck?: string | null
   defaultWorkflow?: string | null
   createdAt?: Date | string
@@ -1195,7 +1163,6 @@ export type BoardUpdateWithoutEventsInput = {
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  defaultBase?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -1222,7 +1189,6 @@ export type BoardUncheckedUpdateWithoutEventsInput = {
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   defaultGuide?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
-  defaultBase?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultCheck?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   defaultWorkflow?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -1289,7 +1255,6 @@ export type BoardSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
   defaultAllowedTools?: boolean
   defaultPluginPaths?: boolean
   defaultGuide?: boolean
-  defaultBase?: boolean
   defaultCheck?: boolean
   defaultWorkflow?: boolean
   createdAt?: boolean
@@ -1318,7 +1283,6 @@ export type BoardSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extensi
   defaultAllowedTools?: boolean
   defaultPluginPaths?: boolean
   defaultGuide?: boolean
-  defaultBase?: boolean
   defaultCheck?: boolean
   defaultWorkflow?: boolean
   createdAt?: boolean
@@ -1343,7 +1307,6 @@ export type BoardSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensi
   defaultAllowedTools?: boolean
   defaultPluginPaths?: boolean
   defaultGuide?: boolean
-  defaultBase?: boolean
   defaultCheck?: boolean
   defaultWorkflow?: boolean
   createdAt?: boolean
@@ -1368,14 +1331,13 @@ export type BoardSelectScalar = {
   defaultAllowedTools?: boolean
   defaultPluginPaths?: boolean
   defaultGuide?: boolean
-  defaultBase?: boolean
   defaultCheck?: boolean
   defaultWorkflow?: boolean
   createdAt?: boolean
   updatedAt?: boolean
 }
 
-export type BoardOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "slug" | "repoPath" | "pausedAt" | "pausedBy" | "dailyBudgetUsd" | "maxConcurrent" | "defaultModel" | "defaultEffort" | "defaultMaxTurns" | "defaultAttemptDeadlineSeconds" | "defaultActiveDeadlineSeconds" | "defaultMaxBudgetUsd" | "defaultMaxRetries" | "defaultAllowedTools" | "defaultPluginPaths" | "defaultGuide" | "defaultBase" | "defaultCheck" | "defaultWorkflow" | "createdAt" | "updatedAt", ExtArgs["result"]["board"]>
+export type BoardOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "slug" | "repoPath" | "pausedAt" | "pausedBy" | "dailyBudgetUsd" | "maxConcurrent" | "defaultModel" | "defaultEffort" | "defaultMaxTurns" | "defaultAttemptDeadlineSeconds" | "defaultActiveDeadlineSeconds" | "defaultMaxBudgetUsd" | "defaultMaxRetries" | "defaultAllowedTools" | "defaultPluginPaths" | "defaultGuide" | "defaultCheck" | "defaultWorkflow" | "createdAt" | "updatedAt", ExtArgs["result"]["board"]>
 export type BoardInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   jobs?: boolean | Prisma.Board$jobsArgs<ExtArgs>
   events?: boolean | Prisma.Board$eventsArgs<ExtArgs>
@@ -1470,12 +1432,6 @@ export type $BoardPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs 
      * `hkb boards set <slug> --guide CLAUDE.md` is how a repository's own rules reach its workers.
      */
     defaultGuide: string | null
-    /**
-     * The ref this board's Jobs branch from, filling a null on the Job. For a repository whose
-     * trunk is not what `origin/HEAD` points at — a protected `main` with an integration branch in
-     * front of it is the case that exists. Null keeps the repository's own default branch.
-     */
-    defaultBase: string | null
     /**
      * The completion check every Job on this board runs unless it says otherwise (`Job.check`
      * wins). One `hkb boards set <slug> --check "npm test"` is how a repository's own gate reaches
@@ -1941,7 +1897,6 @@ export interface BoardFieldRefs {
   readonly defaultAllowedTools: Prisma.FieldRef<"Board", 'Json'>
   readonly defaultPluginPaths: Prisma.FieldRef<"Board", 'Json'>
   readonly defaultGuide: Prisma.FieldRef<"Board", 'String'>
-  readonly defaultBase: Prisma.FieldRef<"Board", 'String'>
   readonly defaultCheck: Prisma.FieldRef<"Board", 'String'>
   readonly defaultWorkflow: Prisma.FieldRef<"Board", 'String'>
   readonly createdAt: Prisma.FieldRef<"Board", 'DateTime'>

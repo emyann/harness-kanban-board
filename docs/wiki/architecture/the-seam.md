@@ -7,15 +7,15 @@ audience: [dev]
 read_when: "building a second consumer, adding a verb that files or reads a Job, or wondering why a module takes `max-budget` rather than `maxBudgetUsd`"
 covers:
   - path: src/filing.ts
-    sha: 0f3b2043e35e05772670b7d0dfaad14865720d0b
+    sha: afa2d406f78ccb1bc6c9d73cc4a56cdf0b16a16a
   - path: src/read.ts
-    sha: 8e9e5a3c617874e4edf0475c733db05c306cddd2
+    sha: 6225a35a96f1896a1457385bda9eb9d0868490c0
   - path: src/flags.ts
     sha: 7140df95e7457ce3f2ed4fe3fe38e19476728dd1
   - path: src/hkb.ts
-    sha: 5dc47f4b0e302d2eba5ca1d0895104f4f6e00bcb
+    sha: c06820804f259a976336c80742b3068586df9d84
   - path: src/spec.ts
-    sha: 52a014761b40dc1c364976bb772713febf321641
+    sha: a83486dc8471b6e0358af03bafba75fa363c4032
 related:
   [
     architecture/transitions,
@@ -24,8 +24,8 @@ related:
     gotchas/argv-traps,
     architecture/the-board,
   ]
-generated_at_commit: 5279b8a
-last_refreshed: 2026-09-09
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 ---
 
 # The seam — filing and reading, out of the CLI's switch
@@ -114,8 +114,12 @@ What the read model carries that a raw row does not:
 - **the resolved spec, with each field's source** — `showJob` returns `spec` from `resolveSpec`, so
   a null `model` column becomes `{ value: 'opus', from: 'board' }`. A consumer reading the row alone
   would print nulls and be wrong in the direction that costs money.
-- **`producedNothing`** — a `succeeded` Job with no pull request, no export, no result and no
-  artifact. Stated, never judged: "I looked, and there is nothing to change" is a real outcome, and
+- **`producedNothing`** — a `succeeded` Job with no declared export, result or artifact. A pull
+  request used to count and no longer does: the core stopped reading the forge, so `Attempt.prUrl`
+  had no writer left and the question would have had one answer for every Job on the board
+  (*decisions/adr-018-the-boundary*, `src/read.ts`). A Job whose deliverable really is a pull
+  request says so by declaring what it hands back — a URL in a result, a file in an artifact.
+  Stated, never judged: "I looked, and there is nothing to change" is a real outcome, and
   a proposer is excluded because rows on the board *are* its output.
 - **every phase counted** — `boardSummaries` counts all eight, `triage` and `suspended` included,
   even though the CLI's table has no column for those two. A read model that answered six of the

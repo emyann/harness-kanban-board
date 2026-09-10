@@ -20,7 +20,7 @@ import { boardDir } from './db-url.ts';
  * **An artifact is a big result, not an uncommitted export**, and that is the whole design.
  *
  * The tempting alternative was to give `exports` a second destination — the copy already takes one
- * (`exportOutputs`, `src/worktree.ts`), so it reads like a call-site change. It is the wrong shape,
+ * (`exportOutputs`, `src/exports.ts`), so it reads like a call-site change. It is the wrong shape,
  * and `resultsDir` below already says why in its own words: a scratch file written *inside* the
  * checkout "is either committed by accident or shows up as untracked noise in every `git status` a
  * reviewer runs". An output that must not be committed should never be in the tree in the first

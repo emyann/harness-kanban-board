@@ -11,13 +11,13 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/hkb.ts
-    sha: 7b95039ab59dbcf5234373c716a5db86a15db8fb
+    sha: c06820804f259a976336c80742b3068586df9d84
   - path: src/controller.ts
-    sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
+    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
   - path: prisma/schema.prisma
-    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
-generated_at_commit: f063b7a
-last_refreshed: 2026-09-09
+    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 related:
   [
     decisions/adr-007-workload-scheduler,
@@ -27,6 +27,7 @@ related:
     architecture/transitions,
     architecture/the-seam,
     decisions/adr-017-the-workflow-is-content,
+    decisions/adr-018-the-boundary,
   ]
 ---
 
@@ -69,6 +70,14 @@ to the CLI.
    | the **template format** | the **workflows written in it** |
    | what a worker inherits from the harness — tools, skills, MCP | which of those a given product chooses to expose |
 
+   > One cell has moved since: **`worktrees`**. ADR-018 decision 2 found a third side to that
+   > column — the *runtime's*. A PodSpec declares `volumes:` and never provisions storage, so the
+   > workspace is declared on the runtime seam (`WorkerSpec.workspace`, `src/runtime/index.ts`) and
+   > cut by the driver; what the machinery keeps is asking for one by name and collecting it on a
+   > TTL (`src/workspaces.ts`). Row 2 of this table is why that lands where it does: what a worker
+   > inherits from the harness is machinery, and *how* a workspace comes into existence is a
+   > property of the harness rather than of the work.
+
 2. **What a worker inherits from the harness is machinery**, and that settles a question that reads
    like a product one. A Job should be able to have what a session in the same harness has, because
    hkb's whole runtime story is "any harness can execute a workload" (value 1) and what a harness
@@ -109,6 +118,15 @@ are next touched. That is not a criticism of them; it is the rule doing its job.
 > (*architecture/the-seam*), so the test above now passes for a Job. What remains inside the switch
 > is a **board's** own lifecycle — `boards add`, `boards set`, `boards rm`, `stop`, `start` — which
 > is the next thing to move on the same rule, when it is next touched.
+>
+> Done on 2026-09-10: this record's line is a **test that refuses**. `test/boundary.test.ts` holds a
+> closed list of the Job kind's files and asserts that none of them imports any of the five git
+> modules ADR-018 deleted — and that no file comes back under those names. That is decision 5's
+> "the seam falls out of ordinary work" arriving with the one thing this record left out, and
+> ADR-018 says so in its own opening: each of ADR-015, ADR-016 and ADR-017 *"left behind a
+> description rather than a test, and a description is something the next session re-derives from
+> whatever the code happens to look like by then."* This record is not superseded by that — it is
+> the sentence ADR-018 enforces.
 
 **The naming is unresolved, and this record does not resolve it.** "hkb" currently names the
 machinery, the CLI and the product at once. Kubernetes has `kubernetes`/`kubectl`/Argo; hkb has one

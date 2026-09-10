@@ -79,9 +79,6 @@ export const TEMPLATE_KEYS: Record<string, Kind> = {
   effort: 'string',
   gate: 'string',
   guide: 'string',
-  // The ref a step branches from — the key that lets a workflow file express a chain at all, since
-  // a coding Job's output is a branch and this is what a later step points at.
-  base: 'string',
   // The command a step must pass (ADR-016 §3). A workflow is the natural home for it — "this kind
   // of work is done when the suite is green" is a property of the workflow, not of one Job — and it
   // is safe here for the reason this file's header gives: a workflow is read from `Board.repoPath`
@@ -402,7 +399,7 @@ const STANDING = (name: string) => `Standing steps for work on this board, from 
  *
  * Appended rather than prepended, on `withResults`' rule: what follows the work is a contract to
  * satisfy at the end, and last is where a requirement reads best. The caller appends it after the
- * sandbox contract for the sharper version of the same reason — the core says how work is done
+ * core for the sharper version of the same reason — the core says how work is done
  * here, and these say what doing it ends in, and a worker given them the other way round reads two
  * reply contracts in the wrong order.
  */

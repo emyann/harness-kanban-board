@@ -11,9 +11,9 @@ supersedes: ~
 superseded_by: decisions/adr-007-workload-scheduler
 covers:
   - path: package.json
-    sha: 0ba34d2cf5ae7e5fc2107bc0ebd9dea0d337ca3d
-generated_at_commit: 6075a95
-last_refreshed: 2026-09-08
+    sha: e3697b083d6d126bca20424e8351de6f300bc443
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 related: [decisions/adr-005-control-plane, decisions/adr-004-roles-and-adoption, architecture/overview, features/web-board, features/up-and-down]
 ---
 

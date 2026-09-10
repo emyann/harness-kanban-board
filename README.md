@@ -1,8 +1,12 @@
 # hkb — a workload scheduler for coding agents
 
-File a Job, and one agent runs one brief to completion in a git worktree of its own, then opens a draft pull
-request for a human to review. The board is a SQLite file on your machine. The runtime is the
-[Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/overview). GitHub is the forge, not the board.
+File a Job, and one agent runs one brief to completion in a workspace of its own. The board is a SQLite file
+on your machine. The runtime is the [Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/overview).
+
+What happens to the work after the session ends — commit, push, open a draft pull request for a human to
+review — is your **workflow**, a markdown file in your repository. hkb does none of it: the machinery cuts a
+workspace, runs one session under limits, records what happened and cleans up
+([ADR-018](docs/wiki/decisions/adr-018-the-boundary.md)).
 
 > ### ⚠️ Experimental — expect breaking changes
 >
@@ -17,11 +21,15 @@ request for a human to review. The board is a SQLite file on your machine. The r
 
 ## `hkb` — the workload scheduler
 
-The first and only workload kind is a **Job**: one agent, one brief, run to completion. A Job runs in a git
-worktree of its own, commits there and pushes the branch. What happens next — open a **draft** pull request,
-let a human review and merge — is the board's **default workflow**, a file in the repository rather than
-something hkb says: the machinery tells a worker only what it will refuse on afterwards, and the push is
-still one of those ([ADR-017](docs/wiki/decisions/adr-017-the-workflow-is-content.md)).
+The first and only workload kind is a **Job**: one agent, one brief, run to completion, in a workspace of its
+own. The Job kind's whole contract is *cut a workspace, run one agent session under limits, record what
+happened, clean up* — it has never heard of a branch, a pull request, a review or a card.
+
+Everything git-shaped is the board's **default workflow**, a markdown file in your repository: commit, rebase,
+push, open a **draft** pull request, let a human review and merge. The rule for what hkb itself says to a
+worker is that the machinery must refuse on it afterwards, and hkb refuses on none of those
+([ADR-017](docs/wiki/decisions/adr-017-the-workflow-is-content.md),
+[ADR-018](docs/wiki/decisions/adr-018-the-boundary.md)).
 The kanban DAG, cards that depend on cards, is a *second kind that does not exist yet*.
 
 The board is **`~/.hkb/board.db`** — SQLite behind Prisma, one board per machine with a **Board row per
@@ -33,8 +41,9 @@ one instead, and `HKB_DATABASE_URL` points at a different board file entirely.
 
 - **Node >= 22.18.0.** Measured, not guessed: 22.18.0 is the first release that strips TypeScript types
   without a flag, and a shebang cannot pass one.
-- **The [GitHub CLI](https://cli.github.com)**, with `gh auth login` already done — a worker opens its own
-  pull request with it, and hkb reads pull requests back through it.
+- **The [GitHub CLI](https://cli.github.com)**, with `gh auth login` already done — *if your workflow uses
+  it*. A worker opens its own pull request with `gh`; hkb never calls it, and a board whose workflow does not
+  need a forge does not need this at all.
 - **A Claude Code login**, which is what the Agent SDK runs a worker on.
 
 ```bash
@@ -86,7 +95,7 @@ and what each board may still spend, and **`hkb down`** stops it cleanly, leavin
 To keep it alive across reboots, put `hkb up --foreground` under a supervisor:
 [docs/wiki/howto/running-the-daemon.md](docs/wiki/howto/running-the-daemon.md).
 
-`hkb ls` marks a succeeded Job that opened no pull request and declared no exports as **produced
+`hkb ls` marks a succeeded Job that declared no outputs as **produced
 nothing**, and counts them at the end of the listing. It is a statement, not an accusation — "I
 looked, and there is nothing to change" is a real outcome, and so is a `--no-isolate` Job — but a
 Job that left nothing behind should not read exactly like one that shipped a diff.
@@ -168,7 +177,7 @@ small enough that a person and a model can both write one without a schema.
 - **A workflow is expanded once, at file time, and is then gone.** The Job holds the values; nothing
   in the controller or the runtime knows a file was involved, so editing the workflow later cannot
   change a Job already filed, and `hkb show` cannot disagree with the prompt.
-- **It is read from `Board.repoPath`, never the worktree** — the same fence as `--guide` and
+- **It is read from `Board.repoPath`, never the workspace** — the same fence as `--guide` and
   `--plugin-dir`. A worker cannot author the workflow its own successor is filed from; a human merge
   is the boundary.
 - `{{name}}` in the body interpolates from a `value:` input, and only from a `value:` input, because
@@ -271,7 +280,7 @@ now, because hkb reads the file itself:
 hkb boards set my-board --guide CLAUDE.md
 ```
 
-It is read from the board's repository (never the worktree, so a worker cannot write the rules its
+It is read from the board's repository (never the workspace, so a worker cannot write the rules its
 own next attempt follows), one level of `@import` is followed, and it goes in **front** of the brief
 as standing instruction — with the brief winning where the two disagree. A Job can name its own with
 `--guide <path>`. A guide that cannot be read fails the attempt before the run, because a Job told to
@@ -346,7 +355,7 @@ and negatives by name.
 
 `hkb boards set <slug>` carries the board's **ceilings** — `--max-concurrent` (0 drains it), `--daily-budget`
 — *and* its **spec defaults**: `--model`, `--effort`, `--max-turns`, `--max-budget`, `--max-retries`,
-`--guide`, `--base`, `--check`, `--attempt-deadline`, `--deadline`, and `--workflow` for the steps every
+`--guide`, `--check`, `--attempt-deadline`, `--deadline`, and `--workflow` for the steps every
 hand-filed Job here finishes with. A
 board that runs cheap, high-volume work says so once instead of on every `hkb new`.
 
@@ -356,7 +365,7 @@ which of the three answered each field. **A default is not a ceiling**: a Job ma
 and may not exceed `--daily-budget`.
 
 The ceilings are checked before a claim and never during a run — a ceiling that could stop a running worker
-would strand its worktree, while one that declines to start another is only a decision.
+would strand its workspace, while one that declines to start another is only a decision.
 
 ### What a Job produces
 
@@ -364,7 +373,7 @@ A pull request, by default — and a Job does not have to be coupled to one. Thr
 ([ADR-008](docs/wiki/decisions/adr-008-declared-outputs.md),
 [ADR-011](docs/wiki/decisions/adr-011-proposals-not-board-access.md)):
 
-- **`--export <path>`** — a file or directory the Job must write. The board copies it out of the worktree
+- **`--export <path>`** — a file or directory the Job must write. The board copies it out of the workspace
   into the repository *before* the checkout is torn down.
 - **`--result <name>`** — a named value the Job must report: a finding, a decision, a URL. The worker writes
   it to a path the board gives it, the board keeps it on the attempt, and `hkb show` prints it. Capped at
@@ -405,9 +414,9 @@ hkb new "fix the parser" --check "npm run lint && npm test"
 hkb boards set my-board --check "npm test"      # or once, for every Job on the board
 ```
 
-It is a shell line, run in the attempt's own checkout **after the run and after the rebase onto the base**
-— so it tests what would actually merge, not what the branch was cut from. Where the rebase legitimately
-declined (a pull request somebody has taken out of draft, a base that could not be fetched) the record and
+It is a shell line, run in the attempt's own workspace **after the run** — so it judges the tree as the
+session left it. It used to run after a rebase and claim to test what would merge; nothing replays a branch
+any more (ADR-018), so it makes the narrower claim instead of a false wider one. The record and
 `hkb show` say which base the tree was really on, rather than leaving the claim overstated. A non-zero exit
 fails the attempt, and the failure is *transient*: the retry resumes the same session and is told the
 command, the exit code and the last 4 KB of each of stdout and stderr — two windows, so a loud stderr
@@ -422,7 +431,7 @@ The controller reads 0 / not-0 and **knows nothing else about the command** — 
 nothing about a container. There is no test-runner integration and no parsing of output into findings.
 
 The command comes from the Job, the board, or a workflow file under the board's repository — **never from
-the worktree**, which is the same fence `--guide` and `--plugin-dir` stand behind and matters most here:
+the workspace**, which is the same fence `--guide` and `--plugin-dir` stand behind and matters most here:
 a worker able to author what judges its own next attempt would be marking its own work. Nothing runs
 until somebody sets one; there is no built-in check, because a command hkb guessed for your repository
 would be a shell line nobody wrote. The worker is told the command up front, which is not a hole in that
@@ -447,13 +456,16 @@ judge, and `hkb new --propose --check` is refused.
 The other direction. **`--input <name>=<source>`** is content the board resolves *before* the run and puts
 in the prompt, ahead of the brief that is about it. Three sources, and none of them waits:
 
-- **`file:<path>`** — a file in the repository, read from the board's repo rather than the worktree.
+- **`file:<path>`** — a file in the repository, read from the board's repo rather than the workspace.
 - **`board`** — this board's other Jobs, their phases, attempt counts and outcomes. LLM-free, one read.
 - **`value:<literal>`** — a payload the caller supplies. The others are things hkb goes and *fetches*;
   this is the one a webhook, a button or a controller filing work can *push*.
-- **`self:<field>`** — this Job about itself: `id`, `name`, `board`, `attempt`, `slot`, `branch`, `base`,
-  `worktree`, `repo`. Kubernetes' downward API, where a Pod reads its own `metadata.name` and
-  `status.podIP`.
+- **`self:<field>`** — this Job about itself: `id`, `name`, `board`, `attempt`, `slot`, `repo`. Kubernetes'
+  downward API, where a Pod reads its own `metadata.name` and `status.podIP`. `branch`, `base` and
+  `worktree` were here and are not any more: the workspace is provisioned by the runtime as the session
+  starts, so there is no branch to report when a declared input is resolved, and there is nothing to report
+  it about — a workspace always starts from the repository's default branch. A step that needs to know is
+  standing in the workspace and can ask git itself.
 
 **`self:slot`** is the one that earns that list. It is a small integer no other *live* run holds,
 machine-wide — so a suite running inside a worker can pick a port, a display number or a database
@@ -493,16 +505,17 @@ worker with `Read` finds whatever it likes. Pair `--input` with an `--allow-tool
 `Read`, `Glob` and `Grep` and the Job sees exactly what it was given, because the admission gate refuses
 the rest. Neither half is the feature; the pair is.
 
-`--no-isolate` runs the Job in the current checkout rather than a worktree of its own, for work that has no
-business on a branch.
+`--no-isolate` runs the Job in the current checkout rather than a workspace of its own, for work whose
+deliverable *is* a change in your working tree. It is Kubernetes' `hostPath`, with the properties that
+implies: nothing to review as a diff, nothing to revert, and no safety at `maxConcurrent > 1`, where two
+such sessions edit the same files with no lock between them.
 
-Inside a worktree, **one branch is the only thing a worker can push**, and that is enforced by git rather
-than asked for in the prompt: hkb installs a `pre-push` hook on the attempt's worktree, at a
-`core.hooksPath` outside every checkout the worker can write, pinned at claim time to the branch it was
-given. Every push reaches that hook with the refs already resolved — after aliases, `-c` config, redirects
-and nested shells — so the trunk, another Job's branch, `--all`, `--mirror` and every spelling of a delete
-are refused identically. Your own checkout is untouched: the setting is per-worktree, and a directory with
-no policy pinned to it is governed by nothing.
+**hkb installs no git hook.** It used to: a `pre-push` fence on the attempt's worktree, pinned to the branch
+it was given. That existed to protect a push the core required, it was measured not to reach the worktree
+the harness cuts for a subagent, and two attempts to extend it were both wrong — so it went with the
+protocol (ADR-018). What refuses a push to a protected branch is **your forge**, centrally, which is where
+Kubernetes puts admission too: at the API server, not on the node. What still refuses locally is the tool
+surface, at the session layer, which the same measurement showed *does* reach a nested session.
 
 `--allow-tool <name>` (repeatable, or `--allow-tools Read,Grep`) narrows the tool surface a Job may use.
 This is a **ceiling the board enforces, not a request**: anything absent is denied in a `PreToolUse` hook
@@ -534,13 +547,13 @@ Two properties worth knowing ([ADR-012](docs/wiki/decisions/adr-012-skills-by-gr
 hkb **never loads a repository's settings** — `.claude/settings.json` hooks are shell commands the
 repository author wrote, and running them is executing the repository rather than reading it; the grant
 reaches the same skills without them. And a grant resolves against the board's **repository**, never the
-worktree, so changing what it loads takes a merge — which matters because the thing writing to the
+workspace, so changing what it loads takes a merge — which matters because the thing writing to the
 repository is the worker.
 
 ### Changing a Job after it is filed
 
 `hkb job set <id>` takes the same flags `hkb new` does — `--model`, `--max-budget`, `--allow-tool`,
-`--base`, `--label`, `--gate`, `--guide`, `--check`, `--export`, `--result`, `--artifact`, `--input`,
+`--label`, `--gate`, `--guide`, `--check`, `--export`, `--result`, `--artifact`, `--input`,
 and the brief — so one vocabulary covers filing a Job, editing it, and writing a workflow file. Repeatable
 flags **replace** rather than append, and `none` clears a value back to the board's default.
 

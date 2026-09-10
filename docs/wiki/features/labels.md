@@ -9,11 +9,15 @@ covers:
   - path: src/labels.ts
     sha: b524ef31fce5611a1a676dfb4631aaa83ecba926
   - path: src/hkb.ts
-    sha: 5dc47f4b0e302d2eba5ca1d0895104f4f6e00bcb
+    sha: c06820804f259a976336c80742b3068586df9d84
+  - path: src/read.ts
+    sha: 6225a35a96f1896a1457385bda9eb9d0868490c0
+  - path: src/filing.ts
+    sha: afa2d406f78ccb1bc6c9d73cc4a56cdf0b16a16a
   - path: prisma/schema.prisma
-    sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
+    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
   - path: src/templates.ts
-    sha: 84e68dad2edc226425dfb0b8880e9765b2628686
+    sha: 169ac395a4b608e231beeb978952da3adfc8c82c
 related:
   [
     architecture/the-board,
@@ -22,8 +26,8 @@ related:
     features/workflow-templates,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: 5279b8a
-last_refreshed: 2026-09-09
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 ---
 
 # Labels and the selector (`--label key=value`)
@@ -72,15 +76,18 @@ Two implementation facts follow from where the filtering happens:
 
 - The selector is parsed **before** the board read, so a malformed one is a usage error rather than
   an empty listing — an empty listing would read as *"nothing matches"*, which is a wrong answer
-  rather than a refusal (`src/hkb.ts`, the `ls` verb).
+  rather than a refusal (`parseLabels` at `src/hkb.ts:795`, before `listJobs` at `:798`).
 - The filtering itself is a `filter` over the rows, not a `where` clause. Prisma's JSON path filters
-  are PostgreSQL and MySQL only, so SQLite cannot ask the question in SQL; `hkb ls` already reads its
-  board in one query and shapes the rows in memory, so this costs no extra read (`src/labels.ts`).
+  are PostgreSQL and MySQL only, so SQLite cannot ask the question in SQL; the listing already reads
+  its board in one query and shapes the rows in memory, so this costs no extra read (`selects`,
+  applied at `src/read.ts:225`). It moved out of the CLI with the rest of the read model — a rendered
+  row whose predicate lives in the CLI is a second consumer waiting to re-derive it.
 
 ## The fence: refused at file time, by name
 
 `checkLabel` is the same fence as `checkResultName` and `checkArtifactName` (*features/declared-outputs*)
-— it runs in `hkb new` before the board is touched, so an illegal request never becomes state.
+— it runs inside `createJob` (`parseLabels`, `src/filing.ts:250`), before the board is upserted at
+`src/filing.ts:367`, so an illegal request never becomes state.
 
 The rule, written down once: **a key and a value are each a plain token — a letter or digit at each
 end, letters, digits, `-`, `_` and `.` in between, 1 to 63 characters.** That is Kubernetes' own label

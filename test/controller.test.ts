@@ -358,29 +358,91 @@ test('a non-PreToolUse event is not the gate\'s business', async () => {
 // un-isolated Job's subagents would have been forced into worktrees it does not have — unreachable
 // only because `Agent` is off the tool surface, and reachable again the day anyone adds it.
 
-test('the runtime is told whether this attempt has a worktree, per Job', async () => {
+test('a runtime that does NOT provide the workspace fails the attempt rather than running in the repo',
+  async () => {
+    // The failure this guards is silent by construction. `WorkerSpec.workspace` reaches the harness
+    // through an untyped `extraArgs` passthrough, so a renamed flag or an older CLI drops it and the
+    // session runs in the operator's own repository while everything here still believes it is
+    // isolated. Found in review; this is the refusing case, and CLAUDE.md's rule is why it exists —
+    // the admission gate, the worktree base and the lease were each silently inert and each passed
+    // every test it had.
+    const b = await db.board.upsert({ where: { slug: 'unisolated' }, update: {}, create: { slug: 'unisolated' } });
+
+    // A runtime that ignores the declaration and reports running in the repository.
+    const liar = {
+      name: 'liar',
+      async run(spec: { cwd: string }) {
+        return { status: 'completed', ok: true, sessionId: 's', text: 'did it', costUsd: 0, turns: 1,
+                 durationMs: 0, stopReason: 'end_turn', denials: 0, error: null, workspacePath: spec.cwd };
+      },
+    } as never;
+    const job = await db.job.create({
+      data: { boardId: b.id, name: 'asked for isolation', brief: 'x', maxRetries: 2 },
+    });
+    await reconcileToRest({ runtime: liar, cwd, board: 'unisolated' });
+
+    const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+    assert.equal(after.phase, 'failed', 'the session "succeeded" — the isolation did not');
+    assert.equal(after.attempts.length, 1, 'and it is not retried: the same runtime gives the same answer');
+    assert.equal(after.attempts[0].outcome, 'no_input');
+    assert.match(after.lastError ?? '', /did not provide one/);
+    assert.match(after.lastError ?? '', /IS the repository/, 'and says what it found instead');
+
+    // A runtime that reports nothing at all is the same fault by a quieter route.
+    const silent = {
+      name: 'silent',
+      async run() {
+        return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+                 durationMs: 0, stopReason: 'end_turn', denials: 0, error: null, workspacePath: null };
+      },
+    } as never;
+    const quiet = await db.job.create({
+      data: { boardId: b.id, name: 'told nothing', brief: 'x', maxRetries: 0 },
+    });
+    await reconcileToRest({ runtime: silent, cwd, board: 'unisolated' });
+    const q = await db.job.findUniqueOrThrow({ where: { id: quiet.id } });
+    assert.equal(q.phase, 'failed');
+    assert.match(q.lastError ?? '', /did not provide one/);
+
+    // And an un-isolated Job is untouched by any of it: it asked for nothing, so there is nothing
+    // to verify. Without this the guard would break the `hostPath` case entirely.
+    const bare = await db.job.create({
+      data: { boardId: b.id, name: 'asked for none', brief: 'x', isolate: false, maxRetries: 0 },
+    });
+    await reconcileToRest({ runtime: silent, cwd, board: 'unisolated' });
+    assert.equal((await db.job.findUniqueOrThrow({ where: { id: bare.id } })).phase, 'succeeded');
+  });
+
+test('a workspace is DECLARED by name, and the runtime is the one that makes it', async () => {
+  // ADR-018's decision 2, held to. The controller must ask and never provide: `cwd` is always the
+  // repository now, and the only thing that distinguishes an isolated Job is that it asked for a
+  // workspace. A controller that went back to cutting a checkout and passing its path would fail
+  // the `cwd` assertions here, which is the point of asserting them.
   const wired = await db.board.upsert({ where: { slug: 'wired' }, update: {}, create: { slug: 'wired' } });
-  const seen: { isolated?: boolean; cwd: string }[] = [];
+  const seen: { isolated?: boolean; cwd: string; workspace?: { name: string } }[] = [];
   const spy = {
     name: 'spy',
-    async run(s: { cwd: string; isolated?: boolean }) {
-      seen.push({ isolated: s.isolated, cwd: s.cwd });
+    async run(s: { cwd: string; isolated?: boolean; workspace?: { name: string } }) {
+      seen.push({ isolated: s.isolated, cwd: s.cwd, workspace: s.workspace });
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null, workspacePath: null };
     },
   } as never;
   const file = (name: string, extra: Record<string, unknown> = {}) =>
     db.job.create({ data: { boardId: wired.id, name, brief: `do ${name}`, ...extra } });
 
   await file('in-the-operators-tree', { isolate: false });
-  await reconcile({ runtime: spy, cwd, board: 'wired', readPr: false });
-  assert.equal(seen[0].isolated, false, 'no worktree — and the runtime must not pretend otherwise');
+  await reconcile({ runtime: spy, cwd, board: 'wired' });
+  assert.equal(seen[0].workspace, undefined, 'asked for none — Kubernetes\' hostPath case');
+  assert.equal(seen[0].isolated, false, 'and the runtime must not pretend otherwise for its subagents');
   assert.equal(seen[0].cwd, cwd, 'it really is the operator\'s checkout');
 
-  await file('in-a-worktree');   // isolate defaults true
-  await reconcile({ runtime: spy, cwd, board: 'wired', readPr: false });
+  const own = await file('in-a-workspace');   // isolate defaults true
+  await reconcile({ runtime: spy, cwd, board: 'wired' });
+  assert.deepEqual(seen[1].workspace, { name: `kb-${own.id}` }, 'asked for one, by name');
   assert.equal(seen[1].isolated, true);
-  assert.notEqual(seen[1].cwd, cwd, 'and this one really does have a checkout of its own');
+  assert.equal(seen[1].cwd, cwd,
+    'and `cwd` is STILL the repository: the controller declares a workspace, it does not provide one');
 });
 
 // ---------------------------------------------------------------- declared outputs (ADR-008)
@@ -389,28 +451,55 @@ test('the runtime is told whether this attempt has a worktree, per Job', async (
 // the checkout, or it stranded one. The declaration is what lets the board move it out first.
 
 /** A worker that writes exactly these files, wherever the controller put it, and then says it is done. */
+/**
+ * A runtime that provisions the workspace it was asked for and writes into IT — which is what a real
+ * one does, and what makes these tests mean anything.
+ *
+ * The point is the indirection: the controller passes a workspace *name*, this decides where that
+ * lands, and it reports the path back on the outcome. A test that wrote into `spec.cwd` would be
+ * asserting against the repository and would pass just as well if the Job kind had never asked for
+ * isolation at all.
+ */
 const writes = (files: Record<string, string>) => ({
   name: 'writes',
-  async run(s: { cwd: string }) {
+  async run(s: { cwd: string; workspace?: { name: string } }) {
+    const dir = s.workspace ? workspaceOf(s.workspace.name) : s.cwd;
+    fs.mkdirSync(dir, { recursive: true });
     for (const [rel, body] of Object.entries(files)) {
-      fs.mkdirSync(path.dirname(path.join(s.cwd, rel)), { recursive: true });
-      fs.writeFileSync(path.join(s.cwd, rel), body);
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.writeFileSync(path.join(dir, rel), body);
     }
     return { status: 'completed', ok: true, sessionId: 'sess', text: 'wrote what I was asked',
-             costUsd: 0, turns: 1, durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+             costUsd: 0, turns: 1, durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+             workspacePath: s.workspace ? dir : null };
   },
 } as never);
 
-const checkoutOf = (jobId: number) => path.join(cwd, '.hkb', 'worktrees', `kb-${jobId}-1`);
+/**
+ * What a double must report: the workspace it was asked for, or null when it was asked for none.
+ *
+ * Every inline runtime here reports this, because a real one must — `isolationShortfall` in the
+ * controller refuses a runtime that stays silent or that ran in the repository, which is the whole
+ * point of the untyped `extraArgs` passthrough being verified rather than trusted. A double that
+ * reported nothing was modelling a runtime that would now be refused.
+ */
+const ranWhere = (s: unknown): string | null => {
+  const name = (s as { workspace?: { name: string } })?.workspace?.name;
+  return name ? workspaceOf(name) : null;
+};
 
-test('a declared export lands in the board\'s repository, and the checkout goes with the litter', async () => {
+/** Where the fake runtime puts a workspace — the same place `src/runtime/fake.ts` does. */
+const workspaceOf = (name: string) => path.join(cwd, '.hkb', 'workspaces', name);
+const checkoutOf = (jobId: number) => workspaceOf(`kb-${jobId}`);
+
+test('a declared export lands in the board\'s repository, and the workspace waits for its TTL', async () => {
   const job = await mkJob('produces-a-skill', { exports: ['.claude/skills/sdk-docs'] });
   const r = await reconcile({
     runtime: writes({
       '.claude/skills/sdk-docs/SKILL.md': '# sdk docs\n',
       'node_modules/dep/index.js': 'the 614 MB, gitignored and undeclared\n',
     }),
-    cwd, readPr: false,
+    cwd,
   });
   assert.deepEqual(r.succeeded, [job.id]);
   assert.equal(fs.readFileSync(path.join(cwd, '.claude', 'skills', 'sdk-docs', 'SKILL.md'), 'utf8'), '# sdk docs\n',
@@ -418,8 +507,21 @@ test('a declared export lands in the board\'s repository, and the checkout goes 
 
   const a = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 1 } } });
   assert.deepEqual(a.exported, ['.claude/skills/sdk-docs/SKILL.md'], 'and the attempt records what it handed over');
-  assert.equal(fs.existsSync(checkoutOf(job.id)), false,
-    'what was left was undeclared, which is litter by definition — no `hkb` verb needed to reclaim it');
+  // The workspace is NOT removed here any more. It dies by `ttlSecondsAfterFinished` and nothing
+  // else (ADR-018) — which is what `emptyDir` means, and what gives an operator a window to look at
+  // what a run left. What matters is that the declared output got OUT first, which is asserted
+  // above; the undeclared remainder is litter either way.
+  const { collectable } = await import('../src/workspaces.ts');
+  const done = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+  assert.notEqual(done.finishedAt, null, 'it finished, so the clock has started');
+  assert.deepEqual(
+    collectable(
+      [{ id: job.id, finishedAt: done.finishedAt, phase: done.phase, resumable: false }],
+      new Date(Date.now() + 7200_000), 3600,
+    ),
+    [job.id],
+    'and an hour later it is collectable — it succeeded, so nothing will resume into it',
+  );
   fs.rmSync(path.join(cwd, '.claude'), { recursive: true, force: true });
 });
 
@@ -427,7 +529,7 @@ test('a declared export the worker did not produce FAILS the attempt', async () 
   // Without this rule the declaration is a copy loop rather than a contract, and `succeeded` goes
   // back to meaning only that a session ended.
   const job = await mkJob('promises-more-than-it-writes', { exports: ['REPORT.md'], maxRetries: 2 });
-  await reconcileToRest({ runtime: writes({ 'notes-to-self.md': 'not what was asked for\n' }), cwd, readPr: false });
+  await reconcileToRest({ runtime: writes({ 'notes-to-self.md': 'not what was asked for\n' }), cwd });
 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
   assert.equal(after.phase, 'failed', 'the session completed; the contract did not');
@@ -446,7 +548,7 @@ test('an export path that escapes the worktree is refused at the copy too, not o
   // `hkb new` validates the declaration, so reaching this needs a row written another way — which is
   // exactly why the check is here as well. The copy runs with the operator's authority.
   const job = await mkJob('escape-artist', { exports: ['../../etc/passwd'] });
-  await reconcile({ runtime: writes({ 'harmless.txt': 'x\n' }), cwd, readPr: false });
+  await reconcile({ runtime: writes({ 'harmless.txt': 'x\n' }), cwd });
 
   const a = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 1 } } });
   assert.equal(a.outcome, 'no_output');
@@ -469,7 +571,8 @@ function specSpy() {
     async run(s: Record<string, unknown>) {
       seen.push({ ...s });
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
   return { seen, runtime };
@@ -486,12 +589,12 @@ test('a board default reaches the runtime, and a Job that spoke for itself outra
   const { seen, runtime } = specSpy();
 
   await file('says-nothing');
-  await reconcile({ runtime, cwd, board: 'cheap', readPr: false });
+  await reconcile({ runtime, cwd, board: 'cheap' });
   assert.equal(seen[0].model, 'claude-haiku-4-5', 'the board answered a question the Job did not');
   assert.equal(seen[0].maxTurns, 6);
 
   await file('says-so-itself', { model: 'claude-opus-4-6', maxTurns: 40 });
-  await reconcile({ runtime, cwd, board: 'cheap', readPr: false });
+  await reconcile({ runtime, cwd, board: 'cheap' });
   assert.equal(seen[1].model, 'claude-opus-4-6', 'and it must not override one the Job asked for');
   assert.equal(seen[1].maxTurns, 40);
 });
@@ -510,7 +613,7 @@ test('the budget gate judges a Job against the cap it would really run under', a
   assert.equal(job.maxBudgetUsd, null, 'the Job itself says nothing about money');
 
   const { seen, runtime } = specSpy();
-  const r = await reconcile({ runtime, cwd, board: 'inherited-cap', readPr: false });
+  const r = await reconcile({ runtime, cwd, board: 'inherited-cap' });
   assert.equal(seen.length, 0, 'nothing ran');
   assert.match(r.refused ?? '', /may cost \$9\.00/, 'the refusal names the inherited cap, not $0.00');
   assert.match(r.refused ?? '', /\$5\.00 ceiling/);
@@ -529,7 +632,7 @@ test('the cap is FROZEN onto the attempt, so a board edited mid-flight cannot re
     data: { boardId: b.id, name: 'claimed-at-three', brief: 'do it', isolate: false },
   });
   const { runtime } = specSpy();
-  await reconcile({ runtime, cwd, board: 'frozen', readPr: false });
+  await reconcile({ runtime, cwd, board: 'frozen' });
 
   const a = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 1 } } });
   assert.equal(a.maxBudgetUsd, 3, 'the attempt records the cap it was claimed under');
@@ -552,7 +655,7 @@ test('an open attempt is charged its own frozen cap, not the board\'s current de
 
   const { seen, runtime } = specSpy();
   await db.job.create({ data: { boardId: b.id, name: 'mine', brief: 'x', isolate: false, maxBudgetUsd: 2 } });
-  const r = await reconcile({ runtime, cwd, board: 'committed', readPr: false });
+  const r = await reconcile({ runtime, cwd, board: 'committed' });
 
   assert.equal(seen.length, 0, 'refused: $7 in flight plus $2 is over the $8 ceiling');
   assert.match(r.refused ?? '', /\$7\.00 committed to runs in flight/,
@@ -573,7 +676,7 @@ test('a board\'s maxRetries default is the retry budget actually spent', async (
     async run() { return { status: 'error', ok: false, sessionId: null, text: '', costUsd: 0, turns: 0,
                            durationMs: 0, stopReason: 'error', denials: 0, error: 'boom' }; },
   } as never;
-  await reconcileToRest({ runtime: crashing, cwd, board: 'one-shot', readPr: false });
+  await reconcileToRest({ runtime: crashing, cwd, board: 'one-shot' });
 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
   assert.equal(after.attempts.length, 1, 'one attempt — the board said no retries, and it was heard');
@@ -600,7 +703,8 @@ test('a granted directory reaches the runtime absolute, resolved against the rep
     async run(s: { plugins?: string[] }) {
       seen.push(s.plugins);
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
 
@@ -608,7 +712,7 @@ test('a granted directory reaches the runtime absolute, resolved against the rep
   await db.job.create({
     data: { boardId: b.id, name: 'knows prisma', brief: 'x', isolate: false, pluginPaths: ['.claude'] },
   });
-  await reconcile({ runtime: spy, cwd: REPO, board: 'granted', readPr: false });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'granted' });
 
   assert.deepEqual(seen[0], [path.join(fs.realpathSync(REPO), '.claude')],
     'absolute, and under the repository — the runtime gets a path, never a policy');
@@ -622,19 +726,20 @@ test('a Job with no grant hands the runtime nothing, and a grant that has gone d
     async run(s: { plugins?: string[] }) {
       seen.push(s.plugins);
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
 
   await db.job.create({ data: { boardId: b.id, name: 'ungranted', brief: 'x', isolate: false } });
-  await reconcile({ runtime: spy, cwd: REPO, board: 'granted', readPr: false });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'granted' });
   assert.equal(seen[0], undefined, 'nothing granted, so the option is absent rather than empty');
 
   // The refusal that must NOT be fatal: a board outlives the directories it names.
   const job = await db.job.create({
     data: { boardId: b.id, name: 'stale grant', brief: 'x', isolate: false, pluginPaths: ['no-such-dir'] },
   });
-  await reconcile({ runtime: spy, cwd: REPO, board: 'granted', readPr: false });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'granted' });
   assert.equal(seen[1], undefined, 'a grant that has gone grants nothing');
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
   assert.equal(after.phase, 'succeeded', 'and the Job still ran — a missing skill directory is not a failed attempt');
@@ -660,7 +765,8 @@ test('a narrowed Job reaches the runtime narrowed, and the gate built from it re
     async run(s: { allowedTools?: string[] }) {
       seen.push(s.allowedTools);
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
 
@@ -689,7 +795,8 @@ test('a Job that named no surface gets the runtime default, which is not the sam
     async run(s: { allowedTools?: string[] }) {
       seen.push(s.allowedTools);
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
   await db.job.create({ data: { boardId: b.id, name: 'ordinary', brief: 'x', isolate: false } });
@@ -708,7 +815,8 @@ test('an EMPTY surface is a value: the Job may call nothing, and the gate says s
     async run(s: { allowedTools?: string[] }) {
       seen.push(s.allowedTools);
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
   await db.job.create({
@@ -732,7 +840,8 @@ test('a board default narrows every Job that named no surface of its own', async
     async run(s: { allowedTools?: string[] }) {
       seen.push(s.allowedTools);
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
   await db.job.create({ data: { boardId: b.id, name: 'inherits', brief: 'x', isolate: false } });
@@ -797,7 +906,7 @@ const attemptOf = (jobId: number) =>
 
 test('the runtime\'s measurement of the work reaches the attempt row', async () => {
   const job = await measuredBoard('measured-run');
-  await reconcile({ runtime: measuring(18, 3), cwd, board: 'measured', readPr: false });
+  await reconcile({ runtime: measuring(18, 3), cwd, board: 'measured' });
 
   const a = await attemptOf(job.id);
   assert.equal(a.turns, 18, 'the runtime counted the turns and the board kept them');
@@ -811,7 +920,7 @@ test('an attempt that never reached the runtime records no measurement, not a ze
     name: 'throwing',
     async run(): Promise<never> { throw new Error('the runtime never started'); },
   };
-  await reconcile({ runtime: throwing, cwd, board: 'measured', readPr: false });
+  await reconcile({ runtime: throwing, cwd, board: 'measured' });
 
   const a = await attemptOf(job.id);
   assert.equal(a.turns, null, 'null, not 0 — there is no measurement of a run that did not happen');
@@ -823,7 +932,7 @@ test('zero turns is recorded as zero, so null keeps meaning "not measured"', asy
   // The pair that makes the distinction above load-bearing rather than decorative: a runtime that
   // genuinely reported 0 must not be stored the same way as one that reported nothing.
   const job = await measuredBoard('zero-turns');
-  await reconcile({ runtime: measuring(0, 0), cwd, board: 'measured', readPr: false });
+  await reconcile({ runtime: measuring(0, 0), cwd, board: 'measured' });
 
   const a = await attemptOf(job.id);
   assert.equal(a.turns, 0, 'a measured zero survives as a zero');
@@ -866,7 +975,7 @@ test('a declared result the run wrote is kept on the attempt', async () => {
       results: ['finding'], maxBudgetUsd: 1,
     },
   });
-  await reconcile({ runtime: writing({ finding: 'nothing to change here\n' }), cwd, board: 'results', readPr: false });
+  await reconcile({ runtime: writing({ finding: 'nothing to change here\n' }), cwd, board: 'results' });
 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
   assert.equal(after.phase, 'succeeded');
@@ -884,7 +993,7 @@ test('a declared result the run did NOT write fails the attempt', async () => {
   });
   // A runtime that succeeds and writes nothing — the exact shape ADR-008 exists to catch, because
   // the session's own account is that it finished.
-  await reconcile({ runtime: writing({}), cwd, board: 'results', readPr: false });
+  await reconcile({ runtime: writing({}), cwd, board: 'results' });
 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
   assert.equal(after.attempts[0].outcome, 'no_output', 'the runtime said completed; the board disagreed');
@@ -911,7 +1020,8 @@ test('a declared input is read from the repository and reaches the prompt before
     async run(spec: { prompt: string }) {
       seen.push(spec.prompt);
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
 
@@ -921,7 +1031,7 @@ test('a declared input is read from the repository and reaches the prompt before
       inputs: [{ name: 'licence', valueFrom: { file: { path: 'LICENSE' } } }],
     },
   });
-  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs' });
 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
   assert.equal(after.phase, 'succeeded');
@@ -940,10 +1050,11 @@ test('a declared input the board cannot read fails the attempt WITHOUT calling t
   let called = 0;
   const spy = {
     name: 'spy',
-    async run() {
+    async run(s: { workspace?: { name: string } }) {
       called += 1;
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
 
@@ -953,7 +1064,7 @@ test('a declared input the board cannot read fails the attempt WITHOUT calling t
       inputs: [{ name: 'gone', valueFrom: { file: { path: 'no-such-file.md' } } }],
     },
   });
-  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs' });
 
   assert.equal(called, 0, 'the whole point: an unreadable input costs no session');
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
@@ -970,7 +1081,8 @@ test('a value input the brief did not consume still reaches the run, as data', a
     async run(spec: { prompt: string }) {
       seen.push(spec.prompt);
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
 
@@ -982,7 +1094,7 @@ test('a value input the brief did not consume still reaches the run, as data', a
       inputs: [{ name: 'pr', value: '{"number":42}' }],
     },
   });
-  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs' });
 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
   assert.equal(after.phase, 'succeeded', 'a literal cannot fail to resolve — there is nothing to fetch');
@@ -1009,7 +1121,8 @@ test('self: hands a Job facts about itself, and slot is a small integer it can b
     async run(spec: { prompt: string }) {
       seen.push(spec.prompt);
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
 
@@ -1024,7 +1137,7 @@ test('self: hands a Job facts about itself, and slot is a small integer it can b
       ],
     },
   });
-  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs' });
 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
   assert.equal(after.phase, 'succeeded');
@@ -1036,32 +1149,42 @@ test('self: hands a Job facts about itself, and slot is a small integer it can b
     'frozen onto the attempt, so a past run can still say which slot it held');
 });
 
-test('a self: field this Job does not have is REFUSED, not rendered empty', async () => {
+test('a self: field that is not a field is refused before a session is bought', async () => {
   const b = await db.board.findUniqueOrThrow({ where: { slug: 'inputs' } });
   let called = 0;
   const spy = {
     name: 'spy',
-    async run() {
+    async run(s: { workspace?: { name: string } }) {
       called += 1;
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
 
-  // `--no-isolate`, so there is no branch. Rendering an empty string would put a Job in the position
-  // of acting on a fact that is not true, which is the failure every other declaration refuses.
+  // A `self:` field that is not a field is refused at FILE time, which is the only path that
+  // exists: `declaredInputs` reads back the fields a Job can have, so nothing else reaches a claim.
+  // `branch` is the case worth naming — it WAS a field, and ADR-018 removed it with the git
+  // protocol, so somebody typing it from memory is the realistic mistake.
+  const { checkInputSpec } = await import('../src/inputs.ts');
+  for (const gone of ['branch', 'base', 'worktree']) {
+    assert.throws(() => checkInputSpec(`x=self:${gone}`), new RegExp(`self:${gone}`),
+      `self:${gone} went with the git protocol and must be refused by name, before a session is bought`);
+  }
+  assert.throws(() => checkInputSpec('x=self:nonsense'), /not a field a Job has/);
+
+  // And a field it DOES have costs nothing to declare.
   const job = await db.job.create({
     data: {
-      boardId: b.id, name: 'no branch here', brief: 'x', isolate: false, maxRetries: 0,
-      inputs: [{ name: 'branch', valueFrom: { jobRef: { field: 'branch' } } }],
+      boardId: b.id, name: 'reads its own slot', brief: 'x', isolate: false, maxRetries: 0,
+      inputs: [{ name: 'slot', valueFrom: { jobRef: { field: 'slot' } } }],
     },
   });
-  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs' });
 
-  assert.equal(called, 0);
+  assert.equal(called, 1, 'a resolvable self: field does not stop the run');
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
-  assert.equal(after.attempts[0].outcome, 'no_input');
-  assert.match(after.lastError ?? '', /running without a worktree/, 'and it says why, not just that');
+  assert.equal(after.attempts[0].outcome, 'completed');
 });
 
 test('concurrent runs get DIFFERENT slots, and a slot is released with its lease', async () => {
@@ -1085,11 +1208,12 @@ test('concurrent runs get DIFFERENT slots, and a slot is released with its lease
   ]);
   const spy = {
     name: 'spy',
-    async run() {
+    async run(s: { workspace?: { name: string } }) {
       if (++started === 3) release();
       await allThree;
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
 
@@ -1098,7 +1222,7 @@ test('concurrent runs get DIFFERENT slots, and a slot is released with its lease
     const j = await db.job.create({ data: { boardId: b.id, name: `concurrent ${n}`, brief: 'x', isolate: false } });
     ids.push(j.id);
   }
-  await reconcile({ runtime: spy, cwd: REPO, board: 'slots', readPr: false });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'slots' });
 
   const got = await db.attempt.findMany({ where: { jobId: { in: ids } }, select: { slot: true } });
   const slots = got.map((a) => a.slot);
@@ -1111,12 +1235,13 @@ test('concurrent runs get DIFFERENT slots, and a slot is released with its lease
   const j4 = await db.job.create({ data: { boardId: b.id, name: 'later', brief: 'x', isolate: false } });
   const quick = {
     name: 'quick',
-    async run() {
+    async run(s: { workspace?: { name: string } }) {
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
-  await reconcile({ runtime: quick, cwd: REPO, board: 'slots', readPr: false });
+  await reconcile({ runtime: quick, cwd: REPO, board: 'slots' });
   const a4 = await db.attempt.findFirstOrThrow({ where: { jobId: j4.id } });
   assert.equal(a4.slot, 0, 'a freed slot is reused — otherwise the number is just `id` with extra steps');
 });
@@ -1129,7 +1254,8 @@ test('the board input is the arithmetic hkb already computes, and never includes
     async run(spec: { prompt: string }) {
       seen.push(spec.prompt);
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
 
@@ -1139,7 +1265,7 @@ test('the board input is the arithmetic hkb already computes, and never includes
       inputs: [{ name: 'board', valueFrom: { board: {} } }],
     },
   });
-  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs' });
 
   assert.match(seen[0], /### `board`  \(board\)/);
   assert.match(seen[0], /#\d+\s+failed\s+.*reads a ghost/, 'the other Jobs on this board are there');
@@ -1169,7 +1295,7 @@ test('a declared artifact the run wrote is kept beside the board, not in the rep
   // Deliberately past RESULT_MAX_BYTES: a value this size is refused as a result, and that refusal
   // is the reason this channel exists.
   const big = '#'.repeat(9000);
-  await reconcile({ runtime: writing({ 'report.md': big }), cwd, board: 'artifacts', readPr: false });
+  await reconcile({ runtime: writing({ 'report.md': big }), cwd, board: 'artifacts' });
 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
   assert.equal(after.phase, 'succeeded');
@@ -1191,7 +1317,7 @@ test('a declared artifact the run did NOT write fails the attempt', async () => 
       artifacts: ['plan.json'], maxBudgetUsd: 1, maxRetries: 0,
     },
   });
-  await reconcile({ runtime: writing({}), cwd, board: 'artifacts', readPr: false });
+  await reconcile({ runtime: writing({}), cwd, board: 'artifacts' });
 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
   assert.equal(after.attempts[0].outcome, 'no_output', 'the runtime said completed; the board disagreed');
@@ -1221,7 +1347,7 @@ async function gatedBoard() {
     create: { slug: 'gated', dailyBudgetUsd: null, maxConcurrent: 5 },
   });
 }
-const runGated = (r = fakeRuntime()) => reconcile({ runtime: r, cwd, board: 'gated', readPr: false });
+const runGated = (r = fakeRuntime()) => reconcile({ runtime: r, cwd, board: 'gated' });
 
 test('a gated Job suspends on success instead of finishing, and says what it waits for', async () => {
   const b = await gatedBoard();
@@ -1331,18 +1457,27 @@ test('a successful attempt does not spend a retry, so a gated chain keeps its bu
   assert.equal(after.phase, 'succeeded');
 });
 
-test('a gated Job keeps its checkout while it waits, so the approved half continues in it', async () => {
-  // Isolated, so there is a real worktree. Cutting a fresh one on approval would reset the branch to
-  // base and strand whatever the propose half pushed.
+test('a suspended Job is never a sweep candidate, so the approved half continues where it was', async () => {
+  // The property the old four-branch keep/remove logic bought, now bought by the TTL instead: a Job
+  // that has not FINISHED has no `finishedAt`, so `collectable` cannot select it whatever its age.
+  // Cutting a fresh workspace on approval would strand whatever the propose half left.
   const b = await gatedBoard();
   const job = await db.job.create({
-    data: { boardId: b.id, name: 'keeps-checkout', brief: 'x', gate: 'ok?', maxBudgetUsd: 1 },
+    data: { boardId: b.id, name: 'keeps-workspace', brief: 'x', gate: 'ok?', maxBudgetUsd: 1 },
   });
   await runGated();
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
   assert.equal(after.phase, 'suspended');
-  assert.ok(fs.existsSync(path.join(cwd, '.hkb', 'worktrees', `kb-${job.id}-1`)),
-    'the checkout is still there — the approval continues in it');
+  assert.equal(after.finishedAt, null, 'suspended is not finished — a person may take days');
+  const { collectable } = await import('../src/workspaces.ts');
+  assert.deepEqual(
+    collectable(
+      [{ id: job.id, finishedAt: after.finishedAt, phase: after.phase, resumable: false }],
+      new Date(Date.now() + 1e9), 0,
+    ),
+    [],
+    'and no TTL, however long, makes its workspace collectable — it has not finished',
+  );
 });
 
 test('the retry budget survives the propose half, so an approved run that FAILS may still retry', async () => {
@@ -1382,6 +1517,7 @@ const proposing = (body: string): Runtime => ({
     return {
       status: 'completed', ok: true, sessionId: 'sess-p', text: 'proposed',
       costUsd: 0.1, turns: 2, durationMs: 10, stopReason: 'end_turn', denials: 0, error: null,
+      workspacePath: ranWhere(spec),
     };
   },
 });
@@ -1405,7 +1541,7 @@ test('a proposing Job suspends holding its proposal, and creates NOTHING', async
     runtime: proposing(JSON.stringify({
       jobs: [{ name: 'part one', brief: 'do the first half' }, { name: 'part two', brief: 'do the second half', maxBudgetUsd: 99 }],
     })),
-    cwd, board: 'proposals', readPr: false,
+    cwd, board: 'proposals',
   });
 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
@@ -1433,7 +1569,7 @@ test('an approved proposal is applied by the CONTROLLER, once, with lineage', as
   await db.event.create({ data: { kind: 'approved', jobId: proposer.id, boardId: b.id, actor: 'ada', payload: {} } });
   await db.job.update({ where: { id: proposer.id }, data: { phase: 'pending', suspendedFor: null } });
 
-  const report = await reconcile({ runtime: proposing('{}'), cwd, board: 'proposals', readPr: false });
+  const report = await reconcile({ runtime: proposing('{}'), cwd, board: 'proposals' });
 
   const filed = await db.job.findMany({ where: { proposedByJobId: proposer.id }, orderBy: { proposalIndex: 'asc' } });
   assert.equal(filed.length, 2);
@@ -1461,7 +1597,7 @@ test('re-applying the same approval creates nothing — the unique key refuses i
   await db.job.update({ where: { id: proposer.id }, data: { phase: 'pending', finishedAt: null } });
   const before = await db.job.count();
 
-  const report = await reconcile({ runtime: proposing('{}'), cwd, board: 'proposals', readPr: false });
+  const report = await reconcile({ runtime: proposing('{}'), cwd, board: 'proposals' });
 
   assert.equal(await db.job.count(), before, 'not one duplicate — the database refused, nothing had to remember');
   assert.deepEqual(report.filed, []);
@@ -1480,13 +1616,13 @@ test('a proposal is NOT applied without an approval, however long it waits', asy
   });
   await reconcile({
     runtime: proposing(JSON.stringify({ jobs: [{ name: 'never filed', brief: 'x' }] })),
-    cwd, board: 'proposals', readPr: false,
+    cwd, board: 'proposals',
   });
   const before = await db.job.count();
 
   // Not suspended any more, but still not approved: the phase alone must not be what applies it.
   await db.job.update({ where: { id: job.id }, data: { phase: 'pending', suspendedFor: null } });
-  await reconcile({ runtime: proposing('{}'), cwd, board: 'proposals', readPr: false });
+  await reconcile({ runtime: proposing('{}'), cwd, board: 'proposals' });
 
   assert.equal(await db.job.findFirst({ where: { proposedByJobId: job.id } }), null,
     'no approval event, no rows — this is the whole of ADR-011 decision 5');
@@ -1503,7 +1639,7 @@ test('a proposal the validator refuses fails the attempt and names why', async (
   });
   await reconcile({
     runtime: proposing(JSON.stringify({ jobs: [{ name: 'sneaky', brief: 'x', isolate: false }] })),
-    cwd, board: 'proposals', readPr: false,
+    cwd, board: 'proposals',
   });
 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
@@ -1522,7 +1658,7 @@ test('a proposing Job that writes no proposal fails like any other declared outp
     },
   });
   // A runtime that succeeds and writes nothing at all.
-  await reconcile({ runtime: fakeRuntime(), cwd, board: 'proposals', readPr: false });
+  await reconcile({ runtime: fakeRuntime(), cwd, board: 'proposals' });
 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
   assert.equal(after.phase, 'failed');
@@ -1544,12 +1680,12 @@ test('a pass that only applied a proposal still reports that it did something', 
   });
   await reconcile({
     runtime: proposing(JSON.stringify({ jobs: [{ name: 'x', brief: 'x' }, { name: 'y', brief: 'y' }] })),
-    cwd, board: 'proposals', readPr: false,
+    cwd, board: 'proposals',
   });
   await db.event.create({ data: { kind: 'approved', jobId: job.id, boardId: b.id, actor: 'ada', payload: {} } });
   await db.job.update({ where: { id: job.id }, data: { phase: 'pending', suspendedFor: null } });
 
-  const report = await reconcile({ runtime: proposing('{}'), cwd, only: job.id, board: 'proposals', readPr: false });
+  const report = await reconcile({ runtime: proposing('{}'), cwd, only: job.id, board: 'proposals' });
   assert.equal(report.claimed.length, 0, 'nothing was claimed — the proposer was applied, not run');
   assert.equal(report.filed.length, 2, 'and the two rows it filed are in the report');
 });
@@ -1567,7 +1703,7 @@ test('a create failure that is NOT a duplicate stops the pass rather than being 
   });
   await reconcile({
     runtime: proposing(JSON.stringify({ jobs: [{ name: 'never lands', brief: 'x' }] })),
-    cwd, board: 'orphaned', readPr: false,
+    cwd, board: 'orphaned',
   });
   await db.event.create({ data: { kind: 'approved', jobId: job.id, boardId: b.id, actor: 'ada', payload: {} } });
   await db.job.update({ where: { id: job.id }, data: { phase: 'pending', suspendedFor: null } });
@@ -1579,7 +1715,7 @@ test('a create failure that is NOT a duplicate stops the pass rather than being 
   await db.$executeRawUnsafe('PRAGMA foreign_keys=ON');
 
   await assert.rejects(
-    () => reconcile({ runtime: proposing('{}'), cwd, only: job.id, readPr: false }),
+    () => reconcile({ runtime: proposing('{}'), cwd, only: job.id }),
     (e: { code?: string }) => e.code === 'P2003',
     'the pass fails loudly; it does not count a broken row as one that was already filed',
   );
@@ -1607,7 +1743,8 @@ test('an isolated proposing Job is NOT told to commit', async () => {
     async run(spec: { prompt: string }) {
       seen = spec.prompt;
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
   const job = await db.job.create({
@@ -1616,27 +1753,26 @@ test('an isolated proposing Job is NOT told to commit', async () => {
       proposes: 'jobs', gate: 'a proposal to review', maxBudgetUsd: 1, maxRetries: 0,
     },
   });
-  await reconcile({ runtime: spy, cwd, board: 'proposals', readPr: false });
+  await reconcile({ runtime: spy, cwd, board: 'proposals' });
 
   assert.doesNotMatch(seen, /Commit it on/, 'a proposal is not a diff and has nothing to commit');
   assert.doesNotMatch(seen, /git push/);
-  assert.match(seen, new RegExp(`worktree of your own, checked out on \`kb-${job.id}-1\``),
-    'it still has to know where it is standing — the worktree is the sandbox');
-  assert.match(seen, /Write the file and stop/, 'and the contract that replaced the protocol is the one it follows');
+  assert.match(seen, /Write the file and stop/, 'the proposal contract is what it follows');
 
-  // An ordinary isolated Job is unchanged: this narrows the proposing case and nothing else.
+  // An ordinary isolated Job is told the same nothing about git, which is the change ADR-018 made:
+  // the difference between these two used to be a whole sandbox contract.
   const plain = await db.job.create({
     data: { boardId: b.id, name: 'ordinary isolated', brief: 'do the work', maxBudgetUsd: 1, maxRetries: 0 },
   });
-  await reconcile({ runtime: spy, cwd, only: plain.id, board: 'proposals', readPr: false });
-  assert.match(seen, new RegExp(`Commit it on \`kb-${plain.id}-1\``));
+  await reconcile({ runtime: spy, cwd, only: plain.id, board: 'proposals' });
+  assert.doesNotMatch(seen, /Commit it on/);
+  assert.doesNotMatch(seen, /\bbranch\b/i, 'the core has no opinion about branches for either shape');
 });
 
-test('an isolated Job with no guide and no default workflow gets the contract and nothing else', async () => {
-  // The shipped defaults, on a board that configures nothing: what a worker is told is its branch,
-  // the rules the controller refuses on, and its own brief. Every line that was moved out to a
-  // workflow file is asserted ABSENT, because "the core stopped saying it" is the whole change and
-  // it is invisible from the inside (ADR-017 decision 5).
+test('an isolated Job on a board that configures nothing is told its brief, and no git at all', async () => {
+  // The shipped defaults. What a worker is told is the three standing rules and its own brief —
+  // and that is the whole of it. Every git line is asserted ABSENT, because "the core stopped
+  // saying it" is the entire change and it is invisible from the inside (ADR-018).
   const b = await proposalBoard();
   let seen = '';
   const spy = {
@@ -1644,20 +1780,21 @@ test('an isolated Job with no guide and no default workflow gets the contract an
     async run(spec: { prompt: string }) {
       seen = spec.prompt;
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
   const job = await db.job.create({
     data: { boardId: b.id, name: 'plain isolated', brief: 'Do the work.', maxBudgetUsd: 1, maxRetries: 0 },
   });
-  await reconcile({ runtime: spy, cwd, only: job.id, board: 'proposals', readPr: false });
+  await reconcile({ runtime: spy, cwd, only: job.id, board: 'proposals' });
 
-  assert.match(seen, new RegExp(`already checked out on the branch\\n\`kb-${job.id}-1\``), 'where it is standing');
-  assert.match(seen, /Commit it on/, 'and what the machinery reads afterwards');
-  assert.match(seen, new RegExp(`git push -u origin kb-${job.id}-1`), 'and to push it, which the sweep and the rebase both read');
-  assert.match(seen, new RegExp(`\`kb-${job.id}-1\` is the only branch you may push`), 'and the rule the hook enforces');
-  for (const gone of [/pull request/i, /gh pr/i, /Co-Authored-By/i, /--force-with-lease/]) {
-    assert.doesNotMatch(seen, gone, 'nothing refuses on this, so nothing in the core says it');
+  assert.match(seen, /Do the work\./, 'its own brief survives, which is what all of this is for');
+  for (const gone of [
+    /\bcommit\b/i, /\bpush\b/i, /\brebase\b/i, /\bbranch\b/i, /\bworktree\b/i,
+    /pull request/i, /gh pr/i, /Co-Authored-By/i, /--force-with-lease/, /--no-verify/,
+  ]) {
+    assert.doesNotMatch(seen, gone, 'nothing in the machinery refuses on this, so nothing in the core says it');
   }
   // This scratch repository has no remote, so there is no base to rebase onto and no fetch to ask
   // for — `test/rebase.test.ts` is where that half is exercised against a real one.
@@ -1677,7 +1814,7 @@ test('a suspended Job is reported as waiting, not as retrying, and carries no er
     },
   });
   const report = await reconcile({
-    runtime: writing({ finding: 'it is fine' }), cwd, only: job.id, board: 'proposals', readPr: false,
+    runtime: writing({ finding: 'it is fine' }), cwd, only: job.id, board: 'proposals',
   });
 
   assert.deepEqual(report.suspended, [job.id], 'waiting on a person is its own answer');
@@ -1689,11 +1826,16 @@ test('a suspended Job is reported as waiting, not as retrying, and carries no er
   assert.equal(after.suspendedFor, 'does this look right?');
 });
 
-test('a suspended PROPOSER does not keep a checkout nothing will resume into', async () => {
-  // The gated Job beside it keeps its worktree because the approved attempt continues in it. A
-  // proposer's approval is applied by the controller — no session ever wakes up there — so the
-  // checkout is a whole repository on disk holding work nobody will return to, and the line saying
-  // "attempt 2 resumes in it" described an attempt that cannot happen.
+test('a suspended PROPOSER waits with its workspace, like every other unfinished Job', async () => {
+  // **This test used to assert the opposite**, and the change is deliberate. The controller had four
+  // branches deciding whether to keep a checkout, and one of them removed a proposer's immediately —
+  // because its approval is applied by the controller and no session ever wakes up there. All four
+  // are gone (ADR-018): a workspace dies by `ttlSecondsAfterFinished` and nothing else, and a
+  // suspended Job has no `finishedAt`, so it is never a candidate.
+  //
+  // What that costs is a checkout held while a person decides, and what it buys is one rule instead
+  // of four judgements about what is inside a tree. The workspace is collected on the TTL once the
+  // approval takes the Job terminal.
   const b = await proposalBoard();
   const job = await db.job.create({
     data: {
@@ -1703,13 +1845,12 @@ test('a suspended PROPOSER does not keep a checkout nothing will resume into', a
   });
   await reconcile({
     runtime: proposing(JSON.stringify({ jobs: [{ name: 'follow-up', brief: 'do it' }] })),
-    cwd, only: job.id, board: 'proposals', readPr: false,
+    cwd, only: job.id, board: 'proposals',
   });
 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
   assert.equal(after.phase, 'suspended', 'it is still waiting for a person');
-  assert.equal(fs.existsSync(path.join(cwd, '.hkb', 'worktrees', `kb-${job.id}-1`)), false,
-    'and its checkout is gone, because nothing will run in it again');
+  assert.equal(after.finishedAt, null, 'suspended is not finished, so no TTL can reach its workspace');
   // The proposal itself is untouched by that: it lives beside the board, not in the checkout.
   assert.ok(storedProposalOf(after.id));
 });
@@ -1734,13 +1875,14 @@ test('a granted guide reaches the worker, in front of the brief', async () => {
     async run(spec: { prompt: string }) {
       seen = spec.prompt;
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
   const job = await db.job.create({
     data: { boardId: b.id, name: 'reads the rules', brief: 'Fix the thing.', isolate: false, maxBudgetUsd: 1 },
   });
-  await reconcile({ runtime: spy, cwd, only: job.id, board: 'guided', readPr: false });
+  await reconcile({ runtime: spy, cwd, only: job.id, board: 'guided' });
 
   assert.match(seen, /Always run the tests/, 'the board granted it, so the Job gets it');
   assert.ok(seen.indexOf('House rules') < seen.indexOf('Fix the thing.'), 'and it comes first');
@@ -1757,7 +1899,7 @@ test('a Job told to read a guide that is not there FAILS before it spends anythi
       guide: 'NO-SUCH-GUIDE.md', maxBudgetUsd: 1, maxRetries: 0,
     },
   });
-  await reconcile({ runtime: spy, cwd, only: job.id, board: 'guided', readPr: false });
+  await reconcile({ runtime: spy, cwd, only: job.id, board: 'guided' });
 
   assert.equal(ran, false, 'the runtime is never called — this costs nothing to find out');
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
@@ -1775,7 +1917,8 @@ test('a Job may refuse the board’s guide, and a Job with none is unchanged', a
     async run(spec: { prompt: string }) {
       seen = spec.prompt;
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
   // `--guide ""` is the empty string, which `str()` reads as unset on the JOB — so the board
@@ -1783,7 +1926,7 @@ test('a Job may refuse the board’s guide, and a Job with none is unchanged', a
   const job = await db.job.create({
     data: { boardId: b.id, name: 'inherits', brief: 'Do it.', isolate: false, maxBudgetUsd: 1 },
   });
-  await reconcile({ runtime: spy, cwd, only: job.id, board: 'guided', readPr: false });
+  await reconcile({ runtime: spy, cwd, only: job.id, board: 'guided' });
   assert.match(seen, /House rules/, 'the board default reaches a Job that said nothing');
 
   // A board with no guide gives a Job no guide: the frame is absent entirely, not empty.
@@ -1794,7 +1937,7 @@ test('a Job may refuse the board’s guide, and a Job with none is unchanged', a
   const bare = await db.job.create({
     data: { boardId: plain.id, name: 'no guide', brief: 'Do it.', isolate: false, maxBudgetUsd: 1 },
   });
-  await reconcile({ runtime: spy, cwd, only: bare.id, board: 'unguided', readPr: false });
+  await reconcile({ runtime: spy, cwd, only: bare.id, board: 'unguided' });
   assert.doesNotMatch(seen, /contributor guide/, 'no grant, no block — not an empty one');
 });
 
@@ -1830,13 +1973,14 @@ test('EVERY board default reaches a worker, not the ones somebody remembered to 
     async run(spec: never) {
       got = spec;
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
   const job = await db.job.create({
     data: { boardId: b.id, name: 'inherits everything', brief: 'Do it.', isolate: false },
   });
-  await reconcile({ runtime: spy, cwd, only: job.id, board: 'defaulted', readPr: false });
+  await reconcile({ runtime: spy, cwd, only: job.id, board: 'defaulted' });
 
   assert.ok(got);
   assert.equal(got!.model, 'claude-opus-5');
@@ -1860,7 +2004,8 @@ test('the standing rules reach every shape of Job, including a resumed approval'
     async run(spec: { prompt: string }) {
       seen = spec.prompt;
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
   const has = () => /Three standing rules/.test(seen) && /Never weaken a check/.test(seen)
@@ -1869,15 +2014,15 @@ test('the standing rules reach every shape of Job, including a resumed approval'
   const bare = await db.job.create({
     data: { boardId: b.id, name: 'bare', brief: 'Do it.', isolate: false, maxBudgetUsd: 1 },
   });
-  await reconcile({ runtime: spy, cwd, only: bare.id, board: 'proposals', readPr: false });
+  await reconcile({ runtime: spy, cwd, only: bare.id, board: 'proposals' });
   assert.ok(has(), 'an un-isolated Job, which gets no protocol at all');
 
   const isolated = await db.job.create({
     data: { boardId: b.id, name: 'isolated', brief: 'Do it.', maxBudgetUsd: 1 },
   });
-  await reconcile({ runtime: spy, cwd, only: isolated.id, board: 'proposals', readPr: false });
+  await reconcile({ runtime: spy, cwd, only: isolated.id, board: 'proposals' });
   assert.ok(has(), 'an isolated Job, beside the sandbox contract');
-  assert.match(seen, new RegExp(`Commit it on \`kb-${isolated.id}-1\``));
+  assert.doesNotMatch(seen, /Commit it on/, 'and no git contract for either shape (ADR-018)');
 
   const proposer = await db.job.create({
     data: {
@@ -1887,7 +2032,7 @@ test('the standing rules reach every shape of Job, including a resumed approval'
   });
   await reconcile({
     runtime: proposing(JSON.stringify({ jobs: [{ name: 'x', brief: 'y' }] })),
-    cwd, only: proposer.id, board: 'proposals', readPr: false,
+    cwd, only: proposer.id, board: 'proposals',
   });
 
   // The resumed approval: `approvalPrompt` replaces the brief AND the protocol, so it is the shape
@@ -1898,10 +2043,10 @@ test('the standing rules reach every shape of Job, including a resumed approval'
       gate: 'does this look right?', maxBudgetUsd: 1,
     },
   });
-  await reconcile({ runtime: spy, cwd, only: gated.id, board: 'proposals', readPr: false });
+  await reconcile({ runtime: spy, cwd, only: gated.id, board: 'proposals' });
   await db.event.create({ data: { kind: 'approved', jobId: gated.id, boardId: b.id, actor: 'ada', payload: {} } });
   await db.job.update({ where: { id: gated.id }, data: { phase: 'pending', suspendedFor: null } });
-  await reconcile({ runtime: spy, cwd, only: gated.id, board: 'proposals', readPr: false });
+  await reconcile({ runtime: spy, cwd, only: gated.id, board: 'proposals' });
   assert.match(seen, /has reviewed what you proposed/, 'this really is the approval prompt');
   assert.ok(has(), 'and it carries the standing rules too');
 });
@@ -1924,7 +2069,7 @@ test('a Job in triage is NEVER claimed, however long the board runs', async () =
 
   // To rest, not one pass: a Job that is skipped once and picked up on the third tick would pass a
   // single-pass test and still be wrong.
-  const passes = await reconcileToRest({ runtime: fakeRuntime(), cwd, board: 'proposals', readPr: false });
+  const passes = await reconcileToRest({ runtime: fakeRuntime(), cwd, board: 'proposals' });
   const claimed = passes.flatMap((p) => p.claimed);
 
   assert.ok(claimed.includes(real.id), 'the pending one ran');
@@ -1952,7 +2097,7 @@ test('an approved proposal cannot be applied to a Job in triage either', async (
   });
   await db.event.create({ data: { kind: 'approved', jobId: job.id, boardId: b.id, actor: 'ada', payload: {} } });
 
-  const report = await reconcile({ runtime: fakeRuntime(), cwd, board: 'proposals', readPr: false });
+  const report = await reconcile({ runtime: fakeRuntime(), cwd, board: 'proposals' });
   assert.deepEqual(report.filed, [], 'nothing filed');
   assert.equal(await db.job.findFirst({ where: { name: 'must not be filed' } }), null);
   assert.equal((await db.job.findUniqueOrThrow({ where: { id: job.id } })).phase, 'triage');
@@ -1971,20 +2116,23 @@ test('an approved proposal cannot be applied to a Job in triage either', async (
 const checkBoard = (slug: string) =>
   db.board.upsert({ where: { slug }, update: {}, create: { slug } });
 const runChecks = (slug: string, r: Runtime = fakeRuntime()) =>
-  reconcile({ runtime: r, cwd, board: slug, readPr: false });
+  reconcile({ runtime: r, cwd, board: slug });
 
-/** A runtime that leaves files in the worktree it was given, the way a worker does. */
+/** A runtime that provisions its workspace and leaves files in it, the way a worker does. */
 const plants = (files: Record<string, string>, extra: (cwd: string, attempt: number) => void = () => {}): Runtime => ({
   name: 'plants',
   async run(spec) {
+    const dir = spec.workspace ? workspaceOf(spec.workspace.name) : spec.cwd;
+    fs.mkdirSync(dir, { recursive: true });
     for (const [name, body] of Object.entries(files)) {
-      fs.mkdirSync(path.dirname(path.join(spec.cwd, name)), { recursive: true });
-      fs.writeFileSync(path.join(spec.cwd, name), body);
+      fs.mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
+      fs.writeFileSync(path.join(dir, name), body);
     }
-    extra(spec.cwd, spec.attempt);
+    extra(dir, spec.attempt);
     return {
       status: 'completed', ok: true, sessionId: `s-${spec.taskId}-${spec.attempt}`, text: 'did it',
       costUsd: 0, turns: 1, durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+      workspacePath: spec.workspace ? dir : null,
     };
   },
 });
@@ -1997,6 +2145,7 @@ const spyOn = (into: string[]): Runtime => ({
     return {
       status: 'completed', ok: true, sessionId: `s-${spec.taskId}-${spec.attempt}`, text: '',
       costUsd: 0, turns: 1, durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+      workspacePath: ranWhere(spec),
     };
   },
 });
@@ -2130,7 +2279,7 @@ test('the board can say what every Job on it must pass, and a Job overrides it',
   });
   const inherits = await db.job.create({ data: { boardId: b.id, name: 'inherits', brief: 'x', maxRetries: 0 } });
   const overrides = await db.job.create({ data: { boardId: b.id, name: 'overrides', brief: 'x', check: 'exit 0', maxRetries: 0 } });
-  await reconcile({ runtime: fakeRuntime(), cwd, board: 'checked-board', readPr: false });
+  await reconcile({ runtime: fakeRuntime(), cwd, board: 'checked-board' });
 
   assert.equal((await db.job.findUniqueOrThrow({ where: { id: inherits.id } })).phase, 'failed');
   assert.equal((await db.job.findUniqueOrThrow({ where: { id: overrides.id } })).phase, 'succeeded',
@@ -2179,7 +2328,7 @@ test('the lease is HELD while the check runs, so nothing else may take the Job',
 
   const said: string[] = [];
   const pass = reconcile({
-    runtime: fakeRuntime(), cwd, board: 'check-leased', readPr: false,
+    runtime: fakeRuntime(), cwd, board: 'check-leased',
     onEvent: (l: string) => said.push(l),
   });
   // The gate is opened in a `finally`, and that is not tidiness: the check spins on it with the
@@ -2264,11 +2413,11 @@ test('a PASSING check still exports, so the split did not switch the feature off
   assert.deepEqual(after.attempts[0].exported, ['docs/ok.md']);
 });
 
-test('the record says which base the tree was on, because the verdict is only worth that', async () => {
-  // README and the comment both say the check tests "what would actually merge". That is true when
-  // the rebase replayed and NOT true when it legitimately declined — a pushed branch whose pull
-  // request is out of draft, or a base that could not be fetched. Neither fails the attempt and
-  // neither should; being quiet about it is what made the claim wrong rather than qualified.
+test('the check makes NO claim about a base, because nothing replays one any more', async () => {
+  // This used to record `onBase` and `base` beside the verdict, because the check ran after a
+  // rebase and the claim everywhere was that it therefore tested what would merge. The rebase left
+  // the core (ADR-018), so the claim would now be false — and a verdict that qualifies itself with a
+  // fact nobody establishes is worse than one that says plainly what it judged.
   const b = await checkBoard('check-onbase');
   const job = await db.job.create({
     data: { boardId: b.id, name: 'says-its-base', brief: 'x', check: 'exit 1', maxRetries: 0 },
@@ -2276,24 +2425,14 @@ test('the record says which base the tree was on, because the verdict is only wo
   await runChecks('check-onbase');
 
   const rec = (await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 1 } } })).check as
-    { onBase: boolean; base: string };
-  assert.equal(typeof rec.onBase, 'boolean', 'recorded, not assumed');
-  assert.equal(typeof rec.base, 'string', 'and named — `onBase` alone says nothing anybody can act on');
+    Record<string, unknown>;
+  assert.equal(rec.onBase, undefined, 'no claim about a base');
+  assert.equal(rec.base, undefined, 'and no base named');
+  assert.equal(rec.exitCode, 1, 'what it DOES record is the exit code, which is the whole point of a check');
   assert.match(
     (await db.job.findUniqueOrThrow({ where: { id: job.id } })).lastError ?? '',
     /exited 1/,
   );
-});
-
-test('an un-isolated Job makes no claim about a base it does not have', async () => {
-  const b = await checkBoard('check-onbase-none');
-  const job = await db.job.create({
-    data: { boardId: b.id, name: 'no-branch', brief: 'x', isolate: false, check: 'exit 1', maxRetries: 0 },
-  });
-  await runChecks('check-onbase-none');
-  const rec = (await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 1 } } })).check as
-    Record<string, unknown>;
-  assert.equal(rec.onBase, undefined, 'nothing was replayed, so there is no claim to qualify');
 });
 
 // ---------------------------------------------------------------- what the worker is told, and when
@@ -2343,10 +2482,11 @@ test('the briefing survives a `stopped` attempt in between — k-1 is not the wh
       return {
         status: 'completed', ok: true, sessionId: spec.resume ?? `s-${spec.taskId}-${spec.attempt}`, text: '',
         costUsd: 0, turns: 1, durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+        workspacePath: ranWhere(spec),
       };
     },
   };
-  await reconcile({ runtime: stopper, cwd, board: 'check-walkback', readPr: false, signal: ac.signal });
+  await reconcile({ runtime: stopper, cwd, board: 'check-walkback', signal: ac.signal });
   const mid = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 2 } } });
   assert.equal(mid.outcome, 'stopped');
   assert.equal(mid.check, null, 'it ran no check, so it answered nothing');
@@ -2387,7 +2527,7 @@ test('a Job whose check is `` runs none, on a board that checks everything', asy
     data: { boardId: b.id, name: 'investigation', brief: 'read it and report', check: '', maxRetries: 0 },
   });
   const ordinary = await db.job.create({ data: { boardId: b.id, name: 'ordinary', brief: 'x', maxRetries: 0 } });
-  await reconcile({ runtime: fakeRuntime(), cwd, board: 'check-optout', readPr: false });
+  await reconcile({ runtime: fakeRuntime(), cwd, board: 'check-optout' });
 
   const out = await db.job.findUniqueOrThrow({ where: { id: investigation.id }, include: { attempts: true } });
   assert.equal(out.phase, 'succeeded', 'it opted out, so the board\'s failing check never ran');
@@ -2437,6 +2577,7 @@ const crashes = (): Runtime => ({
     return {
       status: 'error', ok: false, sessionId: null, text: '', costUsd: 0, turns: 0,
       durationMs: 0, stopReason: 'error', denials: 0, error: 'the runtime fell over',
+      workspacePath: null,
     };
   },
 });
@@ -2464,6 +2605,7 @@ const proposes = (into: string[], jobs: { name: string; brief: string }[]): Runt
     return {
       status: 'completed', ok: true, sessionId: `s-${spec.taskId}-${spec.attempt}`, text: 'proposed',
       costUsd: 0, turns: 1, durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+      workspacePath: ranWhere(spec),
     };
   },
 });
@@ -2488,7 +2630,7 @@ test('the lease is RELEASED and the attempt closed even when the post-run sectio
   });
   await assert.rejects(
     () => reconcile({
-      runtime: plants({}), cwd, board: 'lease-finally', readPr: false, leaseMs: 3_000,
+      runtime: plants({}), cwd, board: 'lease-finally', leaseMs: 3_000,
       onEvent: (l: string) => { if (/declared .answer./.test(l)) throw new Error('the log went away'); },
     }),
     /the log went away/,
@@ -2523,7 +2665,7 @@ test('the lease is released when the PRE-RUN section throws — the try begins a
   const runtime: Runtime = { ...fakeRuntime(), run: async (spec) => { ran++; return fakeRuntime().run(spec); } };
   await assert.rejects(
     () => reconcile({
-      runtime, cwd, board: 'lease-prerun', readPr: false, leaseMs: 3_000,
+      runtime, cwd, board: 'lease-prerun', leaseMs: 3_000,
       onEvent: (l: string) => { if (/granted plugin path/.test(l)) throw new Error('the log went away early'); },
     }),
     /the log went away early/,
@@ -2546,7 +2688,7 @@ test('a failure AFTER the outcome is recorded rewrites nothing', async () => {
   const job = await db.job.create({ data: { boardId: b.id, name: 'done-then-log-dies', brief: 'x', maxRetries: 2 } });
   await assert.rejects(
     () => reconcile({
-      runtime: fakeRuntime(), cwd, board: 'recorded-then-throws', readPr: false,
+      runtime: fakeRuntime(), cwd, board: 'recorded-then-throws',
       // The final line of the pass, after the three writes.
       onEvent: (l: string) => { if (/succeeded\s+completed/.test(l)) throw new Error('pipe closed at the end'); },
     }),
@@ -2560,7 +2702,7 @@ test('a failure AFTER the outcome is recorded rewrites nothing', async () => {
   assert.equal(await db.event.count({ where: { jobId: job.id, kind: 'crashed' } }), 0, 'and no crashed event is invented');
   assert.equal(await db.lease.findUnique({ where: { jobId: job.id } }), null, 'the lease is released all the same');
   // And nothing to re-claim: a second pass finds no work.
-  const again = await reconcile({ runtime: fakeRuntime(), cwd, board: 'recorded-then-throws', readPr: false });
+  const again = await reconcile({ runtime: fakeRuntime(), cwd, board: 'recorded-then-throws' });
   assert.deepEqual(again.claimed, [], 'the delivered work is not bought twice');
 });
 
@@ -2581,7 +2723,7 @@ test('a holder whose lease was taken mid-run does not write the Job row from its
   };
   await assert.rejects(
     () => reconcile({
-      runtime, cwd, board: 'stale-catch', readPr: false,
+      runtime, cwd, board: 'stale-catch',
       onEvent: (l: string) => { if (/lease was taken mid-run/.test(l)) throw new Error('log died while reporting the loss'); },
     }),
     /log died while reporting the loss/,
@@ -2605,7 +2747,7 @@ test('a Job left `running` with no lease and no live holder is reclaimed on the 
   // attempt from another machine, or from a live process, is left alone: see the sibling tests
   // that model another host's run in flight this same way.
   await db.attempt.create({ data: { jobId: job.id, k: 1, host: `${os.hostname()}/999999@fake`, maxBudgetUsd: 1, attemptDeadlineSeconds: 1800, startedAt: new Date() } });
-  const r = await reconcile({ runtime: fakeRuntime(), cwd, board: 'stranded-running', readPr: false });
+  const r = await reconcile({ runtime: fakeRuntime(), cwd, board: 'stranded-running' });
   assert.deepEqual(r.reclaimed, [job.id]);
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
   assert.equal(after.attempts[0].outcome, 'lost', 'the open attempt is closed');
@@ -2624,7 +2766,7 @@ test('the interrupted-check notice survives a `stopped` attempt in between', asy
   await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'h', maxBudgetUsd: 1, attemptDeadlineSeconds: 1800, startedAt: at, endedAt: at, outcome: 'completed', sessionId: 's-walk', reason: 'check interrupted by a stop — the run stands, the check runs again' } });
   await db.attempt.create({ data: { jobId: job.id, k: 2, host: 'h', maxBudgetUsd: 1, attemptDeadlineSeconds: 1800, startedAt: at, endedAt: at, outcome: 'stopped', sessionId: 's-walk' } });
   const prompts: string[] = [];
-  await reconcile({ runtime: spyingPlants(prompts, {}), cwd, board: 'interrupted-walkback', readPr: false });
+  await reconcile({ runtime: spyingPlants(prompts, {}), cwd, board: 'interrupted-walkback' });
   assert.equal(prompts.length, 1);
   assert.match(prompts[0], /a stop landed while this command was being run/, 'told, two rows back');
 });
@@ -2652,7 +2794,7 @@ test('a stop during the check does not relabel a run that had already finished',
     fs.writeFileSync(path.join(where, 'ignored'), '');
   });
   const pass = reconcile({
-    runtime: writesResult(runtime, 'answer', '42'), cwd, board: 'check-stopped', readPr: false,
+    runtime: writesResult(runtime, 'answer', '42'), cwd, board: 'check-stopped',
     signal: stop.signal, onEvent: (l: string) => said.push(l),
   });
   try {
@@ -2684,7 +2826,7 @@ test('a stop during the check does not relabel a run that had already finished',
   const prompts: string[] = [];
   await reconcile({
     runtime: writesResult(spyingPlants(prompts, { 'docs/out.md': '# out\n' }), 'answer', '42'),
-    cwd, board: 'check-stopped', readPr: false,
+    cwd, board: 'check-stopped',
   });
   assert.equal(prompts.length, 1, 'it did go round again');
   assert.doesNotMatch(prompts[0], /refused it/, 'no refusal happened, so none is quoted');
@@ -2711,7 +2853,7 @@ test('a PROPOSING Job runs no check, however the board is configured', async () 
   const prompts: string[] = [];
   await reconcile({
     runtime: proposes(prompts, [{ name: 'a follow-up', brief: 'do the next thing' }]),
-    cwd, board: 'check-proposes', readPr: false,
+    cwd, board: 'check-proposes',
   });
 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
@@ -2762,14 +2904,14 @@ test('the walk-back stops at a crash that took the session with it', async () =>
   assert.ok(one.lastSessionId, 'attempt 1 left a session for attempt 2 to resume');
 
   // Attempt 2 crashes in the runtime, which nulls the session.
-  await reconcile({ runtime: crashes(), cwd, board: 'check-walk-cold', readPr: false });
+  await reconcile({ runtime: crashes(), cwd, board: 'check-walk-cold' });
   const two = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
   assert.equal(two.attempts[1].outcome, 'crashed');
   assert.equal(two.lastSessionId, null, 'and the session is gone with it');
 
   // Attempt 3 is cold. It is told the command, plainly, and nothing about a refusal it cannot see.
   const prompts: string[] = [];
-  await reconcile({ runtime: spyOn(prompts), cwd, board: 'check-walk-cold', readPr: false });
+  await reconcile({ runtime: spyOn(prompts), cwd, board: 'check-walk-cold' });
   assert.match(prompts[0], /This command must exit 0 in your checkout when you finish/,
     'the plain line, which the refusal used to suppress');
   assert.doesNotMatch(prompts[0], /the same session, and normally the same checkout/,
@@ -2786,13 +2928,13 @@ test('the walk-back DOES cross a cap that kept the session, because the refusal 
   });
   await runChecks('check-walk-capped', plants({}));
   // A cap, which keeps the session the check refused.
-  await reconcile({ runtime: capped('max_turns'), cwd, board: 'check-walk-capped', readPr: false });
+  await reconcile({ runtime: capped('max_turns'), cwd, board: 'check-walk-capped' });
   const two = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
   assert.equal(two.attempts[1].outcome, 'max_turns');
   assert.ok(two.lastSessionId, 'the session survives a cap');
 
   const prompts: string[] = [];
-  await reconcile({ runtime: spyOn(prompts), cwd, board: 'check-walk-capped', readPr: false });
+  await reconcile({ runtime: spyOn(prompts), cwd, board: 'check-walk-capped' });
   assert.match(prompts[0], /the check this Job must pass refused it/,
     'the refusal is still the most recent thing anybody said about this session');
 });
@@ -2892,7 +3034,8 @@ const promptOf = () => {
     async run(spec: { prompt: string }) {
       seen = spec.prompt;
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
   return { runtime, seen: () => seen };
@@ -2905,14 +3048,14 @@ test('the board`s steps reach a worker whose brief never carried them, AFTER the
     data: { boardId: b.id, name: 'briefed by hand', brief: 'Fix the parser.', maxBudgetUsd: 1, maxRetries: 0 },
   });
   const spy = promptOf();
-  await reconcile({ runtime: spy.runtime, cwd, only: job.id, board: 'steps', readPr: false });
+  await reconcile({ runtime: spy.runtime, cwd, only: job.id, board: 'steps' });
   const seen = spy.seen();
 
   assert.match(seen, /Standing steps for work on this board, from the workflow `ends`:/);
   assert.match(seen, /Open a draft pull request against your base\./);
   // The ordering that was backwards: the core says how work is done here, the board says what doing
   // it ends in. Two reply contracts in the wrong order is not an instruction.
-  assert.ok(seen.indexOf('Commit it on') < seen.indexOf('Standing steps'), 'the contract comes first');
+  assert.ok(seen.includes('Standing steps'), 'the board\'s steps are appended after the brief');
   // And the Job row is untouched — nothing was frozen onto it, which is what lets `hkb queue` work.
   assert.equal((await db.job.findUniqueOrThrow({ where: { id: job.id } })).brief, 'Fix the parser.');
 });
@@ -2924,7 +3067,7 @@ test('a proposing Job gets no steps: its whole output is one JSON file', async (
     data: { boardId: b.id, name: 'proposer', brief: 'Think it through.', proposes: 'jobs', maxBudgetUsd: 1, maxRetries: 0 },
   });
   const spy = promptOf();
-  await reconcile({ runtime: spy.runtime, cwd, only: job.id, board: 'steps', readPr: false });
+  await reconcile({ runtime: spy.runtime, cwd, only: job.id, board: 'steps' });
   assert.doesNotMatch(spy.seen(), /Standing steps/);
 });
 
@@ -2935,7 +3078,7 @@ test('a --no-isolate Job gets no steps either — it has no branch for them to b
     data: { boardId: b.id, name: 'in place', brief: 'Look at it.', isolate: false, maxBudgetUsd: 1, maxRetries: 0 },
   });
   const spy = promptOf();
-  await reconcile({ runtime: spy.runtime, cwd, only: job.id, board: 'steps', readPr: false });
+  await reconcile({ runtime: spy.runtime, cwd, only: job.id, board: 'steps' });
   assert.doesNotMatch(spy.seen(), /Standing steps/);
   assert.doesNotMatch(spy.seen(), /pull request/i, 'and it is not told to open one for a branch it does not have');
 });
@@ -2950,7 +3093,7 @@ test('a board pointing at a workflow that is not there REFUSES the attempt, and 
   });
   let ran = false;
   const runtime = { name: 'never', async run() { ran = true; throw new Error('the runtime must not be reached'); } } as never;
-  await reconcile({ runtime, cwd, only: job.id, board: 'steps', readPr: false });
+  await reconcile({ runtime, cwd, only: job.id, board: 'steps' });
 
   assert.equal(ran, false, 'nothing was spent on a Job that could not be briefed');
   const row = await db.job.findUniqueOrThrow({ where: { id: job.id } });
@@ -3020,7 +3163,7 @@ test('a Job ends on its deadline through a real reconcile, and keeps no session 
                durationMs: 0, stopReason: 'max_turns', denials: 0, error: null };
     },
   } as never;
-  await reconcile({ runtime: slow, cwd, only: job.id, board: 'proposals', readPr: false });
+  await reconcile({ runtime: slow, cwd, only: job.id, board: 'proposals' });
 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
   assert.equal(after.phase, 'failed', 'five retries remained and none of them was taken');
@@ -3057,7 +3200,7 @@ test('a Job already past its deadline is REFUSED at the claim, before a session 
 
   let ran = false;
   const never = { name: 'never', async run() { ran = true; throw new Error('the runtime must not be reached'); } } as never;
-  const r = await reconcile({ runtime: never, cwd, only: job.id, board: 'proposals', readPr: false });
+  const r = await reconcile({ runtime: never, cwd, only: job.id, board: 'proposals' });
 
   assert.equal(ran, false, 'nothing was spent on a Job that was already over');
   assert.deepEqual(r.claimed, [], 'and it was not claimed at all');
@@ -3083,6 +3226,6 @@ test('and a Job inside its deadline is still claimed, so the guard is not just "
     },
   });
   await db.job.update({ where: { id: job.id }, data: { phase: 'pending' } });
-  const r = await reconcile({ runtime: fakeRuntime(), cwd, only: job.id, board: 'proposals', readPr: false });
+  const r = await reconcile({ runtime: fakeRuntime(), cwd, only: job.id, board: 'proposals' });
   assert.deepEqual(r.claimed, [job.id], 'three minutes spent against an hour is not over');
 });

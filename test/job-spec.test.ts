@@ -157,14 +157,6 @@ test('a proposer may not have its gate cleared — the proposal would never be a
   assert.equal((await db.job.findUniqueOrThrow({ where: { id: k.id } })).gate, null);
 });
 
-test('an un-isolated Job may not be given a base it could never use', async () => {
-  // `hkb new` refuses the pair at file time, calling a stored-but-never-honoured spec field a
-  // silent failure. Setting it later reached the same place, and `hkb show` does not even print it.
-  const j = await mkJob('in place', { isolate: false });
-  await refusal(() => setJobSpec(db, j.id, { base: 'origin/main' }, { by: 'a' }), /cuts no branch/);
-  assert.equal((await db.job.findUniqueOrThrow({ where: { id: j.id } })).base, null);
-});
-
 test('the brief is read only after the guards, and rendered the way `hkb new` renders it', async () => {
   let read = false;
   const producer = async () => { read = true; return 'review {{page}} carefully'; };
@@ -228,7 +220,7 @@ test('describeChange renders a list and an absence as something a person says', 
 test('SETTABLE names every field the CLI can set, and no field it cannot', () => {
   // The closed list is the guard. If a field is added here it must be reachable, and if a flag is
   // added it must be in here — the failure otherwise is silent in both directions.
-  for (const f of ['name', 'brief', 'model', 'maxBudgetUsd', 'base', 'labels', 'gate', 'inputs', 'check']) {
+  for (const f of ['name', 'brief', 'model', 'maxBudgetUsd', 'labels', 'gate', 'inputs', 'check']) {
     assert.ok((SETTABLE as readonly string[]).includes(f), `${f} is settable`);
   }
   for (const f of ['phase', 'proposes', 'isolate', 'boardId', 'id', 'lastError', 'lastSessionId']) {

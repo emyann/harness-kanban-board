@@ -35,7 +35,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
  *
  * Ten minutes is longer than the five-minute `LEASE_GRACE_MS` the lease is given past the run's own
  * `timeoutMs` (`src/controller.ts`), and that is fine because the RENEWER is what covers it: the
- * lease is held — and renewed on its own timer — across the rebase, this command and the record
+ * lease is held — and renewed on its own timer — across this command and the record
  * writes, and released only once the outcome is on the row. The grace is the margin for teardown,
  * not the budget for the check.
  *
@@ -160,22 +160,6 @@ export type CheckRecord = {
   ms: number;
   /** Why it never produced an exit code, when it did not. A complete predicate — see above. */
   why?: string;
-  /**
-   * Whether the tree this ran in had the base it will be merged into in it, and which ref that is.
-   *
-   * The check runs after `rebaseOntoBase`, and the claim everywhere else is that it therefore tests
-   * *what would merge*. That claim is not always true: a pushed branch whose pull request is no
-   * longer a draft is deliberately not rewritten, and a fetch that failed leaves the base ref as of
-   * whenever somebody last pulled. Neither fails the attempt and neither should — but a verdict
-   * about a tree is worth exactly as much as the base it sat on, so which one it was is recorded
-   * rather than assumed (`src/rebase.ts`, `src/controller.ts`).
-   *
-   * Absent for a Job with no worktree: `--no-isolate` runs in the repository itself, where there is
-   * no branch and no replay, so there is no claim to qualify.
-   */
-  onBase?: boolean;
-  /** The base ref `onBase` is about, e.g. `origin/main`. Absent whenever `onBase` is. */
-  base?: string;
 };
 
 export type CheckResult = ({ ok: true; record: null } | { ok: false; record: CheckRecord }) & {
@@ -561,15 +545,7 @@ export function describeCheck(r: CheckRecord): string {
   const said = r.kind === 'exit'
     ? `exited ${r.exitCode} after ${Math.round(r.ms / 1000)}s`
     : (r.why ?? `ended after ${Math.round(r.ms / 1000)}s without an exit code`);
-  // Only where there is a claim to qualify. See `CheckRecord.onBase`: the verdict is about a tree,
-  // and which base that tree sat on is the difference between "this would merge" and "this is what
-  // the branch does where it stands".
-  const where = r.onBase === undefined || !r.base
-    ? ''
-    : r.onBase
-      ? ` — on ${r.base}`
-      : ` — NOT on ${r.base}: the branch was not replayed onto it, so this is the tree as it stands`;
-  return `check \`${r.command}\` ${said}${where}`;
+  return `check \`${r.command}\` ${said}`;
 }
 
 /**
@@ -608,9 +584,5 @@ export function storedCheck(value: unknown): CheckRecord | null {
     stderr: typeof v.stderr === 'string' ? v.stderr : '',
     ms: typeof v.ms === 'number' ? v.ms : 0,
     ...(typeof v.why === 'string' && v.why ? { why: v.why } : {}),
-    // Both or neither: `onBase` without the ref it is about says nothing anybody can act on.
-    ...(typeof v.onBase === 'boolean' && typeof v.base === 'string' && v.base
-      ? { onBase: v.onBase, base: v.base }
-      : {}),
   };
 }

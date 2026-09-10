@@ -9,11 +9,11 @@ covers:
   - path: src/watch.ts
     sha: 992b53f9dc3ef4284c2a1bf0201794490afee393
   - path: src/hkb.ts
-    sha: 5dc47f4b0e302d2eba5ca1d0895104f4f6e00bcb
+    sha: c06820804f259a976336c80742b3068586df9d84
   - path: prisma/schema.prisma
-    sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
-generated_at_commit: 5279b8a
-last_refreshed: 2026-09-09
+    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 related:
   [
     architecture/the-loop,

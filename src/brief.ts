@@ -1,126 +1,32 @@
 import { PROPOSAL_MAX_BYTES, PROPOSAL_MAX_JOBS } from './proposals.ts';
 
 /**
- * The **sandbox contract**: what every isolated Job is told, on top of its own brief.
+ * What a session is told, on top of the brief somebody filed.
  *
- * ADR-017 decision 5 drew the line this file now sits on, and the boundary inventory of 2026-09-07
- * stated it in one sentence: *the git sandbox contract is core; the pull request is one consumer's
- * opinion.* So the test for a line being here is not whether it is good advice — it is whether the
- * machinery is what makes it true afterwards:
+ * **This file used to open with the sandbox contract** — commit on your branch, rebase onto your
+ * base, push that branch and nothing else — and the test for a line belonging here was whether *the
+ * machinery made it true afterwards*: the controller rebased, a `pre-push` hook refused, the sweep
+ * read pushed state. That test was the right one and it is exactly what deleted the contract. The
+ * core requires no commit, no push and no rebase (ADR-018), so nothing here is enforced by anything
+ * about git, so none of it may be said.
  *
- *   - **commit on your branch** — the branch is what the core reads. Uncommitted work is invisible
- *     to `ahead` and `onBase` (`src/rebase.ts`), so a run that leaves its changes in the tree
- *     produced nothing as far as anything downstream can tell.
- *   - **rebase onto the base before you finish** — the worktree was cut from `base` when the attempt
- *     was claimed and the base moves while the work runs (`docs/rebuild-plan.md` item 10). After the
- *     run the controller compares the branch against the base as it is *then* and fails the attempt
- *     when it cannot be put there, so this is the prompt half of a pairing whose other half refuses.
- *   - **push your branch** — and this is the line ADR-017 nearly moved out one card too early. It
- *     reads like a step's content, and it is not yet: the core *reads pushed state*. `pushedRef`
- *     decides whether a rebase is legal at all, `sweepWorktrees` keeps a checkout for ever when its
- *     work "has never been pushed anywhere", and `src/rebase.ts` lease-pushes on the controller's
- *     own authority. Taken out of here with `Board.defaultWorkflow` unset — which is every board on
- *     its first day — every `--from` Job, every proposal-created child and every hand-filed Job
- *     commits, replies, and is recorded `succeeded — produced nothing`. The line leaves when #49
- *     retires the reads, and not before.
- *   - **push only your own branch, and never delete one** — the escape rule of the sandbox, and the
- *     one line here that is not prose at all: a `pre-push` hook installed on this worktree refuses
- *     everything else, after git has resolved the aliases, config and shells that a parser of the
- *     command line could not (`src/push.ts`).
- *   - **if you cannot finish, still commit and push** — the worktree is kept, and a commit is the
- *     only form in which unfinished work survives the sweep.
+ * What is left is everything that was never about git, and each piece is still paired with a
+ * refusal — which is the same rule, applied to what remains:
  *
- * **`never merge` is the exception, and it is written as one.** A merge on the forge is an API call
- * no git hook is on the path of, so that line is asking rather than refusing — and the header of a
- * file whose whole claim is "every line here is enforced" may not quietly carry one that is not.
- * It is grouped under a sentence that says so.
+ *   - `withInputs` — the material, prepended, because a brief that says "review the schema below"
+ *     wants the schema already on the page. An input that could not be read fails the attempt.
+ *   - `withResults` / `withArtifacts` — what the Job DECLARED it would produce, named by path. A
+ *     declared output that is not there fails the attempt (ADR-008).
+ *   - `withCheck` / `withCheckFailure` — the command the attempt will be judged by, told to the
+ *     worker *before* it is judged, and what the last attempt's run of it said.
+ *   - `withGuide` — the repository's own rules (ADR-013), read from the repository rather than the
+ *     workspace, so a worker cannot steer its own next attempt.
+ *   - `withStandingRules` — the three that reach every worker (ADR-014).
+ *   - `approvedPrompt` / `withProposal` — the human gate and the proposal contract (ADR-010, -011).
  *
- * What DID move out to a workflow file (`src/templates.ts`) is the pull request: `gh pr create`,
- * which base it opens against, the reply carrying its URL, and the attribution rule, which is a fact
- * about one repository. The attribution rule left as prose in both directions — the runtime sets the
- * SDK's own `attribution` option instead (`src/runtime/claude.ts`), which is mechanism where a
- * sentence was.
- *
- * Three things about the base are the caller's to get right, and all three were wrong first:
- *
- *   - **`rebaseOnto` is passed only when a rebase is legal here.** A resumed attempt lands in a
- *     checkout whose branch is already on the remote; rebasing there makes the next push
- *     non-fast-forward, and the rule below forbids the force that would fix it. The step has no
- *     legal ending, so the caller omits it and the controller rebases after the run.
- *   - **`base` is passed always, including then.** It is what a workflow's own step means by "your
- *     base", and a resumed chain step used to be told nothing about it at all — so its pull request
- *     opened against the default branch carrying its parent's commits, the exact failure the base
- *     was named to prevent.
- *   - **the fetch is refused outright for an attempt branch.** `git fetch origin kb-33-1` inside a
- *     worktree updates `refs/remotes/origin/kb-33-1` in the *shared* ref store — the exact ref
- *     `--force-with-lease` compares against for Job 33's own push. `fetchBase` refuses it for that
- *     reason, and a prompt that asks the worker to make the fetch hands the protection straight
- *     back.
+ * A step that wants a branch committed, pushed and opened as a pull request is **content**, in a
+ * workflow file, appended after all of this (`src/templates.ts`, ADR-017 decision 5).
  */
-export type BaseAdvice = {
-  /** The ref the worktree was cut from, whatever may be done about it. `origin/main`, or an attempt branch. */
-  base?: string;
-  /** The ref to rebase onto before finishing, or absent when a rebase here has no legal ending. */
-  rebaseOnto?: string;
-  /** May that ref be fetched first? False when its remote-tracking copy is somebody's lease. */
-  fetch?: boolean;
-};
-
-export function withSandbox(brief: string, branch: string, base: BaseAdvice = {}): string {
-  // Only when there is a remote to rebase against. `baseRef` falls back to `HEAD` in a repository
-  // with no origin, and telling a worker to `git fetch origin` there is an instruction to fail.
-  const onto = base.rebaseOnto?.startsWith('origin/') ? base.rebaseOnto : null;
-  const rebasing = onto
-    ? [
-      '  2. Before you finish, rebase onto the base you were cut from — it moved while you worked:',
-      base.fetch === false
-        // Deliberate, and said out loud so it does not read as an omission somebody should fix.
-        ? `     \`git rebase ${onto}\` — do NOT fetch it first; hkb tracks that branch itself.`
-        : `     \`git fetch origin ${onto.slice('origin/'.length)} && git rebase ${onto}\``,
-      ...(base.fetch === false
-        ? []
-        : ['     Fetch that ONE branch, not everything — hkb compares the rest against what it last saw.']),
-      '     Then re-run the checks: a branch that was green against a stale base is not evidence',
-      '     about the merge.',
-    ]
-    : [];
-  /** Steps after the rebase shift by one when there is one. */
-  const n = (i: number) => i + (rebasing.length ? 1 : 0);
-  // Named whether or not it can be rebased onto, because a step somebody else wrote says "your
-  // base" and has to mean this. A resumed attempt is the case that proves it: nothing may be
-  // rebased there, and the pull request still opens against exactly this ref.
-  const naming = base.base
-    ? ['', `Your base — what this branch was cut from, and what it will be reviewed against — is \`${base.base}\`.`]
-    : [];
-  return [
-    brief.trim(),
-    '',
-    '---',
-    '',
-    'You are working in a git worktree of your own, already checked out on the branch',
-    `\`${branch}\`. It is yours — nothing else writes it. When the work is done:`,
-    '',
-    `  1. Commit it on \`${branch}\`. Write a plain message: a short imperative subject, and a body`,
-    '     explaining why if the why is not obvious. Uncommitted work is work nothing can see.',
-    ...rebasing,
-    `  ${n(2)}. Push it: \`git push -u origin ${branch}\``,
-    `  ${n(3)}. Reply with one line: what you did, and the branch.`,
-    ...naming,
-    '',
-    'Rules, and hkb refuses on these rather than trusting them:',
-    `  - \`${branch}\` is the only branch you may push, and you may not delete anything on the remote.`,
-    '    A push of anything else is refused by a git hook, whatever form it is written in.',
-    '  - Never `git push --force`. A branch that has already been pushed and whose base has moved is',
-    '    the controller\'s to rewrite, not yours.',
-    '',
-    'And one rule that is asking, because nothing here can refuse it:',
-    '  - Never merge — not into the default branch, and not anywhere else. What happens to your',
-    '    work once it is pushed is decided outside this Job.',
-    '',
-    'If you cannot finish, still commit and push what you have and say plainly what is unfinished.',
-    'The worktree is kept, and a commit is the only form uncommitted work survives in.',
-  ].join('\n');
-}
 
 /**
  * What the Job was GIVEN, prepended to its brief.
@@ -195,8 +101,7 @@ export function withArtifacts(brief: string, paths: Record<string, string>): str
 /**
  * The results contract, appended to whatever brief the Job already has.
  *
- * Separate from `withSandbox` on purpose: that one is the sandbox contract and is applied only to an
- * isolated Job, because only an isolated Job has a branch. Results are the opposite case — they
+ * Results are the opposite case — they
  * matter most to a Job that produces no commit at all — so this is applied to both.
  *
  * The paths are absolute and outside every checkout (`src/results.ts`), so writing one cannot land
@@ -227,7 +132,7 @@ export function withResults(brief: string, paths: Record<string, string>): strin
  * What an approved Job is told, in place of its brief.
  *
  * ADR-010 decision 4, and the piece that makes a gate work rather than merely pause: a resumed
- * attempt otherwise re-sends `withSandbox(job.brief, branch)`, so an approved Job would propose
+ * attempt otherwise re-sends the same brief, so an approved Job would propose
  * again instead of applying. The session is continued (`lastSessionId`), so the agent already holds
  * everything it proposed — this only has to say that a person said yes, and in whose words.
  *
@@ -474,34 +379,6 @@ export function withGuide(brief: string, guide: string, from: string): string {
   ].join('\n');
 }
 
-/**
- * What an isolated Job is told when its deliverable is **not a diff**.
- *
- * `withSandbox` above asks for a commit, and asking a Job that produces no commit for one is worse
- * than telling it nothing: composed with the proposal contract, one prompt told a worker both to
- * "commit what you have" and to "write the file and stop", which is not an instruction at all. Found
- * by printing the prompt before spending a live run on it.
- *
- * The worktree is still worth naming. It is the sandbox — the reason the worker cannot touch the
- * operator's checkout — and a worker that does not know it is in one will look for the repository
- * somewhere else. So this says where it is standing and what that place is *for*, and nothing about
- * commits.
- *
- * ADR-008 decided this generally: *"`isolate` returns to meaning one thing — where the work runs."*
- * That is still unimplemented for every other kind of output-only Job; this covers the one where the
- * contradiction is explicit.
- */
-export function withWorktree(brief: string, branch: string): string {
-  return [
-    brief.trimEnd(),
-    '',
-    '---',
-    '',
-    `You are working in a git worktree of your own, checked out on \`${branch}\`. It is a sandbox, not`,
-    'a deliverable: nothing you leave in it is collected, and you should not commit or push anything.',
-    'Read and scratch freely; what you are asked to hand over is below.',
-  ].join('\n');
-}
 
 export function withProposal(brief: string, path: string, ceiling: number | null): string {
   return [

@@ -68,6 +68,25 @@ export function queryOptions(spec: WorkerSpec, abortController: AbortController)
   const advertised = tools.filter((t) => t !== 'Skill');
   return {
       cwd: spec.cwd,
+      // ---- the workspace, provisioned by the harness rather than by us.
+      //
+      // `Options` has no worktree field, but `extraArgs` is documented as "Additional CLI arguments
+      // to pass to Claude Code" and the SDK spawns that executable — so the flag is reachable, and
+      // it was measured to be rather than assumed: through the SDK, `extraArgs: { worktree }`
+      // created `.claude/worktrees/<name>` on branch `worktree-<name>`, took a `git worktree lock`
+      // on it for the run, and reported the path back on the `init` message.
+      //
+      // **This is an untyped escape hatch**, and that is the one thing to know about it: a flag
+      // renamed upstream fails silently rather than at compile time. `test/workspace.live.test.ts`
+      // is the answer — it asserts a worktree actually appears, which is the only kind of proof this
+      // arrangement admits. It is gated on `HKB_LIVE_SDK=1`, so the controller ALSO verifies the
+      // path it gets back is not the repository itself (`isolationShortfall`, `src/controller.ts`):
+      // a guard that only runs when somebody remembers to run it is not a guard.
+      //
+      // What it buys is everything `src/worktree.ts` used to do by hand: creation, the base kept
+      // current, `.worktreeinclude` for gitignored files, the lock against a concurrent sweep, and
+      // a periodic sweep that keeps anything still holding work.
+      ...(spec.workspace ? { extraArgs: { worktree: spec.workspace.name } } : {}),
       model: spec.model,
       maxTurns: spec.maxTurns,
       // The runaway-cost stop, and it covers subagent spend too. Without it an open-ended
@@ -202,6 +221,7 @@ export const claudeRuntime: Runtime = {
     const onStop = () => stopNow('stopped by the operator');
     if (spec.signal?.aborted) queueMicrotask(onStop);
     else spec.signal?.addEventListener('abort', onStop, { once: true });
+    let workspacePath: string | null = null;
     const stream = query({
       prompt: spec.prompt,
       options: queryOptions(spec, abortController),
@@ -212,7 +232,13 @@ export const claudeRuntime: Runtime = {
     // failure needs. So the throw is caught and kept beside the result, not instead of it.
     try {
       for await (const message of stream) {
-        if (message.type === 'system' && message.subtype === 'init') sessionId = message.session_id;
+        if (message.type === 'system' && message.subtype === 'init') {
+          sessionId = message.session_id;
+          // Where the session really landed. Asked for by name, answered with a path — so a
+          // workspace the harness placed somewhere we did not predict is still the place the
+          // declared outputs are collected from. Read off the same message the session id is.
+          if (spec.workspace && typeof message.cwd === 'string') workspacePath = message.cwd;
+        }
         else if (!sessionId && 'session_id' in message && message.session_id) sessionId = message.session_id;
 
         if (!announced && sessionId) {
@@ -258,6 +284,7 @@ export const claudeRuntime: Runtime = {
       // rather than aborting: `costUsd` above comes from the result, and that is what reaches the
       // board's spend ceiling.
       error: timedOut ? `wall clock: ${spec.timeoutMs}ms${result ? ' (interrupted, reported)' : ' (aborted)'}` : error,
+      workspacePath,
     };
   },
 };

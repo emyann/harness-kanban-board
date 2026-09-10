@@ -6,7 +6,10 @@ import { boardDir } from './db-url.ts';
 
 export { boardDir };
 import { reconcile } from './controller.ts';
-import { sweepWorktrees } from './worktree.ts';
+import { basename as pathBasename } from 'node:path';
+import {
+  BUILT_IN_TTL_SECONDS, collectable, existingWorkspaces, removeWorkspace,
+} from './workspaces.ts';
 import { holderId, holderLiveness, parseHolder, pidIsAlive } from './liveness.ts';
 import { windowStart } from './limits.ts';
 import { cliEntry, PACKAGE_ROOT } from './paths.ts';
@@ -26,7 +29,7 @@ import type { Runtime } from './runtime/index.ts';
  *   - a lease expires, because its holder died without releasing it;
  *   - a run passes its wall clock (the runtime's own timer, but only while something is watching it);
  *   - work scheduled for later becomes due — a kind that does not exist yet;
- *   - a worktree becomes safe to reclaim, because its pull request landed somewhere else and
+ *   - a finished Job's workspace outlives its TTL somewhere else and
  *     nothing here was told. That one is a sweep, on its own slower timer: see `SWEEP_EVERY_MS`.
  *
  * The change-driven half — "a Job was just filed, run it" — is always one `hkb run` away, so it does
@@ -49,7 +52,7 @@ export const DEFAULT_INTERVAL_MS = 45_000;
  * This is the fourth time-driven thing, and it belongs here for the same reason as the other
  * three: a checkout becomes safe to delete *later*, when its pull request lands, and nothing tells
  * us when that happened. Only a clock can ask again. It is rare because the answer changes on the
- * scale of a code review, and because asking costs one `ls-remote`.
+ * scale of a code review, and because asking costs one `git worktree list`.
  */
 export const SWEEP_EVERY_MS = 10 * 60_000;
 
@@ -265,11 +268,10 @@ export type LoopDeps = {
   now?: () => number;
   /** Stop after this many ticks. Tests only — a loop with no exit is not a thing to unit test. */
   maxTicks?: number;
-  /** Reclaim worktrees on the tick. Default on; off for a caller that wants no remote reads. */
+  /** Collect finished Jobs' workspaces on the tick. Default on. */
   sweep?: boolean;
   /** How often to sweep. Defaults to `SWEEP_EVERY_MS`; a test that wants every tick passes 0. */
   sweepEveryMs?: number;
-  readPr?: boolean;
   /**
    * The wait between ticks. Injectable because a suspend happens *during* it — a test that models
    * one by advancing a clock here is telling the same story the machine does, and does not have to
@@ -387,32 +389,81 @@ export async function loop(deps: LoopDeps): Promise<number> {
           now: at,
           reclaim: !slept,
           signal: deps.signal,
-          readPr: deps.readPr,
           onEvent: (l) => log(boards.length > 1 ? `[${b.slug}] ${l}` : l),
         });
         announce(`refused:${b.slug}`, report.refused ? `refused  ${b.slug}: ${report.refused}` : null);
 
-        // ---- reclaim the checkouts of work that has landed. After reconcile, never before: a
-        // pass that claimed a Job has just locked that Job's worktree, and the sweep must see the
-        // lock rather than race it.
+        // ---- collect the workspaces of Jobs that have finished: `ttlSecondsAfterFinished`, and
+        // nothing else (`src/workspaces.ts`).
+        //
+        // After reconcile, never before, for the reason it always was: a pass that just claimed a
+        // Job has a live session standing in that workspace. The old race was against a `git
+        // worktree lock` this process took; now the runtime takes it, which is if anything a
+        // stronger guarantee — but the ordering is free, so it stays.
+        //
+        // What this no longer does is *inspect*. The old sweep asked each checkout whether it held
+        // uncommitted or unpushed work and kept it if so. That question needed `pushedRef`,
+        // `heldWork` and `whyKept`, only had an answer while the core required a push, and had no
+        // opinion about age at all. A Job that is `pending` or `suspended` has no `finishedAt`, so
+        // its workspace is never a candidate; a finished one's survives the whole TTL, which is the
+        // window an operator has to go and look at it.
         if (sweeping) {
           const repo = b.repoPath ?? deps.cwd;
-          if (repo) {
-            for (const swept of sweepWorktrees(repo)) {
+          // **One `git worktree list`, then the board** — never the other way round. Starting from
+          // the board means a pair of git processes and a `swept` event per finished Job per tick,
+          // for ever, describing nothing happening; `removeWorkspace` reports an absent workspace as
+          // removed (it must — the sweep is level-triggered), so there is no natural stopping point.
+          // CLAUDE.md: no per-Job calls when a board-wide one exists.
+          const present = repo ? existingWorkspaces(repo) : [];
+          if (repo && present.length) {
+            // **By id across every board, not by board.** `Board.repoPath` has no unique
+            // constraint and two boards on one repository is a supported, tested arrangement — so
+            // a workspace found here may belong to the OTHER board. Filtering the query by
+            // `boardId` made every one of those look like a Job whose row had been deleted, which
+            // the synthetic row below marks collectable immediately, with no TTL: this board would
+            // delete that board's checkouts out from under live work. Existence is a question about
+            // the machine; ownership is a separate one, asked second.
+            const rows = await db.job.findMany({
+              where: { id: { in: present.map((w) => w.jobId) } },
+              select: { id: true, boardId: true, finishedAt: true, phase: true, lastSessionId: true },
+            });
+            const known = new Map(rows.map((r) => [r.id, r]));
+            const mine = present.filter((w) => (known.get(w.jobId)?.boardId ?? b.id) === b.id);
+            // A workspace whose Job ROW IS GONE is collectable outright, and `hkb rm` is why: it is
+            // the normal way to tidy a finished Job, it deletes the row, and without this the whole
+            // checkout it left would match nothing and leak for ever. Nothing can want it back — no
+            // phase to be unfinished, no session to resume — so the TTL has nothing to measure.
+            const finished = mine.map((w) => known.get(w.jobId) ?? {
+              id: w.jobId, finishedAt: new Date(0), phase: 'gone', lastSessionId: null,
+            });
+            // **`hkb retry` is what resumes, and it acts on a FAILED Job.** A Job the operator
+            // cancelled or marked done keeps its session id too, and nothing wakes either — calling
+            // them resumable would keep a whole checkout per Job with no reason an operator could
+            // see. Being resumable DELAYS collection; it does not veto it (`collectable`).
+            const candidates = finished.map((j) => ({
+              ...j,
+              resumable: j.phase === 'failed' && j.lastSessionId != null,
+            }));
+            const take = new Set(collectable(candidates, new Date(now()), BUILT_IN_TTL_SECONDS));
+            for (const { jobId: id, path: dir } of mine.filter((w) => take.has(w.jobId))) {
+              const name = pathBasename(dir);
+              // The path git reported, never one rebuilt from a convention.
+              const swept = removeWorkspace(repo, dir);
               const where = boards.length > 1 ? `[${b.slug}] ` : '';
               if (swept.removed) {
-                log(`${where}swept ${swept.path} — ${swept.why}`);
-                said.delete(`kept:${swept.path}`);
+                // Said out loud. `.hkb/workflows/implement.md` tells a worker its workspace is
+                // collected after a TTL, so the operator who goes to look at one deserves to find
+                // out from the log rather than from an empty directory.
+                log(`${where}swept ${name} — its Job finished more than ${BUILT_IN_TTL_SECONDS / 60} minutes ago`);
+                said.delete(`kept:${name}`);
                 await db.event.create({
-                  data: {
-                    kind: 'swept', boardId: b.id, actor: holder,
-                    payload: { path: swept.path, branch: swept.branch, why: swept.why },
-                  },
+                  data: { kind: 'swept', boardId: b.id, actor: holder, payload: { workspace: name, jobId: id } },
                 });
               } else {
-                // Once, not every ten minutes: a checkout kept for the same reason all week is one
-                // line of log, the same way a refusal is.
-                announce(`kept:${swept.path}`, `${where}kept  ${swept.path} — ${swept.why}`);
+                // Once, not every ten minutes: a workspace git refuses to take for the same reason
+                // all week is one line of log, the same way a refusal is. It is refused rather than
+                // forced — see `removeWorkspace`.
+                announce(`kept:${name}`, `${where}kept  ${name} — ${swept.why}`);
               }
             }
           }

@@ -3,7 +3,7 @@
 node_modules
 *.log
 
-# The repository's own hkb directory — per-attempt worktrees, and a board file if
+# The repository's own hkb directory — the board directory, and a board file if
 # HKB_DATABASE_URL points at one here. All of it is local runtime state: a checkout is
 # expensive but reproducible, and a binary SQLite board cannot be merged and would be a
 # diff nobody can read. The default board is ~/.hkb/board.db, machine-level and outside

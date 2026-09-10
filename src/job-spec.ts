@@ -72,7 +72,7 @@ function refuse(message: string): never {
 export const SETTABLE = [
   'name', 'brief', 'model', 'effort', 'maxTurns', 'maxBudgetUsd', 'maxRetries',
   'attemptDeadlineSeconds', 'activeDeadlineSeconds',
-  'base', 'guide', 'gate', 'allowedTools', 'pluginPaths', 'labels',
+  'guide', 'gate', 'allowedTools', 'pluginPaths', 'labels',
   'exports', 'results', 'artifacts', 'inputs', 'check',
 ] as const;
 // Both deadlines ARE settable, and that is what card #53 closed. They used to be absent with the
@@ -98,7 +98,7 @@ export type SpecEdit = { id: number; changed: SpecChange[]; phase: string };
  * Apply a set of field changes to a filed Job.
  *
  * `changes` is already parsed and validated by the caller — the checkers live beside the things
- * they check (`checkRef`, `checkExportPath`, `checkResultName`, `checkLabel`, `checkInputSpec`) and
+ * they check (`checkExportPath`, `checkResultName`, `checkLabel`, `checkInputSpec`) and
  * `hkb new` runs the same ones, so a value that could not be filed cannot be set either.
  *
  * Returns what actually moved. A field set to the value it already had is dropped rather than
@@ -162,12 +162,6 @@ export async function setJobSpec(
       `#${id} proposes work, and a proposing Job runs no check — its output is the proposal, not a `
       + `change to the tree, so the controller never runs one and \`hkb show\` would print a command `
       + `nothing honours. Drop --check.`,
-    );
-  }
-  if (!job.isolate && changes.base) {
-    refuse(
-      `#${id} runs with --no-isolate, so it cuts no branch and has nothing to base one on. `
-      + `\`hkb new\` refuses the same pair at file time; a base stored here would never be read.`,
     );
   }
 

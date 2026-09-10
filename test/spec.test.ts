@@ -40,7 +40,7 @@ test('the Job wins over the board on every field — the failure that is otherwi
   const job = {
     model: 'claude-opus-4-6', effort: 'max', maxTurns: 99, maxBudgetUsd: 12, maxRetries: 1,
     allowedTools: ['Read'], pluginPaths: ['.claude'], guide: 'CONTRIBUTING.md',
-    base: 'origin/kb-33-1', check: 'npm run lint',
+    check: 'npm run lint',
     attemptDeadlineSeconds: 5400, activeDeadlineSeconds: 14400,
   };
   const r = resolveSpec(job, board);
@@ -50,7 +50,6 @@ test('the Job wins over the board on every field — the failure that is otherwi
   assert.equal(r.maxBudgetUsd.value, 12);
   assert.equal(r.maxRetries.value, 1);
   assert.deepEqual(r.allowedTools.value, ['Read'], 'a Job that narrowed its own surface keeps it');
-  assert.equal(r.base.value, 'origin/kb-33-1', 'a step branching from another Job keeps its base');
   assert.equal(r.check.value, 'npm run lint', 'a Job that named its own completion check keeps it');
   assert.equal(r.attemptDeadlineSeconds.value, 5400, 'a Job that asked for a longer session keeps it');
   assert.equal(r.activeDeadlineSeconds.value, 14400, 'and its own wall clock across attempts');
@@ -107,12 +106,12 @@ test('hasDefaults is false only when the board says nothing at all', () => {
 test('boardDefaults renames the columns to what a Job calls them, and keeps the nulls', () => {
   assert.deepEqual(boardDefaults(board), {
     model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 5,
-    allowedTools: ['Read', 'Grep'], pluginPaths: null, guide: 'CLAUDE.md', base: 'origin/develop',
+    allowedTools: ['Read', 'Grep'], pluginPaths: null, guide: 'CLAUDE.md',
     check: 'npm test', workflow: null, attemptDeadlineSeconds: null, activeDeadlineSeconds: null,
   });
   assert.deepEqual(boardDefaults({}), {
     model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null,
-    allowedTools: null, pluginPaths: null, guide: null, base: null, check: null, workflow: null,
+    allowedTools: null, pluginPaths: null, guide: null, check: null, workflow: null,
     attemptDeadlineSeconds: null, activeDeadlineSeconds: null,
   });
   // The one default here that fills no column on a Job: `hkb new` expands the workflow at file time
@@ -164,8 +163,8 @@ test("check: a Job's `''` means NO check, and does not fall through to the board
 });
 
 test('check: it is the same shape `allowedTools: []` already uses, for the same reason', () => {
-  // An empty value is a decision; only a null is silence. `guide` and `base` are deliberately NOT
-  // like this — "no guide" IS the absence, and "branch from no base" is not a thing.
+  // An empty value is a decision; only a null is silence. `guide` is deliberately NOT like this —
+  // "no guide" IS the absence.
   assert.deepEqual(resolveSpec({ allowedTools: [] }, { defaultAllowedTools: ['Read'] }).allowedTools,
     { value: [], from: 'job' });
   assert.deepEqual(resolveSpec({ guide: '' }, { defaultGuide: 'CLAUDE.md' }).guide,

@@ -7,18 +7,18 @@ audience: [dev]
 read_when: "filing a batch of Jobs against one repository, reviewing several agent PRs cut from the same base, or designing how a graph kind would decompose work"
 covers:
   - path: src/controller.ts
-    sha: 55cb278593ae0b3d0692712e4fcff643c29e4a4e
-  - path: src/worktree.ts
-    sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
+    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
   - path: src/limits.ts
     sha: 18849fb4775cabb4c5d65784f506d61d90c66f1f
+  - path: src/workspaces.ts
+    sha: b709212e781376f570a613907a209648dab91526
   - path: src/hkb.ts
-    sha: 5dc47f4b0e302d2eba5ca1d0895104f4f6e00bcb
+    sha: c06820804f259a976336c80742b3068586df9d84
   - path: prisma/schema.prisma
-    sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
-related: [architecture/job-kind, architecture/the-loop, concepts/ceilings, features/rebase-and-verify, decisions/adr-007-workload-scheduler, decisions/adr-008-declared-outputs]
-generated_at_commit: 5279b8a
-last_refreshed: 2026-09-09
+    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
+related: [architecture/job-kind, architecture/the-loop, concepts/ceilings, decisions/adr-007-workload-scheduler, decisions/adr-008-declared-outputs, decisions/adr-018-the-boundary]
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 ---
 
 # Per-PR CI does not compose
@@ -58,7 +58,7 @@ the moment it could (`docs/rebuild-plan.md:401-403`). The repair landed as `#361
 
 That shape is still visible in today's entry point, which now names the machine-wide
 verbs explicitly and carries the episode in its own comment
-(`src/hkb.ts:727-734`). The module was called `src/kb.ts` at the time; the rename
+(`src/hkb.ts:703-714`). The module was called `src/kb.ts` at the time; the rename
 came with ADR-009, so the file name in the record is history and the behaviour is
 not.
 
@@ -68,23 +68,22 @@ The argument is the author's own, in the commit that recorded the round —
 `015204f`, *"Record how the ten merged, and the failure only integration could
 find (#362)"*, 2026-09-05:
 
-- Every branch is cut from the mainline at claim time and never rebased. The
-  controller cuts the checkout on the serial side of the reconcile pass, at the
-  moment of the claim (`src/controller.ts:726-798`), from `origin/<default>` when
-  there is one (`baseRef`, `src/worktree.ts:118-132`; `createWorktree`,
-  `src/worktree.ts:302-326`). Nothing in `bin/`, `src/`, `scripts/` or `prisma/`
-  contains the string `rebase`.
+- Every branch is cut from the mainline at claim time and never rebased by the
+  machinery. The workspace is asked for on the serial side of the reconcile pass,
+  at the moment of the claim (`src/controller.ts:853-870`), and the runtime cuts
+  it from the repository's default branch.
 - CI runs per branch.
 - No step compares one Job's diff against another's.
 
-> **The first of those is no longer true, and the argument survives it.** The base
-> is fetched before the checkout and the branch is replayed onto it after the run
-> (`src/rebase.ts`, *features/rebase-and-verify*) — that is item 10's *cheap* half,
-> and it closes the drift, not the composition failure. The two misreadings below
-> are exactly why: a rebase answers the merge-conflict question, and nine of the ten
-> collisions had no merge conflict to answer. The base is no longer a constant either
-> (`Job.base`, *features/the-checkout-base*), so siblings need not share one — but
-> nothing yet DRAWS that shape, and while they do share a base this page holds.
+> **All three are true again, after a round trip.** Between those commits and
+> ADR-018 the controller *did* fetch the base and replay the branch onto it after
+> the run — `src/rebase.ts` — and this page carried a note saying so. That module
+> is deleted, `Job.base` with it, and the only rebase a worker does now is one a
+> workflow file asks it to do (`.hkb/workflows/implement.md`). The argument was
+> written to survive the rebase and it survived its removal too, which is the point:
+> a rebase answers the merge-conflict question, and **nine of the ten collisions had
+> no merge conflict to answer.** With `Job.base` gone, siblings share the default
+> branch again by construction, so the page holds without a qualification.
 
 So the further a batch runs, the more each Job's base diverges from what will
 actually be merged (`docs/rebuild-plan.md:572-577`).
@@ -114,14 +113,20 @@ between (`docs/rebuild-plan.md:466-468`).
 first as `#366`, which is what made `.kanban/worktrees` reclaim itself — 4 KB
 where it had been 6.1 GB (`docs/rebuild-plan.md:450`). Exports and removal are the
 same question asked from two directions: what is left in a checkout after a run,
-and who is allowed to delete it. Today the two live in one function, where a Job's
-declared exports waive the *dirty* half of the keep-test and explicitly not the
-*unpushed* half (`removeWorktree`, `src/worktree.ts:956-995`), with the later
-sweep asking the same question at the time it can be answered (`sweepWorktrees`,
-`src/worktree.ts:865`; the file's own argument for why removal is a sweep is at
-`src/worktree.ts:25-36`). That joint design is what the second attempt had to
-write; the first attempt had been written against a mainline where the sweep did
-not exist.
+and who is allowed to delete it. The joint design that resolved it —
+one keep-test in which a Job's declared exports waived the *dirty* half and
+explicitly not the *unpushed* half, plus a later sweep asking the same question at
+the time it could be answered — is what the second attempt had to write; the first
+attempt had been written against a mainline where the sweep did not exist.
+
+> That resolution has since been deleted in its entirety. ADR-018 replaced the
+> inspect-the-tree keep-test with `ttlSecondsAfterFinished` — a clock over the
+> workspace names hkb asked for, with no question about what is inside them
+> (`src/workspaces.ts`, `howto/running-the-daemon`) — so `removeWorktree` and
+> `sweepWorktrees` no longer exist to cite. **The episode is unaffected**, which is
+> why it stays: what collided was two cards moving the same invariant, and that is a
+> fact about how the work was decomposed rather than about the code either one
+> landed.
 
 **`#372` — board spec defaults, against committed-but-unspent budget.** The
 parallelism card shipped first as `#374`, which rejected the cheap option and
@@ -150,7 +155,7 @@ attempt chose to freeze the resolved cap onto the Attempt rather than re-derive
 it, and argued the cost into a feature (`docs/rebuild-plan.md:456`, `:469-470`);
 the doc-comment on `Attempt.maxBudgetUsd` sets out the three options and why the
 freeze is the only one that stays correct when an operator edits a board's default
-mid-flight (`prisma/schema.prisma:446-490`).
+mid-flight (`prisma/schema.prisma:498-543`).
 
 The recorded consequence: **what collides is not shared files but shared
 invariants**, and a decomposer that splits work by area reproduces this exactly

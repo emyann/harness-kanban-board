@@ -45,24 +45,29 @@ export type Phase = (typeof PHASES)[number];
  * What a Job left behind, and whether that is anything at all.
  *
  * `succeeded` means the session ended. Nothing in the machinery requires it to have produced
- * anything: `withProtocol` (`src/brief.ts`) *asks* for a pull request in prose, and only when the
- * Job is isolated; `nextPhase` decides the phase from the runtime's status alone. That separation is
- * deliberate — "I looked, and there is nothing to change" is a real outcome, and so is a Job that
- * runs in the operator's own checkout. But the absence has to be legible, or a board of fifty
- * succeeded Jobs where five produced nothing reads as uniform.
+ * anything, and `nextPhase` decides the phase from the runtime's status alone. That separation is
+ * deliberate — "I looked, and there is nothing to change" is a real outcome. But the absence has to
+ * be legible, or a board of fifty succeeded Jobs where five produced nothing reads as uniform.
  *
- * Three things count, and they are ADR-008's own list. A **pull request** on any attempt. A
- * **declared export**, and a **declared result** — both of which count without being re-checked
- * here, because a declared output the run did not produce already fails the attempt
- * (`src/worktree.ts`, `src/results.ts`, `src/artifacts.ts`), so a Job that reached `succeeded`
- * having declared any of the three produced it by construction.
+ * **A pull request used to count, and no longer does** (ADR-018). The core stopped reading the
+ * forge, so `Attempt.prUrl` has no writer and the question would have exactly one answer for every
+ * Job on the board. What is left is ADR-008's own list and it is the honest one: a **declared
+ * export**, a **declared result**, a **declared artifact** — none re-checked here, because a
+ * declared output the run did not produce already fails the attempt (`src/exports.ts`,
+ * `src/results.ts`, `src/artifacts.ts`), so a Job that reached `succeeded` having declared any of
+ * the three produced it by construction.
+ *
+ * A Job whose real deliverable IS a pull request now says so by declaring one: its workflow opens
+ * it, and whatever it hands back — a URL in a result, a file in an artifact — is what the board
+ * counts. That is a better question than the one this used to ask, which trusted a branch name
+ * lookup on a forge to speak for a Job's worth.
  *
  * Pure, and asked only of a Job that succeeded. A failed, cancelled or `done` Job producing nothing
  * is not news — marking those would be noise, which is how a signal stops being read.
  */
 export function producedNothing(
   job: {
-    phase: string; pr: string | null; exports: string[];
+    phase: string; exports: string[];
     results?: string[]; artifacts?: string[]; proposes?: string | null;
   },
 ): boolean {
@@ -72,8 +77,7 @@ export function producedNothing(
   // the most concrete output anything here produces, and calling it "produced nothing" was the
   // complaint reading its own answer wrong.
   if (job.proposes) return false;
-  return !job.pr
-    && job.exports.length === 0
+  return job.exports.length === 0
     && (job.results?.length ?? 0) === 0
     && (job.artifacts?.length ?? 0) === 0;
 }
@@ -196,13 +200,9 @@ export async function listJobs(db: Db, scope: ListScope, filter: ListFilter = {}
     // The board is included whatever the scope, because `--json` carries it either way: a
     // consumer that has to branch on the flags it passed is reading a shape, not a record.
     //
-    // The attempts' pull requests come back with the listing rather than in a second query per
-    // row: a board-wide read already exists here, and "one board read per pass" is the rule
-    // this listing has always followed.
     include: {
       _count: { select: { attempts: true } },
       board: { select: { slug: true } },
-      attempts: { select: { prUrl: true }, orderBy: { k: 'desc' } },
     },
   });
   return jobs.map((j) => {
@@ -210,15 +210,14 @@ export async function listJobs(db: Db, scope: ListScope, filter: ListFilter = {}
     const exports = declaredExports(j.exports);
     const results = declaredExports(j.results);
     const artifacts = declaredExports(j.artifacts);
-    const pr = j.attempts.find((a) => a.prUrl)?.prUrl ?? null;
     return {
       id: j.id, board: j.board.slug, name: j.name, phase: j.phase, attempts: j._count.attempts,
       lastError: j.lastError, sessionId: j.lastSessionId,
       // Carried on every row, whatever the phase, for the reason `hkb boards` carries its
       // defaults either way: a consumer inferring absence from a missing key reads a shape,
       // not a record.
-      pr, exports, results, artifacts, labels,
-      producedNothing: producedNothing({ phase: j.phase, pr, exports, results, artifacts, proposes: j.proposes }),
+      exports, results, artifacts, labels,
+      producedNothing: producedNothing({ phase: j.phase, exports, results, artifacts, proposes: j.proposes }),
     };
     // Filtered on the built row rather than before it: the row is where a label has already
     // been read defensively out of the column, and reading it twice to save shaping a handful

@@ -8,16 +8,16 @@ read_when: "designing anything a user would call a workflow, a step, a review or
 status: accepted
 date: 2026-09-08
 supersedes: ~
-superseded_by: ~
+superseded_by: decisions/adr-018-the-boundary (in part — decision 5's retained half, and the base in decision 2)
 covers:
   - path: src/brief.ts
-    sha: 97737608be17c28aeca4bf859902c9c5b6ec4d89
+    sha: b3eddf6aebd95fdab1f38424b24851d6a4e3e5a2
   - path: src/templates.ts
-    sha: 1004bfccbdd46a7e2f875ba59d30d59b4107dbb9
+    sha: 169ac395a4b608e231beeb978952da3adfc8c82c
   - path: prisma/schema.prisma
-    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
-generated_at_commit: f063b7a
-last_refreshed: 2026-09-09
+    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 related:
   [
     decisions/adr-007-workload-scheduler,
@@ -28,10 +28,36 @@ related:
     features/workflow-templates,
     features/labels,
     features/proposals,
+    decisions/adr-018-the-boundary,
   ]
 ---
 
 # ADR-017: The developer workflow is content — hkb executes it, the board shows it
+
+> **Finished, and superseded in part, by [ADR-018](./adr-018-the-boundary.md) (2026-09-10).** This
+> record's premise — the developer workflow is content, hkb executes it, the board shows it — is
+> what ADR-018 is built on and is not in question. Two of its decisions were overtaken by it going
+> further:
+>
+> - **Decision 5 kept half of `withProtocol` in the core, and that half is gone too.** The line
+>   drawn here was *the git sandbox contract is core; the pull request is one consumer's opinion*.
+>   ADR-018 applied this record's own test — a line belongs in the core only if the machinery
+>   **refuses** on it afterwards — to the retained half and found nothing behind it: with no rebase,
+>   no forge read and no `pre-push` hook, the core requires no commit, no push and no rebase, so it
+>   may not ask for them. `withSandbox`, `withWorktree` and `withProtocol` are deleted from
+>   `src/brief.ts`; the whole protocol is `.hkb/workflows/implement.md`, which is where this record
+>   sent the other half.
+> - **Decision 2's "the implementing step's branch as its base" has no mechanism.** `Job.base` is
+>   gone (ADR-018 decision 3) — an arbitrary base branch is only meaningful to a workload that is
+>   code in a repository, and no transport the harness offers can express one. A review step is
+>   still a Job with a reviewer's brief, a read-only surface and a declared result; what it starts
+>   *from* is a board kind's question now, and that kind does not exist yet.
+>
+> Consequently the Consequences paragraph below reads one word differently: a Job with no workflow
+> gets **its brief** and nothing else, not "the sandbox contract and nothing else". The rest of that
+> paragraph — that a board needs a default workflow, and that "produced nothing" is the honest
+> outcome without one — is unchanged and is now the only way the core can answer the question at
+> all.
 
 ## Context
 
@@ -126,6 +152,15 @@ the honest outcome for a Job nobody told to open a pull request, and it is repor
 file. Decision 4: record lineage on a filed Job and print it. Decision 6: the run object, and the
 study's §6 clarification folded into its record. Decision 2: a reviewer workflow in
 `.hkb/workflows/`, which is also the first real test of an edge the machinery takes on its own.
+
+**Decision 4's mechanism changed, and the decision did not.** The lineage is kept, but not by
+parsing it back out of the brief: `standingStepsFrom` is deleted, the steps are composed at claim
+time from `Board.defaultWorkflow` as it stands then (`withStandingSteps`, `src/templates.ts`;
+`src/controller.ts`), and the naming sentence is written for the *worker* rather than matched. The
+reason is this record's own — the brief was being made the record, and `hkb queue <id> "…"` replaces
+a brief wholesale, so triage → queue silently dropped the steps and the record of them together.
+*"The file still governs nothing after filing"* holds; where the name lives moved from the text to a
+column.
 
 <!-- Dual mutability: once status: accepted, NEVER rewrite this record.
 When the decision changes, write a new ADR, set its `supersedes`, and set

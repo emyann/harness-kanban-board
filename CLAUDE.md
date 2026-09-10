@@ -21,6 +21,35 @@ Read `README.md` for the model before changing behaviour.
    workflow to document — if the answer to "can hkb do X" is "yes, by hand", that is a bug report.
 5. **Flawless experience** — every error says what to do next; `--json` everywhere; never a silent failure.
 
+## The boundary (ADR-018) — read this before adding anything
+
+There are **two** things in this repository and they are re-conflated in almost every session, at a
+cost the code still shows. Keep them apart:
+
+- **hkb, the machinery** — *Kubernetes for agent sessions.* One kind, `Job`, whose whole contract is
+  **cut a workspace, run one agent session under limits, record what happened, clean up.** Leases,
+  ceilings, retries, deadlines, phases, the record. It has never heard of a branch, a pull request, a
+  review, a card, a column or a workflow.
+- **hkb, the board** — *the product, and it is Tekton's shape:* kinds of its own with a controller of
+  their own, built **on** the Job kind, the way `tekton.dev` is built on `batch/v1` and creates Pods.
+
+**The test, for every field, module and verb:** does `batch/v1` have a field for it? If not — does it
+make sense for a workload that is not code, has no repository and files no pull request? If no, it is
+the board's, and **the core must not name it**. The dependency runs one way only: the board uses core
+primitives, the core never imports, reads, or has an opinion about a board concept. A field on `Job`
+that only the board would ever set is a board field on a core row; living there does not make it core.
+
+**One store, separate kinds — never two stores.** Tekton has no datastore: its CRDs sit in the same
+etcd, served by the same API server, as `batch/v1`. What separates them is an API group, a controller
+and a one-way dependency, all of which fit in one SQLite file. Two stores would cost the single
+transaction boundary a reconciler needs and buy nothing.
+
+**Before building anything the harness might already do, check.** hkb had reimplemented worktree
+creation, `.worktreeinclude` (the same filename, invented twice), base freshening, the worktree lock
+and resume-into-the-same-tree — all of it already in Claude Code. The SDK is a wrapper around the
+CLI, so any flag is reachable via `extraArgs`; it is untyped, so anything wired that way owes a test
+that fails when the flag stops working (`test/workspace.live.test.ts` is the pattern).
+
 ## Layout
 
 - `bin/hkb.ts` the entry point · `src/hkb.ts` the verbs

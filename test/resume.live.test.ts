@@ -41,7 +41,7 @@ test('a turn cap leaves a session, and the retry continues it rather than starti
           brief: 'Read package.json, then README.md, then CLAUDE.md, and say how many lines each has.',
         },
       });
-      const run = () => reconcile({ runtime: claudeRuntime, cwd: REPO, board: 'resume', readPr: false });
+      const run = () => reconcile({ runtime: claudeRuntime, cwd: REPO, board: 'resume' });
 
       await run();
       const first = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });

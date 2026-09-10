@@ -11,22 +11,22 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/brief.ts
-    sha: 97737608be17c28aeca4bf859902c9c5b6ec4d89
+    sha: b3eddf6aebd95fdab1f38424b24851d6a4e3e5a2
   - path: src/controller.ts
-    sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
-  - path: src/worktree.ts
-    sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
+    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
   - path: prisma/schema.prisma
-    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
+    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
   - path: src/results.ts
-    sha: 0fc3dc145a1c515267534909aee79f034effa61b
+    sha: a67f369f7e0806ea8fe10d6def7105ff2a65e131
   - path: src/artifacts.ts
-    sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
+    sha: 74efd4d0fc9f6f0e5bcce4379b55f533b81e9e6d
   - path: src/inputs.ts
-    sha: 140cf48b8b323742a57e3e604b6853f829c72b6c
-related: [decisions/adr-007-workload-scheduler, architecture/job-kind, architecture/the-loop]
-generated_at_commit: f063b7a
-last_refreshed: 2026-09-09
+    sha: 6ed576d25bf9db5f8b76e3752c17a250725df3b6
+  - path: src/exports.ts
+    sha: afa23e85d0df61d1d0d91587d425df2ad7a872a0
+related: [decisions/adr-007-workload-scheduler, decisions/adr-018-the-boundary, architecture/job-kind, architecture/the-loop]
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 ---
 
 # ADR-008: A Job declares its outputs, and the board gets them out of the sandbox
@@ -171,3 +171,32 @@ Two things this record did not anticipate: a run can now fail for producing noth
 (`Outcome.no_input`, before any money is spent), and `results` grew a second layer —
 values the run wrote without declaring are kept and reported, never required
 (`collectResults`, `src/results.ts`).
+
+**What ADR-018 changed, and what it did not.** The rule this record is about — *a declared output
+that is not produced fails the attempt* — is untouched, and ADR-018 leans on it: with the forge read
+gone, declared outputs are the **only** evidence a Job produced anything. Four citations above moved
+with it:
+
+- **`exportOutputs` and `checkExportPath` are `src/exports.ts`**, out of the deleted
+  `src/worktree.ts`. They now collect from `WorkerOutcome.workspacePath` — where the runtime says
+  the session actually ran — rather than from a checkout path the controller had computed.
+- **`producedNothing` no longer counts a pull request** (`src/read.ts:68`). It asks only about
+  declared exports, results and artifacts, which is the question this record wrote down; the branch
+  lookup on a forge that used to answer alongside it is gone with `Attempt.prUrl`. *"A Job whose real
+  deliverable IS a pull request now says so by declaring one"* is the code's own restatement of the
+  paragraph above.
+- **The pull-request verification named in Consequences — `gh pr list --head` — has no caller.**
+  Nothing in the core shells out to `gh`. The other two verifications in that sentence, a stat for an
+  exported path and presence for a result, are what remain and are what run.
+- **The worktree sweep argument was right and its mechanism is gone.** `removeWorktree` and its
+  dirty-tree refusal are deleted; a workspace now dies on `ttlSecondsAfterFinished`
+  (`BUILT_IN_TTL_SECONDS`, `src/workspaces.ts`) rather than on an inspection of what is inside it.
+  This record's claim was that declared outputs make the sweep *safe to do unconditionally*, and an
+  unconditional TTL is that claim taken further than this record went.
+
+**`isolate` finished returning to meaning one thing, and then left the spec.** This record's
+sentence — *"`isolate` returns to meaning one thing — where the work runs"* — was completed by
+ADR-017 (the pull request became a step's content) and then superseded in mechanism by ADR-018
+decision 2: the workspace is declared on the runtime seam and provisioned by the runtime, so
+`Job.isolate` selects between a workspace and the repository itself and decides nothing about what
+the Job must produce.

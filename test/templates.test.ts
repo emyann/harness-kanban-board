@@ -173,7 +173,7 @@ test('the exemption is for ONE shape, and a list with inner spaces is still a li
   // seventeen-character model name, and `check: [ a, b ]` as a command exiting 2 on every attempt —
   // an exemption meant for one shape swallowing every mistake that happens to look like it. The
   // comma is the whole difference: a shell `[ … ]` test has one argument list and no commas in it.
-  for (const key of ['model', 'check', 'guide', 'base', 'gate']) {
+  for (const key of ['model', 'check', 'guide', 'gate']) {
     const t = repo({ [wf('d.md')]: `---\nname: d\n${key}: [ a, b ]\n---\nbody\n` });
     assert.match(why(() => readTemplate(t, 'd')), new RegExp(`\`${key}\` takes one value, not a list`),
       `${key}: [ a, b ] is a list mistake, not a shell test`);
@@ -309,7 +309,7 @@ test('the exemption is for ONE key: a single bracketed item on any other scalar 
   // The comma caught `[ a, b ]` and not `[ a ]`: `model: [ opus ]`, `guide: [ CLAUDE.md ]` and
   // `gate: [ looks right? ]` were filed as those literal strings where `main` refused each with a
   // fix. `check` is the one key whose value is a shell line; nothing else starts with `[ `.
-  for (const key of ['model', 'guide', 'base', 'gate']) {
+  for (const key of ['model', 'guide', 'gate']) {
     const t = repo({ [wf('d.md')]: `---\nname: d\n${key}: [ opus ]\n---\nbody\n` });
     assert.match(why(() => readTemplate(t, 'd')), new RegExp(`\`${key}\` takes one value, not a list`),
       `${key}: [ opus ] is a list mistake, not a shell test`);

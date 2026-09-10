@@ -7,22 +7,22 @@ audience: [dev]
 read_when: "changing the daemon, the reclaim rule, or anything that decides whether a lease may be taken"
 covers:
   - path: src/daemon.ts
-    sha: 114665116363d28f7aeecf23e293f0fff050eadc
+    sha: 3de5966ef5a47b7e7c7f0ecc0e6fc7c2b238dc76
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
-    sha: 55cb278593ae0b3d0692712e4fcff643c29e4a4e
-  - path: src/worktree.ts
-    sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
+    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/schema.ts
     sha: ee1920b789eb96be121c8bba20cc92e452ddf818
   - path: src/check.ts
-    sha: d5d2e273d51d281992cfa4dbb34e92458150e0d2
-generated_at_commit: 5279b8a
-last_refreshed: 2026-09-09
-related: [architecture/job-kind, architecture/runtime-layer, decisions/adr-007-workload-scheduler, decisions/adr-016-the-pod-spec-is-the-map, concepts/worker-identity, features/check]
+    sha: 730324bea5aa0fe083bc5fb7244c06ce20a54c2c
+  - path: src/workspaces.ts
+    sha: b709212e781376f570a613907a209648dab91526
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
+related: [architecture/job-kind, architecture/runtime-layer, decisions/adr-007-workload-scheduler, decisions/adr-016-the-pod-spec-is-the-map, concepts/leases-and-liveness, features/check]
 ---
 
 # The loop
@@ -34,7 +34,7 @@ daemon is a caller, not a second control plane.
 Both wire the same `AbortController` to `deps.signal`, and both handlers only *ask*: exiting is
 what would leave a lease held, since the release is written on the way out of `reconcile`
 (`src/hkb.ts`). `hkb run` wired none at all until it was found that `Ctrl-C` there killed the CLI
-and left the pass's detached completion check running in the worktree with nothing left to bound
+and left the pass's detached completion check running in the workspace with nothing left to bound
 it — `deps.signal` is the only route a stop has into `runCheck` (`features/check`).
 
 ## It is level-triggered, and that is a decision
@@ -79,33 +79,38 @@ what is unusual in this file:
 Because the pass is also the kubelet, the end of a run is a sequence rather than a return value,
 and the order of it is load-bearing (`src/controller.ts`):
 
-1. the declared outputs are **checked for** — present, or the attempt has already failed
-   (`features/declared-outputs`); the results and artifacts are collected out of the sandbox
-   before the checkout can go;
-2. the pull request is **read back** from the forge, which is what says whether a person is
-   already looking at this branch;
-3. the branch is **rebased** onto the base as it is now, and force-pushed under a lease
-   (`features/rebase-and-verify`);
-4. the Job's **check** is run, in the checkout, and its exit code decides the attempt
-   (`features/check`, ADR-016 §3). After the rebase so that it tests what would actually merge,
-   and so the tree it ran in agrees with what the next attempt will resume into. Not for a
+1. the **workspace is verified** — a run that completed and came back with no
+   `workspacePath`, or with one that resolves to the repository itself, did not get the isolation
+   it asked for, and nothing it produced can be trusted (`isolationShortfall`, `src/controller.ts`);
+2. the declared outputs are **checked for** — present, or the attempt has already failed
+   (`features/declared-outputs`); the results and artifacts are collected out of the sandbox,
+   and a proposal is parsed and refused here rather than applied (`features/proposals`);
+3. the Job's **check** is run, in the workspace as the session left it, and its exit code decides
+   the attempt (`features/check`, ADR-016 §3). It no longer claims to test what would merge —
+   nothing rebases anything (*decisions/adr-018-the-boundary*) — and it does not run for a
    proposing Job, which changes nothing in the tree for a command to judge;
-5. the declared outputs are **copied out** into the repository — after the check, so an attempt
-   the check *refused* writes nothing into the operator's tree. Only the check withholds this: an
+4. the declared outputs are **copied out** into the repository — after the check, so an attempt
+   the check *refused* writes nothing into the operator's tree, and re-planned rather than trusting
+   the probe, because the check ran in that tree in between. Only the check withholds this: an
    export that is present is still delivered when a different declaration fell short, because what
    a run produced is a durable record whether or not the rest of it held up;
-6. the gate, the phase, and the tidy are decided and the attempt and Job rows are written;
-7. the lease is **released** — last, and fenced on the token, so a holder that lost it mid-run
+5. the gate and the phase are decided and the attempt and Job rows are written — the Job's own
+   deadline last of all, because it outranks everything including a clean `completed`;
+6. the lease is **released** — last, and fenced on the token, so a holder that lost it mid-run
    writes nothing outside its own attempt row.
 
-**Release is last, and it used to be first.** Everything from 1 to 6 then ran with the Job
+**And there is no seventh step.** The pass used to end by tidying the checkout; it does not, and
+that is the design. A workspace outlives the pass and is collected by the sweep below, so a Job
+that is `pending` again or `suspended` keeps the tree its next attempt resumes into.
+
+**Release is last, and it used to be first.** Everything from 1 to 5 then ran with the Job
 `running`, an attempt open and no Lease row — a window that `hkb cancel`, `hkb rm` and the reclaim
 each read wrongly, and that a ten-minute check stretched to ten minutes
 (`concepts/leases-and-liveness`). The renewer runs throughout, and the token is verified by a
-*read* immediately before the writes in step 6; `heldToTheEnd` gates every step that touches the
-repository, the remote or the checkout, because those are contended state too.
+*read* immediately before the writes in step 5; `heldToTheEnd` gates every step that touches the
+repository or the workspace, because those are contended state too.
 
-**And steps 1 to 7 are one `try` block.** Being last is not the same as being reached: a throw
+**And steps 1 to 6 are one `try` block.** Being last is not the same as being reached: a throw
 anywhere in that sequence used to skip both the renewer's `clearInterval` and the release, leaving a
 Lease row that advanced for the rest of the daemon's life on a Job nothing could cancel. The
 release is a `finally`, and the `catch` beside it closes the attempt `crashed` and puts the Job back
@@ -136,43 +141,55 @@ one.
 
 Only four things are genuinely time-driven, and none has a sub-minute tolerance:
 a lease expiring, a run passing its wall clock, scheduled work (a kind that
-does not exist yet), and a worktree becoming safe to reclaim. The change-driven
+does not exist yet), and a workspace passing its TTL. The change-driven
 half — *a Job was filed, run it* — is always one `hkb run` away, so it does not
 set the cadence.
 
-## The sweep: reclaim is a later question
+## The sweep: `ttlSecondsAfterFinished`, and nothing else
 
 A worker installs the target repository's dependency tree to run its tests, so a
 checkout costs about as much as the repository does — Phase 5 left **6.1 GB** for
-ten Jobs. The end of a run cannot be where that is reclaimed, because it is the
-one moment the work is definitionally freshest: the pull request has just been
-opened. **"Safe to delete" is a state a worktree enters later, when its pull
-request lands**, and nothing tells hkb that happened. Only asking again does,
-which is what makes this the loop's business (`sweepWorktrees`, every 10 minutes,
-after `reconcile` rather than before it).
+ten Jobs. The end of a run still cannot be where that is reclaimed: the next attempt
+resumes *into* that tree, and an operator wants to look at what a run left. So it is
+the loop's business — the first tick sweeps, then one tick in every `SWEEP_EVERY_MS`
+(ten minutes), after `reconcile` rather than before it. A daemon started to clean up
+should not wait ten minutes to do it, and one left running should not ask every 45
+seconds (`src/daemon.ts`).
 
-A checkout is removed when three things are true, and kept — loudly, with what to
-do about it — when any of them is not:
+**What it asks is a clock, not a question about the tree.** A finished Job's
+workspace is collectable once `BUILT_IN_TTL_SECONDS` (one hour) has elapsed since
+`finishedAt`; a Job that has not finished has no `finishedAt`, so its workspace is
+never a candidate whatever its age (`collectable`, `src/workspaces.ts`). Two
+exceptions, both narrow:
 
-- its tree is clean;
-- nothing on its branch is **unpushed**. Not *ahead of its base*, which is true of
-  every successful Job; the question is whether this work exists **only here**.
-  `git push` writes `refs/remotes/origin/<branch>` locally and the forge deleting
-  the branch does not remove it, so the record survives the merge;
-- its branch is gone from the remote. A remote that cannot be reached has not said
-  anything, and the sweep keeps everything until it can be asked.
+- a **failed Job that still has a session** is `resumable`, which buys it the longer
+  `RESUMABLE_TTL_SECONDS` window (a day) rather than a permanent reprieve — `hkb retry`
+  continues that session and would otherwise wake in a checkout with none of its work,
+  but a veto with no time term in it leaks a checkout per failure. Narrower than "has a
+  session id": a cancelled Job and a `done` one keep theirs and neither is resumed;
+- a workspace belonging to **another board on the same repository** is not this sweep's
+  to consider: existence is asked across every board, ownership second;
+- a workspace whose **Job row is gone** — `hkb rm` is the normal way to tidy — is
+  collectable at once. Nothing is left that could want it, so the TTL has nothing to
+  measure.
 
-**The obvious safety test does not work here.** "Every commit is already on the
-default branch" is false for every merged branch in a repository that
-squash-merges: the squash is a new commit, so the branch's own commits are
-ancestors of nothing and `git cherry` calls them unmerged. A sweep built on
-ancestry would keep every merged checkout for ever — the bug it is meant to fix.
-`test/worktree.test.ts` asserts that failure alongside the rule that replaces it.
+**It starts from `git worktree list`, never from the board.** Asking the board for
+finished Jobs and trying to remove each one's workspace is two git processes per Job
+per tick and a `swept` event every time, for ever, describing nothing happening —
+`removeWorkspace` has to report an absent workspace as removed, so there is no natural
+stopping point. One board-wide call answers instead, and only names matching
+`kb-<jobId>` are candidates, so a worktree the operator made is never one
+(`existingWorkspaces`, `src/workspaces.ts`). The path git reported is the path that is
+removed; an earlier version rebuilt it from a convention and leaked every workspace
+that was not where the convention said.
 
-The run in flight `git worktree lock`s its checkout, because the controller stopped
-being the only remover the moment a sweep existed and the two are not even in the
-same process. A `hkb:` lock whose holder is provably gone is taken over rather than
-respected; a lock set by hand is left alone.
+**The lock is honoured and `--force` is never passed.** The runtime holds a
+`git worktree lock` for the length of a run, and a locked tree — or one holding
+uncommitted or untracked work — is refused by git, reported by name, and left on disk.
+That refusal is what replaced the old inspection: the previous sweep asked each
+checkout whether it held unpushed work, which needed `pushedRef`, `heldWork` and
+`whyKept`, only had an answer while the core required a push, and had no opinion about
+age at all (*decisions/adr-018-the-boundary*).
 
 ## A lapsed lease is evidence, not proof
 
@@ -242,9 +259,9 @@ That makes standby behaviour a later change of policy rather than a redesign.
 A `Job` runs in `Board.repoPath`, not in the daemon's cwd — a long-lived machine
 daemon has no meaningful cwd, and "wherever the operator was standing" stopped being
 a definition of anything the moment one process served several repositories. It is on
-the Board rather than the Job because a Job is inherently single-repo (one worktree,
-one branch, one pull request) and because the ceilings beside it are already per-repo
-facts: *this repository's PR workflows are expensive, run one at a time*.
+the Board rather than the Job because a Job is inherently single-repo — one workspace,
+cut from one repository — and because the ceilings beside it are already per-repo
+facts: *this repository's workflows are expensive, run one at a time*.
 
 `deps.cwd` in the controller survives only as the fallback for a board with no repo —
 which is `hkb run` in a checkout, and every test.

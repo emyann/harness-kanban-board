@@ -1,5 +1,5 @@
 import type { openBoard } from './db.ts';
-import { checkExportPath, checkRef } from './worktree.ts';
+import { checkExportPath } from './exports.ts';
 import { checkResultName } from './results.ts';
 import { checkArtifactName } from './artifacts.ts';
 import { parseLabels } from './labels.ts';
@@ -312,26 +312,6 @@ export async function createJob(
     );
   }
   if (values.gate !== undefined && !gate) throw usage('--gate needs the question a human is being asked, as in --gate "does this migration look right?"');
-  const rawBase = typeof values.base === 'string' ? values.base.trim() : undefined;
-  if (values.base !== undefined && !rawBase) throw usage('--base needs the ref to branch from, as in --base origin/kb-33-1 — leave it out for the repository\'s default branch');
-  // Checked here rather than only where git is called: a ref reaches git as a bare argv token,
-  // so one beginning with a dash is an option (`--upload-pack=…` runs a command). See `validRef`.
-  const base = rawBase === undefined ? undefined : checkRef(rawBase, '--base');
-  // Two flags that mean opposite things, typed together: --no-isolate runs in the current
-  // checkout, so there is no branch to cut from a base and nothing would ever read it. Refused
-  // rather than ignored — a spec field that is stored, printed and never honoured is the silent
-  // failure this project's fifth value forbids.
-  //
-  // A base arriving from the BOARD's default is deliberately NOT refused here. It is not a
-  // contradiction the filer wrote, and refusing would make one `--no-isolate` Job unfileable on
-  // such a board — there is no per-Job clear to escape with, and there cannot easily be one:
-  // `pick` in `src/spec.ts` reads a null column as *unset*, so a cleared value falls straight
-  // through to the board default again. That gap is shared by every board-defaulted field. What
-  // is fixed instead is the visible half: `hkb show` does not present a base to a Job that
-  // cannot use one.
-  if (base && values['no-isolate']) {
-    throw usage('--base and --no-isolate contradict each other: --no-isolate runs in the current checkout, so there is no branch to cut from a base. Drop one.');
-  }
   // A proposing Job is a gated Job, and not by convention: ADR-011 applies nothing without an
   // approval, so a proposal with no approver would be a proposal nothing ever reads. The
   // operator's own question wins if they asked one; this is only the default, and the controller
@@ -410,7 +390,6 @@ export async function createJob(
       // the second step of a chain before the first has pushed the branch it names, and a
       // check at file time would refuse the one workflow the field exists for. It is checked
       // when the checkout is made, where a missing ref fails the Job by name (`src/controller.ts`).
-      ...(base ? { base } : {}),
       ...(triage ? { phase: 'triage' as const } : {}),
       proposes,
       model,

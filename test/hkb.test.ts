@@ -966,12 +966,12 @@ test('hkb boards set carries the spec defaults, and none clears one', async () =
     'boards', 'set', 'defaults', '--model', 'claude-haiku-4-5', '--effort', 'low',
     '--max-turns', '8', '--max-budget', '0.25', '--max-retries', '0',
     '--allow-tools', 'Read,Grep', '--default-plugin-dirs', '.claude', '--guide', 'CLAUDE.md',
-    '--base', 'origin/develop', '--check', 'npm test', '--workflow', 'implement',
+    '--check', 'npm test', '--workflow', 'implement',
     '--attempt-deadline', '3600', '--deadline', '14400', '--json',
   )).out);
   assert.deepEqual(set.defaults, {
     model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 0,
-    allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'], guide: 'CLAUDE.md', base: 'origin/develop',
+    allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'], guide: 'CLAUDE.md',
     check: 'npm test', workflow: 'implement',
     attemptDeadlineSeconds: 3600, activeDeadlineSeconds: 14400,
   });
@@ -1168,7 +1168,7 @@ test('hkb boards prints a defaults line only for the boards that have one', asyn
   const bare = rows.find((r) => r.board !== 'listed-defaults' && !r.hasDefaults);
   assert.ok(bare, 'a board with no defaults exists in this suite');
   assert.deepEqual(bare.defaults,
-    { model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null, base: null, check: null, workflow: null, attemptDeadlineSeconds: null, activeDeadlineSeconds: null },
+    { model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null, check: null, workflow: null, attemptDeadlineSeconds: null, activeDeadlineSeconds: null },
     '--json carries the key either way: a consumer inferring absence from a missing key reads a shape, not a record');
 });
 
@@ -1218,10 +1218,13 @@ const { producedNothing, declaredExports } = await import('../src/read.ts');
 const { describeDefaults, strayWords, unknownFlags } = await import('../src/hkb.ts');
 
 test('producedNothing refuses every Job that left something behind', () => {
-  const bare = { phase: 'succeeded', pr: null, exports: [] as string[] };
-  assert.equal(producedNothing(bare), true, 'succeeded, no PR, nothing declared — the case that matters');
+  const bare = { phase: 'succeeded', exports: [] as string[] };
+  assert.equal(producedNothing(bare), true, 'succeeded and declared nothing — the case that matters');
 
-  assert.equal(producedNothing({ ...bare, pr: 'https://github.com/x/y/pull/1' }), false, 'a pull request is an artifact');
+  // A pull request used to count here. The core stopped reading the forge (ADR-018), so the
+  // question would have exactly one answer for every Job on the board; what is left is ADR-008's
+  // own list, which is the honest one — a Job whose deliverable IS a pull request declares an
+  // output that carries it.
   assert.equal(producedNothing({ ...bare, exports: ['docs/report.md'] }), false,
     'a declared export counts without re-checking: a path the run did not write already failed the attempt');
   assert.equal(producedNothing({ ...bare, results: ['finding'] }), false,
@@ -1257,13 +1260,20 @@ test('hkb ls says so when a succeeded Job produced nothing, and stays quiet when
   const empty = await db.job.create({
     data: { boardId: board.id, name: 'looked and found nothing', brief: 'x', phase: 'succeeded' },
   });
+  // What "shipped" means now: it DECLARED an output, and a declared output the run did not produce
+  // already failed the attempt — so a Job that reached `succeeded` having declared one produced it
+  // by construction. It used to mean "a pull request was found on its branch", which the core no
+  // longer looks for (ADR-018).
   const shipped = await db.job.create({
-    data: { boardId: board.id, name: 'opened a pull request', brief: 'x', phase: 'succeeded' },
+    data: {
+      boardId: board.id, name: 'handed something over', brief: 'x', phase: 'succeeded',
+      results: ['finding'],
+    },
   });
   await db.attempt.create({
     data: {
       jobId: shipped.id, k: 1, host: 'h', maxBudgetUsd: 1, attemptDeadlineSeconds: 1800,
-      branch: `kb-${shipped.id}-1`, prNumber: 7, prUrl: 'https://github.com/x/y/pull/7',
+      results: { finding: 'the answer' },
     },
   });
 
@@ -1271,17 +1281,15 @@ test('hkb ls says so when a succeeded Job produced nothing, and stays quiet when
   const line = (id: number) => out.split('\n').find((l) => l.includes(`#${id}`)) ?? '';
   assert.match(line(empty.id), /produced nothing/, 'the absence is on the row, not only in `hkb show`');
   assert.doesNotMatch(line(shipped.id), /produced nothing/, 'and a Job that shipped is not accused of it');
-  assert.match(out, /1 of 2 succeeded Jobs? produced no pull request and declared no outputs\./,
+  assert.match(out, /1 of 2 succeeded Jobs? .*declared no outputs\./,
     'and the count is the aggregate the finding asked for');
 
   const rows = json((await hkb('ls', '--board', 'produced-nothing', '--json')).out) as
-    { id: number; pr: string | null; exports: string[]; producedNothing: boolean }[];
+    { id: number; exports: string[]; producedNothing: boolean }[];
   const row = (id: number) => rows.find((r) => r.id === id)!;
   assert.equal(row(empty.id).producedNothing, true);
-  assert.deepEqual([row(empty.id).pr, row(empty.id).exports], [null, []],
-    '--json carries the facts, not only the verdict');
+  assert.deepEqual(row(empty.id).exports, [], '--json carries the facts, not only the verdict');
   assert.equal(row(shipped.id).producedNothing, false);
-  assert.equal(row(shipped.id).pr, 'https://github.com/x/y/pull/7');
 });
 
 test('a succeeded Job that declared an export is not marked, even with no pull request', async () => {
@@ -1371,14 +1379,14 @@ test('the board defaults line names every grant, including the ones nobody can o
   assert.equal(
     describeDefaults({
       model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 0,
-      allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'], guide: 'CLAUDE.md', base: 'origin/develop',
+      allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'], guide: 'CLAUDE.md',
       check: 'npm test', workflow: 'implement',
       attemptDeadlineSeconds: 5400, activeDeadlineSeconds: 14400,
     }),
-    'model=claude-haiku-4-5 effort=low maxTurns=8 maxBudget=$0.25 maxRetries=0 attemptDeadline=5400s deadline=14400s across every attempt allowTools=Read|Grep plugins=.claude guide=CLAUDE.md base=origin/develop check=npm test workflow=implement',
+    'model=claude-haiku-4-5 effort=low maxTurns=8 maxBudget=$0.25 maxRetries=0 attemptDeadline=5400s deadline=14400s across every attempt allowTools=Read|Grep plugins=.claude guide=CLAUDE.md check=npm test workflow=implement',
   );
   assert.equal(
-    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null, base: null, check: null, workflow: null, attemptDeadlineSeconds: null, activeDeadlineSeconds: null }),
+    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null, check: null, workflow: null, attemptDeadlineSeconds: null, activeDeadlineSeconds: null }),
     '(none)',
   );
   // An empty list is a value and says so; a null is an absence and says nothing.
@@ -1389,40 +1397,6 @@ test('the board defaults line names every grant, including the ones nobody can o
 });
 
 // ---------------------------------------------------------------- triage
-
-test('--base refuses what git would read as an option, at the two places it can be written', async () => {
-  // A ref reaches git as a bare argv token: `--upload-pack=<cmd>` is a command, not a branch. The
-  // `base:` key of a workflow file is the same string arriving from the repository rather than from
-  // the operator, which is why it is refused at the boundary and not only where git is called.
-  const r = scratchRepo('base-refusals');
-  await hkb('boards', 'add', 'base-refusals', '--repo', r);
-
-  const evil = '--upload-pack=touch /tmp/hkb-PWNED && git-upload-pack';
-  await assert.rejects(
-    () => hkb('new', 'x', '--board', 'base-refusals', '--brief', 'do it', '--base', evil),
-    /--base wants a git ref.*would reach git as an option/s,
-  );
-  assert.equal(fs.existsSync('/tmp/hkb-PWNED'), false, 'and nothing ran');
-
-  // The board default is the same string arriving from the same kind of source. Refused by the
-  // argv guard first here (`given`: a value beginning with a dash is a flag the parser handed over,
-  // not a value) — a different sentence, the same refusal, and a `/tmp/hkb-PWNED` that stays absent.
-  await assert.rejects(
-    () => hkb('boards', 'set', 'base-refusals', '--base', evil),
-    /is a flag rather than a value/,
-  );
-  assert.equal(fs.existsSync('/tmp/hkb-PWNED'), false, 'and nothing ran there either');
-  // And `checkRef` itself is still what stands behind it on that verb, for the refs that do not
-  // begin with a dash: the argv guard is about argv, and this one is about git.
-  await assert.rejects(
-    () => hkb('boards', 'set', 'base-refusals', '--base', 'a branch with spaces'),
-    /--base wants a git ref/,
-  );
-
-  // And a ref that IS one still goes through.
-  const ok = json((await hkb('new', 'y', '--board', 'base-refusals', '--brief', 'do it', '--base', 'origin/main', '--json')).out);
-  assert.equal(ok.id > 0, true);
-});
 
 test('hkb job set edits a filed Job, with the same flags `hkb new` takes', async () => {
   const r = scratchRepo('jobset');
@@ -1717,39 +1691,11 @@ test('hkb job set refuses the subcommand that is not there, and the flag that se
   await assert.rejects(() => hkb('job', 'set', String(id), '--board', 'jobset-refuse'), /nothing to set/);
   // The checkers are the ones `hkb new` runs, so a value that could never be filed cannot be set.
   // A dash-leading one never reaches them: `given` refuses it as argv first (see `--check --json`).
+  // `--base` used to be the case tested here; it went with the git protocol (ADR-018), so the same
+  // property is held on a flag that still exists.
   await assert.rejects(
-    () => hkb('job', 'set', String(id), '--board', 'jobset-refuse', '--base', '--upload-pack=sh'),
+    () => hkb('job', 'set', String(id), '--board', 'jobset-refuse', '--guide', '--upload-pack=sh'),
     /is a flag rather than a value/,
-  );
-  await assert.rejects(
-    () => hkb('job', 'set', String(id), '--board', 'jobset-refuse', '--base', 'a branch with spaces'),
-    /--base wants a git ref/,
-  );
-});
-
-test('an un-isolated Job is not shown a base it can never use', async () => {
-  // A board's `defaultBase` resolves onto every Job it carries, including one running in the
-  // operator's own checkout — where no branch is cut and nothing ever reads it. Printing it said
-  // that Job branches from `origin/main`, which is a fact about a checkout that will not exist.
-  const r = scratchRepo('show-base');
-  await hkb('boards', 'add', 'show-base', '--repo', r);
-  await hkb('boards', 'set', 'show-base', '--base', 'origin/main');
-  const iso = json((await hkb('new', 'a', '--board', 'show-base', '--brief', 'do it', '--json')).out);
-  const bare = json((await hkb('new', 'b', '--board', 'show-base', '--brief', 'do it', '--no-isolate', '--json')).out);
-
-  const shown = (id: number) => hkb('show', String(id), '--board', 'show-base');
-  assert.match((await shown(iso.id)).out, /base\s+origin\/main/, 'a worktree Job is told');
-  assert.doesNotMatch((await shown(bare.id)).out, /base\s+origin\/main/, 'one with no worktree is not');
-});
-
-test('--base and --no-isolate contradict each other, and say so rather than doing nothing', async () => {
-  // A Job with no worktree cuts no branch, so the base would be stored, printed by `hkb show`, and
-  // never read — the silent failure the fifth value forbids.
-  const r = scratchRepo('base-no-isolate');
-  await hkb('boards', 'add', 'base-no-isolate', '--repo', r);
-  await assert.rejects(
-    () => hkb('new', 'x', '--board', 'base-no-isolate', '--brief', 'do it', '--base', 'origin/main', '--no-isolate'),
-    /contradict each other.*Drop one/s,
   );
 });
 

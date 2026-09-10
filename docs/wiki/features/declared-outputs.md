@@ -7,24 +7,26 @@ audience: [dev]
 read_when: "adding or changing an output kind, asking what a Job is supposed to produce, touching the collection block at the end of a run, or wondering why a succeeded Job failed with no_output"
 covers:
   - path: src/results.ts
-    sha: 0fc3dc145a1c515267534909aee79f034effa61b
+    sha: a67f369f7e0806ea8fe10d6def7105ff2a65e131
   - path: src/artifacts.ts
-    sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
-  - path: src/worktree.ts
-    sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
+    sha: 74efd4d0fc9f6f0e5bcce4379b55f533b81e9e6d
   - path: src/controller.ts
-    sha: 55cb278593ae0b3d0692712e4fcff643c29e4a4e
+    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
+  - path: src/exports.ts
+    sha: afa23e85d0df61d1d0d91587d425df2ad7a872a0
+  - path: src/read.ts
+    sha: 6225a35a96f1896a1457385bda9eb9d0868490c0
   - path: src/brief.ts
-    sha: a56db1e2f49d60c695034ecd14f73c5c258cce85
+    sha: b3eddf6aebd95fdab1f38424b24851d6a4e3e5a2
   - path: src/hkb.ts
-    sha: 5dc47f4b0e302d2eba5ca1d0895104f4f6e00bcb
+    sha: c06820804f259a976336c80742b3068586df9d84
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: prisma/schema.prisma
-    sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
-generated_at_commit: 5279b8a
-last_refreshed: 2026-09-09
-related: [decisions/adr-008-declared-outputs, decisions/adr-011-proposals-not-board-access, features/proposals, features/worktree-includes, architecture/job-kind, architecture/the-board]
+    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
+related: [decisions/adr-008-declared-outputs, decisions/adr-011-proposals-not-board-access, decisions/adr-018-the-boundary, features/proposals, features/workflow-templates, architecture/job-kind, architecture/the-board]
 ---
 
 # Declared outputs — export, result, artifact
@@ -34,20 +36,21 @@ related: [decisions/adr-008-declared-outputs, decisions/adr-011-proposals-not-bo
 > destinations implement the rule — the repository, the board's own row, and a directory
 > beside the board — and the interesting parts are the ones a `--help` will not tell you:
 > why the shapes differ, why the small one is capped on purpose, and why all three names
-> are refused before a worktree is ever cut.
+> are refused before a workspace is ever cut.
 
 ## The rule, and what it costs
 
 The declaration is the contract: a declared output that is not produced **fails the
-attempt** (`prisma/schema.prisma:278-283`, `src/controller.ts:1223-1314`). That single rule
+attempt** (`prisma/schema.prisma:312-317`, `src/controller.ts:1440-1504`). That single rule
 is what the three mechanisms exist to serve, and it is what makes `succeeded` mean more
 than "a session ended" — the collection block runs after `nextPhase` has already decided
-the run went fine, and can still overturn it (`src/controller.ts:1496-1497`).
+the run went fine, and can still overturn it (`src/controller.ts:1707-1720`).
 
-What it buys is twofold. The sandbox becomes disposable: once the declared outputs are
-out, whatever is left in the checkout is by definition undeclared, which is the one case
-where a dirty worktree is not evidence of work worth keeping and `removeWorktree` may take
-it (`src/controller.ts:1643-1665`). And absence becomes legible — a Job that produced
+What it buys is twofold. The workspace becomes disposable: once the declared outputs are
+out, whatever is left in it is by definition undeclared, which is the one case where a dirty
+tree is not evidence of work worth keeping — and it is what lets the sweep be a TTL over names
+rather than a heuristic that inspects trees (`src/workspaces.ts:119-170`,
+`howto/running-the-daemon`). And absence becomes legible — a Job that produced
 nothing is a fact the board can state rather than a silence an operator has to notice.
 
 What it costs is stated where the cost lands: filing a Job now carries a decision it did
@@ -60,13 +63,13 @@ by assertion (`docs/wiki/decisions/adr-008-declared-outputs.md`).
 They are not a list of options. They are three points on a range whose axis is *who keeps
 the thing and how big it is*:
 
-- **Export** — a repository-relative path the run wrote inside its checkout, copied out
-  into `Board.repoPath` before the worktree is torn down (`src/worktree.ts:525-570`). The
+- **Export** — a repository-relative path the run wrote inside its workspace, copied out
+  into `Board.repoPath` before the workspace is collected (`src/exports.ts:103-191`). The
   repository keeps it, which means git keeps it, which means it will be committed.
 - **Result** — a small named value the board keeps on the attempt row as a JSON object
-  (`prisma/schema.prisma:525`). Capped per value (below).
+  (`prisma/schema.prisma:577`). Capped per value (below).
 - **Artifact** — a file kept in a directory beside the board, uncapped; only its catalogue
-  — name, kind, size — goes onto the row (`prisma/schema.prisma:549-556`,
+  — name, kind, size — goes onto the row (`prisma/schema.prisma:608`,
   `src/artifacts.ts:121-150`).
 
 The framing that matters, and the one the module states in its own words: **an artifact is
@@ -76,7 +79,7 @@ with no business in a commit at all — and an artifact fills it from the *resul
 
 The rejected alternative is worth knowing because it reads so much cheaper than it is:
 give `exports` a second destination. The copy already takes one (`exportOutputs(from, to,
-declared)`, `src/worktree.ts:525`), so it looks like a call-site change. It is the wrong
+declared)`, `src/exports.ts:103`), so it looks like a call-site change. It is the wrong
 shape. An output that must not be committed should never be *inside* the checkout in the
 first place, where it is either committed by accident or shows up as untracked noise in
 every `git status` a reviewer runs — the argument `resultsDir` already makes for results
@@ -100,15 +103,15 @@ the operator is told in the same sentence where it belonged (`src/results.ts:138
 oversize rather than silently as missing (`src/results.ts:144-147`).
 
 An artifact has no cap and the prompt says so out loud — leaving it implicit would invite
-a worker to summarise something it was asked to hand over whole (`src/brief.ts:148-169`).
+a worker to summarise something it was asked to hand over whole (`src/brief.ts:68-99`).
 
 ## The refusals, and when they fire
 
-All three names are checked at **declaration time**, in `hkb new`, before any worktree
-exists (`createJob`, `src/filing.ts:236-247`). An illegal request should never become state, and finding
+All three names are checked at **declaration time**, in `hkb new`, before any workspace
+exists (`createJob`, `src/filing.ts:239-246`). An illegal request should never become state, and finding
 the fault at file time costs nothing while finding it at collection time costs a whole
 run. The export check runs a second time at copy time, because a row can arrive by routes
-other than the CLI (`src/worktree.ts:537`).
+other than the CLI (`src/exports.ts:115`).
 
 The three fences differ because the three names name different kinds of place:
 
@@ -126,48 +129,47 @@ The three fences differ because the three names name different kinds of place:
   than one file without needing a path syntax (`src/artifacts.ts:139`).
 - An **export path** is the only one that has to police anything, and it polices a lot:
   absolute paths, `..` escapes, `.` naming the whole checkout, and the two directories that
-  are not outputs — `.hkb/`, where the worktrees and the board file live, and `.git/`,
-  which in a worktree is a *file* pointing at the admin directory and whose copy would
-  break a checkout in a way nobody would connect back to an export declaration
-  (`src/worktree.ts:460-489`). The asymmetry is the point: an export names somewhere inside
-  a tree that already has contents, and the copy happens with the operator's authority and
-  no agent in the loop.
+  are not outputs — `.hkb/`, where the board file lives, and `.git/`, which in a worktree is
+  a *file* pointing at the admin directory and whose copy would break a checkout in a way
+  nobody would connect back to an export declaration (`src/exports.ts:38-67`). The asymmetry
+  is the point: an export names somewhere inside a tree that already has contents, and the
+  copy happens with the operator's authority and no agent in the loop.
 
 ## Collection, and the asymmetry in it
 
 Before the run, the controller builds a path per declared name and creates both collection
 directories — always, even when nothing was declared, because a run may volunteer
-something (`src/controller.ts:946-969`). Those paths go into the prompt as **absolute**
+something (`src/controller.ts:1016-1036`). Those paths go into the prompt as **absolute**
 paths, and the worker is told plainly that they are outside its checkout and will not
-appear in its diff (`src/brief.ts:152-201`, `src/results.ts:82-86`,
+appear in its diff (`src/brief.ts:68-130`, `src/results.ts:82-86`,
 `src/artifacts.ts:91-95`). Nothing is parsed out of a transcript and nothing arrives by
 tool call: the worker writes files, the controller reads the directory.
 
 At the end of a run, all three are collected under the same two gates — the attempt
-otherwise succeeded, and the holder kept its lease to the end (`src/controller.ts:1228-1234`,
-`:986`, `:1012`). A crashed or capped attempt has not finished the work, so half its
+otherwise succeeded, and the holder kept its lease to the end (`src/controller.ts:1440`,
+`:1462`, `:1488`). A crashed or capped attempt has not finished the work, so half its
 outputs being absent describes the stop it already reported rather than a second finding.
 Exports resolve in two passes — plan everything, then copy — so a shortfall never leaves
-half a failed run's output mixed into the repository (`src/worktree.ts:520-570`).
+half a failed run's output mixed into the repository (`src/exports.ts:114-135`).
 
 **And the two passes are split across the completion check**, which is where that same rule
 had a hole in it. Asking whether the declared paths are *there* happens early
-(`exportOutputs(..., { copy: false })`, `src/controller.ts`), because a missing declared output
-is the cheaper cause and has to keep outranking a check that would spend ten minutes finding a
-second one. **Copying** them into `Board.repoPath` happens after the check — it used to run about
-150 lines earlier, so an attempt the check went on to *refuse* had already written its files into
-the operator's repository, which is exactly what this rule forbids one step out
-(`features/check`). Nothing is lost by waiting: a refused check keeps its checkout, and the files
-are still in it.
+(`exportOutputs(..., { copy: false })`, `src/controller.ts:1447`), because a missing declared
+output is the cheaper cause and has to keep outranking a check that would spend ten minutes finding
+a second one. **Copying** them into `Board.repoPath` happens after the check
+(`src/controller.ts:1650-1656`) — it used to run about 150 lines earlier, so an attempt the check
+went on to *refuse* had already written its files into the operator's repository, which is exactly
+what this rule forbids one step out (`features/check`). Nothing is lost by waiting: a refused check
+keeps its workspace, and the files are still in it.
 
 **The copy is gated on the check and on nothing else that failed**, and that qualification is the
 correction to the move rather than a footnote on it. Carrying the whole `!shortfall` condition
 down with the copy quietly changed the shipped-default rule: an export that *was* present stopped
-being delivered because a different declared output was missing, or because the rebase conflicted
-— and a conflicted attempt is not resumable, so nothing ever delivered it. The rule is the one
-`main` had, and the rebase block one screen up states it about its own placement: what an attempt
-produced "is a durable record of what happened and is worth keeping whether or not its diff still
-applies". Copy what is present; let the shortfall be the shortfall; only a check that **refused**
+being delivered because a different declared output was missing. (The sharpest case of that was a
+conflicted rebase, which is not resumable, so nothing ever delivered it — ADR-018 deleted the
+rebase, and `conflicted` has since gone from the `Outcome` enum entirely rather than merely losing
+its writer, so the hazard reads as history rather than as a live one.) The principle survives it: what an attempt produced is a durable record of what
+happened and is worth keeping whether or not its diff still applies. Copy what is present; let the shortfall be the shortfall; only a check that **refused**
 withholds the copy. A stop that lands mid-check copies too — the run finished and produced what
 it promised, no verdict was given either way, and recording `exported: []` about files the probe
 had just seen was the alternative.
@@ -181,15 +183,15 @@ file stays where the worker put it.
 
 That asymmetry propagates to lifetime. The results directory is removed unconditionally
 when the attempt ends, success or failure, because the values are durable by being on the
-row rather than by the file surviving (`src/controller.ts:1283-1285`,
+row rather than by the file surviving (`src/controller.ts:1481`,
 `src/results.ts:152-155`). The artifacts directory is removed **only if it is empty** —
 `rmdir` refusing a non-empty directory is exactly the test that needs making — because an
 artifact's value *is* the file, so nothing else holds it (`src/artifacts.ts:177-189`,
-`src/controller.ts:1305-1308`). Nothing removes a non-empty one at all, which is why the
+`src/controller.ts:1504`). Nothing removes a non-empty one at all, which is why the
 size is walked and recorded: it is the only warning an operator gets that a board is
 filling up (`src/artifacts.ts:152-175`), and `hkb show` prints both the sizes and the
 directory, since an artifact is the one output whose location a human has to be told
-(`src/hkb.ts:1030-1031`).
+(`src/hkb.ts:1000`).
 
 Both collection directories live under the board's own directory —
 `boardDir()/results/<jobId>-<k>` and `boardDir()/artifacts/<jobId>-<k>`
@@ -215,27 +217,34 @@ Two different things get called "produced nothing", and they are worth keeping a
 
 **A declared output that did not arrive** ends the attempt as `no_output`, not resumable,
 with the shortfall message as `lastError` and as the attempt's `reason`
-(`src/controller.ts:1496-1497`, `:1099`). It outranks the gate: a run that did not produce
-what it promised has nothing worth approving (`src/controller.ts:1485-1495`). Only the
+(`src/controller.ts:1720`, `:1767`). It outranks the gate: a run that did not produce
+what it promised has nothing worth approving (`src/controller.ts:1707-1722`). Only the
 first cause found is reported — export shortfall, then result, then artifact — because two
 concatenated shortfalls read worse than one and mean the same thing
-(`src/controller.ts:1272-1274`, `:1016-1018`). The messages are written for the person who
+(`src/controller.ts:1470`, `:1494`). The messages are written for the person who
 has to decide whose mistake it was, which is why they name the value and the remedy rather
 than a code (`src/results.ts:158-169`, `src/artifacts.ts:209-215`).
 
-**A Job that succeeded having declared nothing and opened no pull request** is the other
-case, and it is not a failure. `producedNothing` is a pure predicate over a Job's already
-known fields — phase, a PR on any attempt, the three declaration columns, and whether it
-proposes (`producedNothing`, `src/read.ts:63-79`). It re-checks nothing, because a Job that reached
+**A Job that succeeded having declared nothing** is the other case, and it is not a
+failure. `producedNothing` is a pure predicate over a Job's already known fields — phase, the
+three declaration columns, and whether it proposes (`producedNothing`, `src/read.ts:68-83`).
+It re-checks nothing, because a Job that reached
 `succeeded` having declared any of the three produced it by construction — the collection
 block would have failed it otherwise. Being pure is what lets it be tested exhaustively as
 a *refusal*: the test enumerates every kind of thing that counts as having left something
 behind and asserts each one turns the answer off (`test/hkb.test.ts`, `producedNothing`).
 `hkb ls` renders it as a suffix on the row and one summary line, stated and not judged —
 "I looked and there is nothing to change" is a real outcome; what is not acceptable is
-that it reads exactly like a Job that shipped a pull request (`src/hkb.ts:827-833`).
+that it reads exactly like a Job that shipped something (`src/hkb.ts:809-812`).
 
-## The gap that closed: the worktree no longer implies a pull request
+**A pull request used to count, and ADR-018 stopped it counting.** `Attempt.prUrl` and
+`Attempt.prNumber` are gone with the forge read, so the question would have had one answer for
+every Job on the board. What replaced it is the honest version and it is ADR-008's own list: a Job
+whose deliverable really *is* a pull request declares an output that carries it — a `--result`
+holding the URL, say — and that declaration is what the board counts. A branch-name lookup on a
+forge speaking for a Job's worth was always the weaker question (`src/read.ts:44-66`).
+
+## The gap that closed: nothing in the core implies a pull request any more
 
 ADR-008 decided that `isolate` returns to meaning one thing — *where* the work runs — and
 that the pull-request protocol becomes one declarable output shape among several, selected
@@ -247,27 +256,29 @@ isolated Job whose entire deliverable was a `--result` or an `--artifact` was to
 work it did not have, on top of a contract telling it to write somewhere outside the
 checkout.
 
-ADR-017 decision 5 closed most of it from the other end, and by removal rather than by a
-switch: the core now appends only the **sandbox contract** (`withSandbox`, `src/brief.ts`),
-which asks for a commit and a push of the worker's own branch and says nothing about a
-forge, a pull request or a review. Those steps come from a board's default workflow —
-content a person wrote for the Jobs it fits (*features/workflow-templates*).
+ADR-017 decision 5 closed most of it from the other end, by removal rather than by a
+switch: the core kept only the **sandbox contract** — commit on your branch, rebase onto your
+base, push that branch and nothing else — and said nothing about a forge, a pull request or a
+review.
 
-The push stayed in the core deliberately, and the first attempt at this change took it out
-one card too early: the core *reads pushed state*. `pushedRef` decides whether a rebase is
-legal, and `sweepWorktrees` keeps a checkout for ever when its work "has never been pushed
-anywhere" — so a worker never told to push leaves a Job recorded `succeeded — produced
-nothing` and a worktree nothing will ever reclaim. The line leaves when those reads do.
+**ADR-018 closed the rest, and it closed it by deleting the contract too.** The test for a line
+belonging in the core was always whether the machinery made it true afterwards; the core no longer
+rebases, no longer reads pushed state and installs no `pre-push` hook, so none of those lines could
+be said. `src/brief.ts` now appends only what is still paired with a refusal — the inputs, the
+declared outputs, the check, the guide, the standing rules, the gate and the proposal contract —
+and **every git instruction a worker gets is content**, in the workflow file
+(`.hkb/workflows/implement.md`, `features/workflow-templates`).
 
-What remains is smaller and is a *content* question rather than a machinery one: a board
-whose default workflow says "open a pull request" appends that to a result-only Job filed on
-it too. The board-level answers are `--from` (which suppresses the default) and, for a Job
-that proposes, the exclusion the CLI already makes.
+So the gap is closed in the direction ADR-008 wanted, and the remaining question is purely a
+content one: a board whose default workflow says "commit, push, open a pull request" appends that
+to a result-only Job filed on it too. The board-level answers are `--from` (which suppresses the
+default), `--no-isolate` and `--propose` (which the CLI excludes from the default workflow
+outright).
 
 ## Related
 
 - [ADR-008: A Job declares its outputs](../decisions/adr-008-declared-outputs.md) — the decision, and the annex on what has since been settled
 - [ADR-011: Proposals, not board access](../decisions/adr-011-proposals-not-board-access.md) — the record that needed a third output kind
 - [features/proposals](proposals.md) — a proposal rides the artifact channel under a name the controller fixes
-- [features/worktree-includes](worktree-includes.md) — the mirror: what crosses *into* a worktree
+- [features/workflow-templates](workflow-templates.md) — where the git protocol lives now, and why it is content
 - [architecture/the-board](../architecture/the-board.md) — the columns these declarations and catalogues live in

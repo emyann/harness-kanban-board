@@ -81,7 +81,7 @@ test('a lapsed lease whose holder is still running is NOT reclaimed', async () =
   await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
   await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'me', runtime: 'fake', maxBudgetUsd: 1 , attemptDeadlineSeconds: 1800} });
 
-  const report = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug, readPr: false });
+  const report = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug });
 
   assert.deepEqual(report.reclaimed, [], 'nothing was reclaimed');
   assert.ok(await db.lease.findUnique({ where: { jobId: job.id } }), 'the lease is still held');
@@ -105,7 +105,7 @@ test('a lapsed lease whose holder has exited IS reclaimed, without waiting any l
   await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
   await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'gone', runtime: 'fake', maxBudgetUsd: 1 , attemptDeadlineSeconds: 1800} });
 
-  const report = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug, readPr: false });
+  const report = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug });
   assert.deepEqual(report.reclaimed, [job.id]);
   assert.equal(await db.lease.findUnique({ where: { jobId: job.id } }), null);
   const attempt = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 1 } } });
@@ -124,7 +124,7 @@ test('a holder on another machine is left to the clock, and the clock says take 
     },
   });
   await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
-  const report = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug, readPr: false });
+  const report = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug });
   assert.deepEqual(report.reclaimed, [job.id], 'we cannot see that host, so expiry is all there is');
 });
 
@@ -140,11 +140,11 @@ test('reclaim: false leaves even a provably dead holder alone — the pass after
   });
   await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
 
-  const skipped = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug, readPr: false, reclaim: false });
+  const skipped = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug, reclaim: false });
   assert.deepEqual(skipped.reclaimed, []);
   assert.ok(await db.lease.findUnique({ where: { jobId: job.id } }), 'held through the woke pass');
 
-  const next = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug, readPr: false });
+  const next = await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug });
   assert.deepEqual(next.reclaimed, [job.id], 'and taken on the very next one');
 });
 
@@ -157,7 +157,7 @@ test('a shutdown mid-run releases the lease, and records a stop rather than a fa
   // maxRetries 0 is the sharp version: one attempt is all this Job is allowed. If a stop spends
   // it, the Job is `failed` and unrunnable, having never once failed at anything.
   const run = reconcile({
-    runtime: fakeRuntime({ delayMs: 30_000 }), cwd: REPO, board: board.slug, readPr: false,
+    runtime: fakeRuntime({ delayMs: 30_000 }), cwd: REPO, board: board.slug,
     signal: stopper.signal,
   });
   await new Promise((r) => setTimeout(r, 150));
@@ -178,14 +178,14 @@ test('a stopped attempt does not spend a retry: the Job still runs to completion
   const job = await mkJob(board.id, { maxRetries: 0 });
   const stopper = new AbortController();
   const run = reconcile({
-    runtime: fakeRuntime({ delayMs: 30_000 }), cwd: REPO, board: board.slug, readPr: false,
+    runtime: fakeRuntime({ delayMs: 30_000 }), cwd: REPO, board: board.slug,
     signal: stopper.signal,
   });
   await new Promise((r) => setTimeout(r, 150));
   stopper.abort();
   await run;
 
-  await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug, readPr: false });
+  await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug });
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: { orderBy: { k: 'asc' } } } });
   assert.equal(after.phase, 'succeeded');
   assert.equal(after.attempts.length, 2, 'k still advanced — it is half a primary key');
@@ -200,7 +200,7 @@ test('a shutdown claims nothing new', async () => {
   const stopper = new AbortController();
   stopper.abort();
   const report = await reconcile({
-    runtime: fakeRuntime(), cwd: REPO, board: board.slug, readPr: false, signal: stopper.signal,
+    runtime: fakeRuntime(), cwd: REPO, board: board.slug, signal: stopper.signal,
   });
   assert.deepEqual(report.claimed, [], 'already stopping when the pass began');
   for (const j of [a, b]) {
@@ -595,56 +595,140 @@ test('a resumable stop keeps its checkout — the next attempt resumes IN it', a
       };
     },
   };
-  await reconcile({ runtime: capped, cwd: REPO, board: board.slug, readPr: false });
+  await reconcile({ runtime: capped, cwd: REPO, board: board.slug });
 
-  // The worker left nothing behind, so the keep-test alone would have taken this directory — and
-  // the next attempt would then be cut fresh from origin, on a branch reset to base, with the
-  // resumed session convinced it was still in the tree it had been working in.
-  assert.equal(fs.existsSync(path.join(elsewhere, '.hkb', 'worktrees', `kb-${job.id}-1`)), true,
-    'resume is not restart, on disk as well as in the transcript');
+  // The property that used to be bought by a keep-test over the tree's contents, now bought by the
+  // TTL: a Job that has not FINISHED cannot be selected however old it is, so nothing collects the
+  // workspace its next attempt will resume into. Resume is not restart, on disk as well as in the
+  // transcript.
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
   assert.equal(after.phase, 'pending');
   assert.ok(after.lastSessionId, 'and there is a session to resume');
+  const { collectable } = await import('../src/workspaces.ts');
+  assert.equal(after.finishedAt, null);
+  assert.deepEqual(
+    collectable(
+      [{ id: job.id, finishedAt: after.finishedAt, phase: after.phase, resumable: true }],
+      new Date(Date.now() + 1e9), 0,
+    ),
+    [],
+    'and no TTL, however long, makes it collectable while another attempt may resume there',
+  );
 });
 
-test('the tick reclaims a checkout whose branch has landed — a sweep, not a step of the run', async () => {
-  // A repository with a real remote: the sweep's proof is a fact about what the remote still has.
-  const repo = path.join(dir, 'landed');
-  const remote = path.join(dir, 'landed-remote.git');
-  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', remote]);
-  fs.mkdirSync(repo);
-  const g = (args: string[], cwd = repo) => spawnSync('git', args, { cwd, encoding: 'utf8' });
-  g(['init', '-q', '-b', 'main']);
-  g(['config', 'user.email', 'l@test']);
-  g(['config', 'user.name', 'l']);
-  fs.writeFileSync(path.join(repo, 'README.md'), '# landed\n');
-  g(['add', '-A']);
-  g(['commit', '-qm', 'base']);
-  g(['remote', 'add', 'origin', remote]);
-  g(['push', '-q', '-u', 'origin', 'main']);
+test('the tick collects a finished Job\'s workspace once its TTL has elapsed', async () => {
+  // What replaced the inspect-the-tree heuristic. `ttlSecondsAfterFinished` asks nothing about what
+  // is in the tree; the interesting cases are the ones it REFUSES, and they are exhaustive here
+  // because `collectable` is pure.
+  const { collectable, removeWorkspace, workspaceJobId } = await import('../src/workspaces.ts');
 
-  // What an earlier run left: a checkout whose work is pushed and whose pull request has since
-  // been squash-merged and its branch deleted. Nothing tells hkb that happened — only asking does.
-  const { createWorktree } = await import('../src/worktree.ts');
-  const wt = createWorktree(repo, 99, 1);
-  fs.writeFileSync(path.join(wt.path, 'work.txt'), 'the Job did this\n');
-  g(['add', '-A'], wt.path);
-  g(['commit', '-qm', 'the Job'], wt.path);
-  g(['push', '-q', '-u', 'origin', wt.branch], wt.path);
-  execFileSync('git', ['--git-dir', remote, 'update-ref', '-d', `refs/heads/${wt.branch}`]);
+  const finishedAt = new Date('2026-09-10T10:00:00Z');
+  const done = { id: 1, finishedAt, phase: 'succeeded', resumable: false };
+  const anHourLater = new Date('2026-09-10T11:00:00Z');
 
-  const board = await db.board.create({ data: { slug: `landed${++n}`, repoPath: repo } });
-  const lines: string[] = [];
-  await daemon.loop({
-    runtime: fakeRuntime(), cwd: REPO, board: board.slug, intervalMs: 5,
-    signal: new AbortController().signal, maxTicks: 1, log: (l) => lines.push(l),
+  assert.deepEqual(collectable([done], anHourLater, 3600), [1], 'finished, and exactly on time');
+  assert.deepEqual(collectable([done], new Date('2026-09-10T10:59:59Z'), 3600), [],
+    'a second early is not yet');
+  assert.deepEqual(collectable([done], anHourLater, 0), [1], 'a TTL of zero is immediately, not never');
+
+  // ---- the refusals, which are the whole point of the field.
+  assert.deepEqual(
+    collectable([{ id: 2, finishedAt: null, phase: 'running', resumable: false }], anHourLater, 0), [],
+    'a Job that has not finished is never a candidate, whatever the TTL');
+  assert.deepEqual(
+    collectable([{ id: 3, finishedAt: null, phase: 'suspended', resumable: false }], anHourLater, 0), [],
+    'nor one waiting on a person');
+  // A workspace whose Job row is gone — `hkb rm`, the normal way to tidy — is collectable at once.
+  // Without it the checkout matches no Job, `collectable` returns nothing, and a whole repository
+  // leaks for ever.
+  assert.deepEqual(
+    collectable([{ id: 6, finishedAt: new Date(0), phase: 'gone', resumable: false }], anHourLater, 0),
+    [6], 'and a Job that no longer exists cannot want its workspace back');
+  // A retry could resume into this one, so it gets the LONGER window — not a permanent veto, which
+  // would keep a full checkout per failed Job for ever with no time term anywhere.
+  const { RESUMABLE_TTL_SECONDS } = await import('../src/workspaces.ts');
+  assert.deepEqual(
+    collectable([{ ...done, id: 4, resumable: true }], anHourLater, 0), [],
+    'not on the ordinary TTL — `max_budget` ends `failed` keeping its session, so `hkb retry '
+    + '--max-budget` continues it, and collecting the tree an hour later would strand that retry');
+  assert.deepEqual(
+    collectable([{ ...done, id: 4, resumable: true }],
+      new Date(finishedAt.getTime() + (RESUMABLE_TTL_SECONDS + 1) * 1000), 0),
+    [4], 'but the window is a window: past it, the workspace goes and a retry starts cold');
+
+  // The field failing SAFE is the property that matters, because a caller that forgets it must not
+  // silently start deleting. Asserted by passing a row that never mentions it.
+  const forgot = { id: 5, finishedAt, phase: 'succeeded' } as never;
+  assert.deepEqual(collectable([forgot], anHourLater, 0), [],
+    'a row that does not say gets the LONGER window, never the shorter one — a guard fails in the '
+    + 'cheaper direction, and a caller that forgets makes the sweep slow rather than destructive');
+});
+
+test('a board never collects a workspace belonging to another board on the same repository',
+  async () => {
+    // `Board.repoPath` has no unique constraint and two boards on one repository is supported — so a
+    // workspace this sweep finds may not be this board's. An earlier version filtered the Job query
+    // by `boardId`, which made every one of the other board's Jobs look like a row that had been
+    // DELETED, and a deleted row is collectable immediately with no TTL. One board would have taken
+    // the other's checkouts out from under live work.
+    const { collectable } = await import('../src/workspaces.ts');
+
+    // What the daemon computes: existence asked across every board, ownership asked second.
+    const present = [{ jobId: 1, path: '/r/.claude/worktrees/kb-1' },
+                     { jobId: 2, path: '/r/.claude/worktrees/kb-2' }];
+    const rows = [
+      { id: 1, boardId: 10, finishedAt: null, phase: 'running', lastSessionId: null },
+      { id: 2, boardId: 99, finishedAt: null, phase: 'running', lastSessionId: null },
+    ];
+    const known = new Map(rows.map((r) => [r.id, r]));
+    const mine = present.filter((w) => (known.get(w.jobId)?.boardId ?? 10) === 10);
+    assert.deepEqual(mine.map((w) => w.jobId), [1],
+      'the other board\'s live workspace is not this board\'s to consider at all');
+
+    // And the case the ownership check must NOT swallow: a row genuinely gone (`hkb rm`) is still
+    // this board's to collect, because nothing anywhere claims it.
+    const orphan = [{ jobId: 3, path: '/r/.claude/worktrees/kb-3' }];
+    const orphanMine = orphan.filter((w) => (new Map().get(w.jobId)?.boardId ?? 10) === 10);
+    assert.deepEqual(orphanMine.map((w) => w.jobId), [3]);
+    assert.deepEqual(
+      collectable([{ id: 3, finishedAt: new Date(0), phase: 'gone', resumable: false }], new Date(), 0),
+      [3], 'a Job that exists on no board cannot want its workspace back');
   });
 
-  assert.equal(fs.existsSync(wt.path), false, 'the tick took it back');
-  assert.ok(lines.some((l) => l.includes('swept') && l.includes(wt.branch)), lines.join('\n'));
-  const swept = await db.event.findFirst({ where: { boardId: board.id, kind: 'swept' } });
-  assert.ok(swept, 'and it is on the record, like every other thing the loop does');
-});
+test('the sweep removes the worktree git actually reported, not one rebuilt from a convention',
+  async () => {
+    // The regression this exists for: an earlier version kept only the basename and had
+    // `removeWorkspace` reconstruct `<root>/.claude/worktrees/<name>`. A worktree anywhere else was
+    // found, missed by the remove, reported REMOVED — an absent workspace has to be a success, or
+    // the sweep reports the same thing for ever — and so logged on every tick in perpetuity. That is
+    // the exact runaway the whole function was written to end.
+    const { existingWorkspaces, removeWorkspace } = await import('../src/workspaces.ts');
+    const repo = path.join(dir, `elsewhere${++n}`);
+    fs.mkdirSync(repo, { recursive: true });
+    const g = (args: string[], cwd = repo) => spawnSync('git', args, { cwd, encoding: 'utf8' });
+    g(['init', '-q', '-b', 'main']);
+    g(['config', 'user.email', 'l@test']);
+    g(['config', 'user.name', 'l']);
+    fs.writeFileSync(path.join(repo, 'README.md'), '# x\n');
+    g(['add', '-A']);
+    g(['commit', '-qm', 'base']);
+
+    // Deliberately NOT under `.claude/worktrees` — that is the case the bug could not see.
+    const odd = path.join(dir, `kb-4242`);
+    g(['worktree', 'add', '-q', odd, '-b', 'kb-4242']);
+
+    const found = existingWorkspaces(repo);
+    assert.deepEqual(found.map((w) => w.jobId), [4242], 'found by name');
+    assert.equal(fs.realpathSync(found[0].path), fs.realpathSync(odd), 'and carrying its REAL path');
+
+    const swept = removeWorkspace(repo, found[0].path);
+    assert.equal(swept.removed, true);
+    assert.equal(fs.existsSync(odd), false,
+      'and it is actually gone — "removed" must never be reported about a directory still on disk');
+
+    // And a workspace that is genuinely absent is still a success, or the sweep never stops.
+    assert.equal(removeWorkspace(repo, path.join(dir, 'kb-9999')).removed, true);
+  });
 
 test('the Job runs in the repository its BOARD names, not wherever the daemon started', async () => {
   // The reason `repoPath` exists: a machine-level daemon has no meaningful cwd of its own.
@@ -654,13 +738,28 @@ test('the Job runs in the repository its BOARD names, not wherever the daemon st
   const job = await db.job.create({
     data: { boardId: board.id, name: 'in its own repo', brief: 'x', isolate: true, maxRetries: 0 },
   });
-  await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug, readPr: false });
-  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
-  assert.equal(after.attempts[0].branch, `kb-${job.id}-1`);
+  // The runtime is handed the BOARD's repository as `cwd`, not the daemon's. That is the whole
+  // assertion now: the controller declares a workspace and the runtime provisions it, so what
+  // proves the repository was right is what `cwd` was — there is no checkout of ours to look for.
+  const seen: string[] = [];
+  const spy = {
+    name: 'spy',
+    async run(spec: { cwd: string; workspace?: { name: string } }) {
+      seen.push(spec.cwd);
+      const ws = spec.workspace ? path.join(spec.cwd, '.hkb', 'workspaces', spec.workspace.name) : null;
+      if (ws) fs.mkdirSync(ws, { recursive: true });
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null, workspacePath: ws };
+    },
+  } as never;
+  await reconcile({ runtime: spy, cwd: REPO, board: board.slug });
+  assert.deepEqual(seen, [elsewhere], 'the repository its BOARD names, never the daemon\'s own cwd');
   assert.ok(fs.existsSync(path.join(elsewhere, 'ELSEWHERE.md')),
     'sanity: the other repository is the one with this file in it');
-  const wt = path.join(elsewhere, '.hkb', 'worktrees');
-  assert.equal(fs.existsSync(path.join(REPO, '.hkb', 'worktrees', `kb-${job.id}-1`)), false,
-    'and no worktree was cut in the daemon-cwd repository');
-  void wt;
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  // And the run was ACCEPTED. The spy provisions the workspace it was asked for; one that reported
+  // none would be refused by `isolationShortfall`, and this test would have gone on passing while
+  // asserting nothing about the outcome it had changed.
+  assert.equal(after.phase, 'succeeded');
+  assert.equal(after.attempts[0].outcome, 'completed');
 });

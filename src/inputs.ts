@@ -63,7 +63,7 @@ export type ValueFrom =
  * What a Job may read about **itself** — the downward API, and `fieldRef` is the model.
  *
  * A Pod can read `metadata.name`, `metadata.namespace`, `spec.nodeName`, `status.podIP`. A worker
- * could read none of these about itself: it learned its branch from prose in the sandbox contract
+ * could read none of these about itself: it learned where it stood from prose the core no longer writes
  * and nothing else, so a brief wanting the attempt number had to hardcode one, which is wrong on
  * attempt 2.
  *
@@ -72,13 +72,12 @@ export type ValueFrom =
  * database name needs a small integer bounded by how many runs there can be at once. Kubernetes
  * gives every Pod its own IP and the question does not arise; hkb's workers share one machine.
  *
- * `base` is the field ADR-017 earns. When the pull request left the core, the one fact it took with
- * it was where the review opens — `BaseAdvice.prBase`, computed by the controller and written into
- * prose nobody could reach. A step's content has to be able to say *"open it against your base"* and
- * mean the ref the checkout was actually cut from, which is what this reads: `origin/main`, or
- * `origin/kb-33-1` for a chain step. Content, not core, and the same value either way.
+ * **`branch`, `base` and `worktree` are gone** (ADR-018), and `checkInputSpec` refuses them at file
+ * time along with any other name that is not here — the whole point of resolving inputs before a
+ * session is bought is that a bad declaration costs nothing.
  */
-export const JOB_FIELDS = ['id', 'name', 'board', 'attempt', 'slot', 'branch', 'base', 'worktree', 'repo'] as const;
+export const JOB_FIELDS = ['id', 'name', 'board', 'attempt', 'slot', 'repo'] as const;
+
 export type JobField = (typeof JOB_FIELDS)[number];
 
 /** What an input actually resolved to, for the prompt and for the Attempt's catalogue. */

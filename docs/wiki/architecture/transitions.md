@@ -9,11 +9,11 @@ covers:
   - path: src/transitions.ts
     sha: e8c5fe209ec0267246c9c87d547e6c4e7476a639
   - path: src/job-spec.ts
-    sha: a18d68df2e5e1f3859baa9fe0c992ab6dfaf9cdf
+    sha: 306081250abffb329102b61a36d45b11b1efcd20
   - path: src/hkb.ts
-    sha: 5dc47f4b0e302d2eba5ca1d0895104f4f6e00bcb
+    sha: c06820804f259a976336c80742b3068586df9d84
   - path: prisma/schema.prisma
-    sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
+    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
 related:
   [
     decisions/adr-015-machinery-and-consumer,
@@ -22,8 +22,8 @@ related:
     decisions/adr-010-the-human-gate,
     architecture/the-board,
   ]
-generated_at_commit: 5279b8a
-last_refreshed: 2026-09-09
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 ---
 
 # Transitions — the human half of a Job's lifecycle
@@ -137,10 +137,12 @@ and the CLI said "1 field set". That is the *fourth* guard in this codebase spel
 doing nothing. The rule the four have in common: **when a check already exists, use it; do not write
 it again beside itself.**
 
-The other thing a spec edit must not become is a back door into a state `hkb new` refuses. Two are
+The other thing a spec edit must not become is a back door into a state `hkb new` refuses. One is
 enforced in the module for that reason — a proposer may not have its gate cleared (ADR-011: the
-controller only suspends a gated Job, so the proposal would be parsed and never applied, silently),
-and an un-isolated Job may not be given a base it cuts no branch to use. A brief set here is
+controller only suspends a gated Job, so the proposal would be parsed and never applied, silently).
+There were two: an un-isolated Job could not be given a `base` it cut no branch to use, and that
+refusal went with the field itself when the git protocol left the core
+(*decisions/adr-018-the-boundary*; `SETTABLE`, `src/job-spec.ts`). A brief set here is
 rendered against its `value:` inputs exactly as `hkb new` renders one, or the same words would mean
 two things depending on which verb was typed.
 

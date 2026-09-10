@@ -32,7 +32,6 @@ export const Outcome = {
   crashed: 'crashed',
   no_output: 'no_output',
   no_input: 'no_input',
-  conflicted: 'conflicted',
   check_failed: 'check_failed',
   deadline_exceeded: 'deadline_exceeded',
   lost: 'lost',

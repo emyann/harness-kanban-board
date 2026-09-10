@@ -7,18 +7,16 @@ audience: [dev]
 read_when: "adding a rule an agent must obey, reviewing anything that says 'the prompt tells it to', or wiring a new workload kind's constraints"
 covers:
   - path: src/admission.ts
-    sha: 3da82a22f3e857c3142359fce3cfefda0be59da8
+    sha: 30a869c5ca1609f1e335c0f30854d9b285c31c45
   - path: src/runtime/claude.ts
-    sha: c19d9065a63bc8265bbad6bcb29f1643bfe72938
+    sha: e3afb9de9e34d90f222e7bf9865cbad39e99044b
   - path: src/runtime/surface.ts
     sha: e7660f0ce513bfc804cc31a0a92040e5bdc7fa1a
-  - path: src/push.ts
-    sha: 79181173571e3f6359402de26638e1e5fef904ac
-  - path: src/pre-push.ts
-    sha: 589393dab0dfb3bff5d7b4edf16c7b808b85e1c7
-generated_at_commit: ff67f87
-last_refreshed: 2026-09-09
-related: [architecture/runtime-layer, architecture/job-kind, features/skill-invocation, decisions/adr-007-workload-scheduler, decisions/adr-017-the-workflow-is-content, gotchas/prompt-is-not-a-guarantee]
+  - path: src/workspaces.ts
+    sha: b709212e781376f570a613907a209648dab91526
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
+related: [architecture/runtime-layer, architecture/job-kind, features/skill-invocation, decisions/adr-007-workload-scheduler, decisions/adr-017-the-workflow-is-content, decisions/adr-018-the-boundary]
 ---
 
 # Admission control
@@ -123,98 +121,51 @@ spawn work nothing has claimed. This is where a skill that spawns subagents
 (`/code-review`) stops — the spawn is a tool call, so it makes no difference
 whether a brief or a skill asked for it.
 
-## The push rule — and the layer it had to move to
+## The push rule — deleted, and why nothing replaced it
 
-This is the clearest example of the distinction this page opens with, and also
-the clearest example of getting that distinction right and the *layer* wrong.
+**This section used to describe hkb's largest guard. It is gone (*decisions/adr-018-the-boundary*),
+and the shape of its removal is worth more than the mechanism was.**
 
-*"Never push to the default branch"* was a sentence in the worker's prompt: layer
-6 of `docs/workflow-study.md` §4, *"guarantees nothing; measured guaranteeing
-nothing twice"*. The first fix moved it here — a pure `checkPush` module reading
-the `Bash` command as argv, refusing anything it could not place. It had a full
-test suite and it passed.
+What stood here: the gate refused `--no-verify` and any `core.hooksPath` reassignment in a `Bash`
+command, so that a `pre-push` hook — installed by the controller on the attempt's worktree, pinned
+at claim time to the branch it was given — stayed on the path. Every push reached that hook with its
+refspecs already resolved, so the trunk, another Job's branch, `--all`, `--mirror` and every spelling
+of a delete were refused identically.
 
-Then the same forms were run against a real remote, and ten got through:
+Three things ended it, in order:
 
-| what was typed | why the parser missed it |
-| --- | --- |
-| `git push -f --force-with-lease origin HEAD:main` | git's `--force` disables the lease; the parser saw a lease |
-| `git push -fu origin HEAD:main` | bundled short options |
-| `git push origin kb-7-1 >/dev/null main` | the redirect ended the segment the parser was reading |
-| `git push origin :kb-7-1` | git's delete spelling, parsed as the worker's own branch |
-| `git -c remote.origin.push=refs/heads/kb-7-1:refs/heads/main push origin` | config, not argv — and it **persists in the shared `.git/config`**, so the controller's own later `--force-with-lease` rewrote `main` |
-| `git -c alias.p=push p origin main` | an alias is resolved after the parser has finished |
-| `/usr/bin/git`, `"gi"t`, `sh -c '…'`, `python -c 'os.system(…)'` | the command's own name, and other shells |
+1. **It was measured not to reach a subagent.** Card #63: the hook was installed per worktree, and
+   the harness cuts a subagent its own worktree at `<repo>/.claude/worktrees/agent-<id>` that hkb
+   never sees. A push refused from `.hkb/worktrees/kb-1-1` **succeeded** from the agent's.
+2. **The fix for that was wrong twice.** PR #432 filed the policy per repository and broke
+   concurrency, replaced the escape with a shorter one, and silently disabled the operator's other
+   repository hooks. It was closed unmerged.
+3. **The guard only had to exist because the core required a push.** It does not: the Job kind
+   requires no commit, push or rebase, so there is no protocol left for a fence to protect.
 
-And it over-refused in the other direction: `git commit -m "$(cat <<'EOF' … push
-… EOF)"` — the commit form Claude Code teaches — was refused for containing the
-word, along with `git stash push`, `git grep push` and a backslash-newline
-continuation.
+**What refuses a push to a protected branch now is the forge**, centrally — which is where
+Kubernetes puts admission too, at the API server rather than on the node. A branch protection rule
+cannot be evaded by a subagent, an alias, a nested shell or a rewritten `core.hooksPath`, and it
+applies to every clone rather than to the checkouts one machine happened to install a hook on.
 
-The fault is not the parser; a better parser fails the same way. **What a worker
-typed and what git does are different strings**, separated by aliases, config,
-expansion and nested shells. So the decision moved to the one place where they
-have stopped being different: git's own `pre-push` hook.
-
-### What the hook is
-
-`installPushHook` (`src/push.ts`) runs at claim time, on the attempt's worktree:
-
-- it writes `pre-push` and a policy file under `~/.hkb/hooks` — outside every
-  checkout a worker can write, because a hook under `.git/hooks` or a repository's
-  own `.githooks` is a file the worker edits with the tool it edits everything
-  else with;
-- it points that worktree at it with `git config --worktree core.hooksPath`
-  (`extensions.worktreeConfig`), so the **operator's own checkout is completely
-  unaffected** — their hooks, their pushes, no hkb in the middle;
-- the policy is **pinned at claim time** to the branch the controller created the
-  worktree on. Reading it back out of the checkout is what let attempt 1's
-  `git switch develop` license attempt 2 to push `develop`.
-
-The decision is still a pure module — `refusePush`, for the reason `src/limits.ts`
-and `src/liveness.ts` are — but what it reads is git's resolved ref list rather
-than a command line: `<local ref> <local sha> <remote ref> <remote sha>`, one line
-per ref, after everything above has already happened. The rule is one sentence:
-every ref this push updates is `refs/heads/<the attempt's branch>`, and none of
-them is a deletion. `--all`, `--mirror`, a glob refspec and every spelling of a
-delete are covered because git has already expanded them.
-
-It judges **effects, not spellings**. A `git push --all` that would move nothing
-is admitted, because it moves nothing.
-
-### What the gate still refuses
-
-Two things, and both are about the hook rather than about the push:
-`--no-verify`, which skips it, and moving `core.hooksPath` out from under it.
-Those are short literal strings with no legitimate use inside a sandbox — which is
-exactly what the branch rule was not.
-
-`policy.sandboxed` is set only for a Job that has a worktree (`src/controller.ts`,
-where `wt` decides it). A `--no-isolate` Job runs in the operator's own checkout,
-where there is no hook and nothing for these refusals to protect; it is not given
-the sandbox contract either, so the prose and the guard cover exactly the same
-population.
-
-### What it is not
-
-It is not a jail. A worker runs as the operator's user: it could chmod the policy
-back, edit `.git/config` directly, or clone the repository somewhere else and push
-from there. The bar is the honest one — a plausible mistake and a casual escape
-are refused deterministically, by the same mechanism whatever the prompt says.
-
-`never merge` is not covered at all, and `src/brief.ts` says so out loud rather
-than listing it beside the rules that are: a merge on the forge is an API call no
-git hook is ever on the path of.
+**What HELD, and is the reason this page still exists:** the same measurement showed the tool-surface
+half of the gate travelling into a nested session and identifying it by `agent_id`. Both subagents'
+`Write` came back with hkb's own refusal and `permission_denials` counted both. So the asymmetry that
+decided everything above is: **the guard that is about the session works; the guard that was about
+the filesystem did not.**
 
 ## The isolation rule follows the parent
 
 `subagentIsolation` is `'force'` or `'forbid'`, and the runtime derives it from
-whether *this attempt* got a worktree (`WorkerSpec.isolated`, set from the same
-`wt` that produced `cwd`). It is not a constant, and it was one:
+whether *this attempt* asked for a workspace at all — `WorkerSpec.isolated`, which
+the controller sets from `workspace !== undefined` rather than from `Job.isolate`,
+so the gate follows what was actually declared on the seam (`src/controller.ts`,
+`admissionPolicy` in `src/runtime/surface.ts`). It is not a constant, and it was one:
 
 - **`'force'`** — the isolated case above. Every spawn is given a worktree.
-- **`'forbid'`** — the Job runs in the operator's own checkout (`isolate: false`),
-  so there is no parent worktree to bring a subagent's work back to. Injecting one
+- **`'forbid'`** — the Job runs in the operator's own checkout (`isolate: false`,
+  so no `workspace` is declared), so there is no parent worktree to bring a
+  subagent's work back to. Injecting one
   would put that work in a checkout nothing reads and nothing merges, and say
   nothing about it. A spawn that asks for `isolation: "worktree"` is **denied**,
   with a reason that says to spawn it without one; a spawn that asks for nothing is

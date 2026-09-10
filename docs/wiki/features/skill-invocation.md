@@ -11,9 +11,11 @@ covers:
   - path: src/runtime/surface.ts
     sha: e7660f0ce513bfc804cc31a0a92040e5bdc7fa1a
   - path: src/runtime/claude.ts
-    sha: c19d9065a63bc8265bbad6bcb29f1643bfe72938
+    sha: e3afb9de9e34d90f222e7bf9865cbad39e99044b
   - path: src/runtime/fake.ts
-    sha: 6a1ec6e6f7890b54a254018b3b7d277020b4b23e
+    sha: bd4690f4d6c41bd2d2170ead73eeb6e0236db471
+  - path: src/admission.ts
+    sha: 30a869c5ca1609f1e335c0f30854d9b285c31c45
 related:
   [
     decisions/adr-012-skills-by-grant-not-by-settings,
@@ -21,8 +23,8 @@ related:
     architecture/runtime-layer,
     gotchas/prompt-is-not-a-guarantee,
   ]
-generated_at_commit: ff67f87
-last_refreshed: 2026-09-09
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 ---
 
 # Skill invocation
@@ -201,9 +203,12 @@ bug returning by another door.
 - **`/code-review` and the reviewer step still cannot run.** They need `Agent`,
   which stays denied until the subagent fence is measured across a spawn (#63).
 - The measurement above ran `--no-isolate` on a clone, because nothing about
-  admission is worktree-shaped. A skill invoked inside a sandboxed worktree
-  additionally meets the `pre-push` hook and the two escape refusals
-  (`concepts/admission-control`), which are unchanged by any of this.
+  admission is worktree-shaped — and that is now true of the *whole* gate. The
+  sandbox half it used to have is gone: `AdmissionPolicy.sandboxed` and the two
+  `Bash` refusals that kept hkb's `pre-push` hook on the path (`--no-verify`,
+  `core.hooksPath`) went with the hook itself in ADR-018, so a skill invoked in a
+  workspace meets exactly the surface check any other call meets
+  (`src/admission.ts:100-110`, `concepts/admission-control`).
 - **The two-spelling fence has not been measured against a real session.** It
   cannot fail open, but if the SDK matched neither spelling a granted skill
   would be silently unavailable — fail-closed, and the same state the board was

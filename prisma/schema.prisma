@@ -80,16 +80,8 @@ enum Outcome {
               // `no_output` on the read side, and a separate value because the two send an operator
               // to different places — `no_output` is a fault in the work, `no_input` is a fault in
               // the spec or in the repository, and it cost nothing to find out.
-  conflicted  // the session ended and the work is real, but the branch cannot be put on the base it
-              // will be merged into. Three ways (`src/rebase.ts`): the replay hit a conflict, the
-              // remote refused the lease because somebody else moved the branch, or the replay
-              // worked and the worker's uncommitted files would not come back with it. Its own value
-              // rather than `no_output` because the fault is in neither the work nor the spec: the
-              // base moved, and the fix is a hand rebase rather than another run. A push that never
-              // REACHED the remote is deliberately not here — that is ours, and it is said out loud
-              // without failing an attempt whose work is already pushed.
   check_failed // the session ended and everything declared is there, and the command the Job named
-              // as its completion condition exited non-zero in the rebased checkout (ADR-016 §3,
+              // as its completion condition exited non-zero in the workspace (ADR-016 §3,
               // `src/check.ts`). hkb's container is an agent session and it always finishes
               // successfully, so hkb has no exit code of its own; `exports`/`results`/`artifacts`
               // reconstruct one for files and this reconstructs one for BEHAVIOUR. Transient and
@@ -177,10 +169,6 @@ model Board {
   /// `hkb boards set <slug> --guide CLAUDE.md` is how a repository's own rules reach its workers.
   defaultGuide        String?
 
-  /// The ref this board's Jobs branch from, filling a null on the Job. For a repository whose
-  /// trunk is not what `origin/HEAD` points at — a protected `main` with an integration branch in
-  /// front of it is the case that exists. Null keeps the repository's own default branch.
-  defaultBase         String?
 
   /// The completion check every Job on this board runs unless it says otherwise (`Job.check`
   /// wins). One `hkb boards set <slug> --check "npm test"` is how a repository's own gate reaches
@@ -286,25 +274,6 @@ model Job {
   maxBudgetUsd Float?
   /// Run in its own git worktree. Enforced at admission, not requested in a prompt.
   isolate      Boolean @default(true)
-  /// The ref this Job's checkout is cut from, and the ref its branch is kept on top of afterwards
-  /// (`src/rebase.ts`). Null means the repository's default branch, which is what every Job got
-  /// when this was a constant nobody chose (`baseRef`, `src/worktree.ts`).
-  ///
-  /// It is what makes one Job's output reachable by the next: a coding Job's deliverable is a
-  /// *branch*, so a step that starts from `origin/kb-33-1` starts from where the previous step
-  /// finished. `docs/workflow-study.md` §4.1 calls this the integration branch, and it is the
-  /// precondition for a graph whose children branch from their parent rather than from origin.
-  ///
-  /// **A ref, never a reference to another Job.** `base: job:33` would be `Job.after` wearing a
-  /// hat — a dependency on a sibling of its own kind, plus a readiness question about when that
-  /// sibling is ready — and that was rejected on four counts rather than deferred
-  /// (`docs/workflow-study.md` §2). Ordering between workloads belongs to a second kind whose
-  /// controller creates Jobs. A ref is a fact about a checkout; it schedules nothing.
-  ///
-  /// A base that does not resolve fails the Job as `no_input` before a session is bought — same
-  /// reasoning as a declared input that cannot be read: a fault in the spec or in the repository,
-  /// found for nothing.
-  base         String?
   /// The tool surface this Job may use: a JSON array of tool names, or null for the runtime's own
   /// default. A **ceiling the board enforces**, not a request — `src/admission.ts` denies anything
   /// absent from it in a `PreToolUse` hook, and hooks run before deny rules, ask rules, the
@@ -368,7 +337,7 @@ model Job {
   /// because the brief is instruction and everything fetched is data. The three that pull are
   /// `valueFrom.file` (a repo-relative path, read from `Board.repoPath` and never the worktree),
   /// `valueFrom.board` (the LLM-free board arithmetic ADR-010 decision 5 described) and
-  /// `valueFrom.jobRef` (the downward API: this Job's own `id`, `slot`, `attempt`, `branch` and the
+  /// `valueFrom.jobRef` (the downward API: this Job's own `id`, `slot`, `attempt` and the
   /// rest — how a run learns which of the concurrent workers it is). An input that read another
   /// Job's output would be `Job.after` with a payload, and that was rejected rather than deferred
   /// (`docs/workflow-study.md` §2) — ordering between workloads belongs to a kind.
@@ -395,7 +364,7 @@ model Job {
   artifacts    Json?
 
   /// The command that says whether this Job's work *behaves*: a shell line run in the attempt's
-  /// checkout after the run and after the rebase, whose non-zero exit fails the attempt
+  /// workspace after the run, whose non-zero exit fails the attempt
   /// (ADR-016 §3, `src/check.ts`).
   ///
   /// **Beside the declared outputs, not in a hooks list.** A Kubernetes Job is complete when its
@@ -558,7 +527,7 @@ model Attempt {
   /// Pod with the limits a LimitRange supplied; the scheduler then reads the Pod, never the
   /// namespace, and a LimitRange edited afterwards does not retroactively rewrite what is running.
   /// An Attempt is this system's Pod, and it already records what *happened* rather than what is
-  /// configured — `costUsd`, `sessionId`, `branch`, `outcome`. The cap it ran under is that same
+  /// configured — `costUsd`, `sessionId`, `outcome`. The cap it ran under is that same
   /// kind of fact, and it is the one an operator most wants beside `costUsd`.
   ///
   /// What it costs: `kb show` reports the frozen number for a past attempt, not what resolution
@@ -578,11 +547,6 @@ model Attempt {
   /// was admitted under, and a LimitRange edited afterwards does not rewrite what is running.
   attemptDeadlineSeconds Int
 
-  // What this attempt produced on the forge. A fact about what happened, so it is history and
-  // belongs here; the PR's *state* (open, merged, conflicted) is live and stays on GitHub.
-  branch    String?
-  prNumber  Int?
-  prUrl     String?
   /// What this attempt handed over: the paths that actually arrived in the repository, expanded
   /// from the Job's declaration (a declared directory becomes the files under it). Null when the
   /// Job declared nothing — an empty array would say "declared, produced none", which is a

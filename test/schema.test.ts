@@ -204,12 +204,14 @@ test('the deadlines migration carries timeoutMs across, in seconds, without writ
   const p = scratch();
   const all = knownMigrations();
   const MIGRATIONS = path.resolve(import.meta.dirname, '..', 'prisma', 'migrations');
-  const under = all[all.length - 1];
-  assert.match(under, /deadlines_in_seconds/, 'this test names the migration it is about');
+  // Named rather than taken as "the newest": migrations land after this one, and a test that took
+  // the tail would silently start asserting about whichever was added last.
+  const under = all.find((m) => /deadlines_in_seconds/.test(m));
+  assert.ok(under, 'this test names the migration it is about');
 
   const staged = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-dl-'));
   dirs.push(staged);
-  for (const m of all.slice(0, -1)) fs.cpSync(path.join(MIGRATIONS, m), path.join(staged, m), { recursive: true });
+  for (const m of all.slice(0, all.indexOf(under))) fs.cpSync(path.join(MIGRATIONS, m), path.join(staged, m), { recursive: true });
   ensureSchema(p, staged);
 
   const seed = open(p);
@@ -224,7 +226,10 @@ test('the deadlines migration carries timeoutMs across, in seconds, without writ
   seed.close();
 
   const r = ensureSchema(p, undefined, { asked: true });
-  assert.deepEqual(r.applied, [under], 'only the migration under test ran');
+  // The migration under test ran FIRST; whatever landed after it rides along, which is what an
+  // upgrade from that version really does. Asserting the exact list made every later migration
+  // break a test about this one.
+  assert.equal(r.applied[0], under, 'the migration under test ran, and ran first');
 
   const db = open(p);
   try {

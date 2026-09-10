@@ -11,32 +11,33 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/admission.ts
-    sha: ce4e291113aa9868314ce771f7fd1deb97b67ba8
+    sha: 30a869c5ca1609f1e335c0f30854d9b285c31c45
   - path: src/results.ts
-    sha: 0fc3dc145a1c515267534909aee79f034effa61b
+    sha: a67f369f7e0806ea8fe10d6def7105ff2a65e131
   - path: src/controller.ts
-    sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
+    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
   - path: src/runtime/claude.ts
-    sha: 5ae775633cae411b71443add232b79f1325c4075
+    sha: e3afb9de9e34d90f222e7bf9865cbad39e99044b
   - path: src/brief.ts
-    sha: 97737608be17c28aeca4bf859902c9c5b6ec4d89
+    sha: b3eddf6aebd95fdab1f38424b24851d6a4e3e5a2
   - path: prisma/schema.prisma
-    sha: 4e4b7aa6863fad5e660435982912460565ebabf3
+    sha: 373271e495bbdaa8225fddbf23528007efdcfd74
   - path: src/artifacts.ts
-    sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
+    sha: 74efd4d0fc9f6f0e5bcce4379b55f533b81e9e6d
   - path: src/inputs.ts
-    sha: 140cf48b8b323742a57e3e604b6853f829c72b6c
+    sha: 6ed576d25bf9db5f8b76e3752c17a250725df3b6
 related:
   [
     decisions/adr-007-workload-scheduler,
     decisions/adr-008-declared-outputs,
     decisions/adr-010-the-human-gate,
+    decisions/adr-018-the-boundary,
     concepts/admission-control,
     architecture/job-kind,
     architecture/the-loop,
   ]
-generated_at_commit: f063b7a
-last_refreshed: 2026-09-09
+generated_at_commit: 62135e9
+last_refreshed: 2026-09-10
 ---
 
 # ADR-011: A workload proposes, the controller writes
@@ -56,13 +57,13 @@ like it reversed a deliberate isolation decision.
 
 **The isolation is real and was chosen.** A worker runs in a worktree of its own, under
 `permissionMode: 'dontAsk'` — deliberately not `bypassPermissions`, because a bare name in
-`allowedTools` shadows `canUseTool` and "the allowlist would be decoration" (`src/runtime/claude.ts:135-149`)
+`allowedTools` shadows `canUseTool` and "the allowlist would be decoration" (`src/runtime/claude.ts:113-127`)
 — with the tool surface enforced by a `PreToolUse` hook that denies anything unlisted
-(`src/admission.ts:94-97`). It is handed a brief and a set of paths to write, and nothing else. It has
+(`src/admission.ts:95-97`). It is handed a brief and a set of paths to write, and nothing else. It has
 no board handle because nobody gave it one.
 
 **But the status quo is not the isolation it looks like.** `hkb new` is an ordinary command
-(`src/hkb.ts:473-475`), and a Job whose tool surface includes `Bash` can run it. Board mutation by a
+(`src/hkb.ts:721`, filing in `src/filing.ts`), and a Job whose tool surface includes `Bash` can run it. Board mutation by a
 worker is therefore already possible today — with no lineage, no scope, and no refusal. The choice in
 front of us was never *board access or no board access*. It is **a modelled transport, or the
 unmodelled one that is already open.**
@@ -80,8 +81,8 @@ workload that creates work talk to the API server" is **no**.
 
 hkb already has the machinery for the second answer and calls it something else. ADR-008's `results`
 is exactly this interface: the Job declares names, the controller hands it a path per name
-(`withResults`, `src/brief.ts:111`), the run writes files, and the controller reads them back after the
-run returns (`collectResults`, `src/results.ts:117`; called at `src/controller.ts:823`) into a
+(`withResults`, `src/brief.ts:112`), the run writes files, and the controller reads them back after the
+run returns (`collectResults`, `src/results.ts:117`; called at `src/controller.ts:1463`) into a
 directory that sits beside the board, outside every checkout, on purpose (`src/results.ts:72-73`).
 
 Everything a board mutation needs is in that shape already. What is missing is not a channel. It is
@@ -94,7 +95,7 @@ output, and the controller validates and applies it.**
 
 1. **No board handle in a sandbox — as a rule, not as an omission.** No credential, no client, no
    `hkb` on the tool surface of a workload that proposes. This is enforceable today and with no new
-   machinery: `allowedTools` is a ceiling the admission hook denies against (`src/admission.ts:94-97`,
+   machinery: `allowedTools` is a ceiling the admission hook denies against (`src/admission.ts:95-97`,
    `prisma/schema.prisma` `Job.allowedTools`), so a proposing Job filed without `Bash` **cannot** shell
    out to `hkb new`. The rule earns its place by being refusable, which is the standard this codebase
    already holds guards to.
@@ -122,7 +123,8 @@ output, and the controller validates and applies it.**
    a proposal becomes rows only once ADR-010's approval has been recorded. That is not a demand for a
    human — the approver is a seat with three fillers, and the auto-approve policy is one of them — it
    is the requirement that *something with authority said yes*, and that the yes is on the Event
-   stream where the controller already reads it (`src/controller.ts:885-887`).
+   stream where the controller already reads it (`src/controller.ts:1705-1706`; `applyProposals`
+   reads the same event at `src/controller.ts:524`).
 
 6. **This does not make the Job kind into the DAG kind.** The distinction is ordering, not creation.
    A controller that creates Jobs and then forgets them is `CronJob`-shaped: the created Jobs are
@@ -135,7 +137,7 @@ output, and the controller validates and applies it.**
 
 **The write becomes retry-safe, and this is the argument that outranks the others.** Results are
 collected *after* the run returns, and only then does the attempt's decision get made
-(`src/controller.ts:823`). A worker that dies mid-session leaves nothing collected and the attempt
+(`src/controller.ts:1463`). A worker that dies mid-session leaves nothing collected and the attempt
 retries clean. An in-session API call has no such property: a retried attempt **re-does its side
 effects**, and the controller cannot tell the duplicates from the originals. This is the same reason a
 level-triggered controller reconciles from spec rather than from events, applied one layer out — and
@@ -165,7 +167,8 @@ harness that can run a workload can write one.
   (`src/results.ts:32`), and that cap is load-bearing — its own comment says the number is "small
   enough that nobody mistakes this for file storage." A proposal carrying several Jobs with real prose
   briefs does not fit. `exports` is uncapped but lands *in the repository*
-  (`exportOutputs`, `src/worktree.ts:525`), which is wrong for a proposal nobody wants committed. See
+  (`exportOutputs`, `src/exports.ts:103` — the module it moved to when `src/worktree.ts` was
+  deleted), which is wrong for a proposal nobody wants committed. See
   the open question below.
 - **There are no declared inputs.** ADR-008 shipped declared *outputs*; the input side of a Job is
   `job.brief` — a static string authored at file time — composed only with `withProtocol` and
@@ -219,6 +222,17 @@ way rather than either of the two cheaper ones.
 
 The consequence above that has not been paid is the tool surface: denying `Bash` to a
 proposing Job is now *arguable* and is still not done.
+
+**ADR-018 changed the sandbox this record's Context describes, and changed nothing this record
+decides.** The isolation is no longer a worktree the controller cut and fenced with a `pre-push`
+hook: the workspace is declared on the runtime seam and provisioned by the harness (ADR-018
+decision 2), and the two admission refusals that kept that hook on the path — `--no-verify` and
+`core.hooksPath` — are deleted with it (`src/admission.ts`). Every clause of decision 1 is
+untouched, because it rests on `allowedTools` and the `PreToolUse` hook rather than on git: a
+proposing Job filed without `Bash` still cannot shell out to `hkb new`. The transport is untouched
+too — a proposal is still an artifact the controller reads after the run — and it now carries more
+weight, because the forge read that used to speak for a Job alongside it went with the rest of the
+git protocol.
 
 **And the triage gap is half closed.** `Phase.triage` gives an **operator** somewhere to put an
 undecided item — `hkb new --triage`, `hkb queue`, `hkb triage` — which is the half this record
