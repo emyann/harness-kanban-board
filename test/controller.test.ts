@@ -358,6 +358,61 @@ test('a non-PreToolUse event is not the gate\'s business', async () => {
 // un-isolated Job's subagents would have been forced into worktrees it does not have — unreachable
 // only because `Agent` is off the tool surface, and reachable again the day anyone adds it.
 
+test('a runtime that does NOT provide the workspace fails the attempt rather than running in the repo',
+  async () => {
+    // The failure this guards is silent by construction. `WorkerSpec.workspace` reaches the harness
+    // through an untyped `extraArgs` passthrough, so a renamed flag or an older CLI drops it and the
+    // session runs in the operator's own repository while everything here still believes it is
+    // isolated. Found in review; this is the refusing case, and CLAUDE.md's rule is why it exists —
+    // the admission gate, the worktree base and the lease were each silently inert and each passed
+    // every test it had.
+    const b = await db.board.upsert({ where: { slug: 'unisolated' }, update: {}, create: { slug: 'unisolated' } });
+
+    // A runtime that ignores the declaration and reports running in the repository.
+    const liar = {
+      name: 'liar',
+      async run(spec: { cwd: string }) {
+        return { status: 'completed', ok: true, sessionId: 's', text: 'did it', costUsd: 0, turns: 1,
+                 durationMs: 0, stopReason: 'end_turn', denials: 0, error: null, workspacePath: spec.cwd };
+      },
+    } as never;
+    const job = await db.job.create({
+      data: { boardId: b.id, name: 'asked for isolation', brief: 'x', maxRetries: 2 },
+    });
+    await reconcileToRest({ runtime: liar, cwd, board: 'unisolated' });
+
+    const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+    assert.equal(after.phase, 'failed', 'the session "succeeded" — the isolation did not');
+    assert.equal(after.attempts.length, 1, 'and it is not retried: the same runtime gives the same answer');
+    assert.equal(after.attempts[0].outcome, 'no_input');
+    assert.match(after.lastError ?? '', /did not provide one/);
+    assert.match(after.lastError ?? '', /IS the repository/, 'and says what it found instead');
+
+    // A runtime that reports nothing at all is the same fault by a quieter route.
+    const silent = {
+      name: 'silent',
+      async run() {
+        return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+                 durationMs: 0, stopReason: 'end_turn', denials: 0, error: null, workspacePath: null };
+      },
+    } as never;
+    const quiet = await db.job.create({
+      data: { boardId: b.id, name: 'told nothing', brief: 'x', maxRetries: 0 },
+    });
+    await reconcileToRest({ runtime: silent, cwd, board: 'unisolated' });
+    const q = await db.job.findUniqueOrThrow({ where: { id: quiet.id } });
+    assert.equal(q.phase, 'failed');
+    assert.match(q.lastError ?? '', /did not provide one/);
+
+    // And an un-isolated Job is untouched by any of it: it asked for nothing, so there is nothing
+    // to verify. Without this the guard would break the `hostPath` case entirely.
+    const bare = await db.job.create({
+      data: { boardId: b.id, name: 'asked for none', brief: 'x', isolate: false, maxRetries: 0 },
+    });
+    await reconcileToRest({ runtime: silent, cwd, board: 'unisolated' });
+    assert.equal((await db.job.findUniqueOrThrow({ where: { id: bare.id } })).phase, 'succeeded');
+  });
+
 test('a workspace is DECLARED by name, and the runtime is the one that makes it', async () => {
   // ADR-018's decision 2, held to. The controller must ask and never provide: `cwd` is always the
   // repository now, and the only thing that distinguishes an isolated Job is that it asked for a
@@ -419,6 +474,19 @@ const writes = (files: Record<string, string>) => ({
              workspacePath: s.workspace ? dir : null };
   },
 } as never);
+
+/**
+ * What a double must report: the workspace it was asked for, or null when it was asked for none.
+ *
+ * Every inline runtime here reports this, because a real one must — `isolationShortfall` in the
+ * controller refuses a runtime that stays silent or that ran in the repository, which is the whole
+ * point of the untyped `extraArgs` passthrough being verified rather than trusted. A double that
+ * reported nothing was modelling a runtime that would now be refused.
+ */
+const ranWhere = (s: unknown): string | null => {
+  const name = (s as { workspace?: { name: string } })?.workspace?.name;
+  return name ? workspaceOf(name) : null;
+};
 
 /** Where the fake runtime puts a workspace — the same place `src/runtime/fake.ts` does. */
 const workspaceOf = (name: string) => path.join(cwd, '.hkb', 'workspaces', name);
@@ -500,7 +568,8 @@ function specSpy() {
     async run(s: Record<string, unknown>) {
       seen.push({ ...s });
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
   return { seen, runtime };
@@ -631,7 +700,8 @@ test('a granted directory reaches the runtime absolute, resolved against the rep
     async run(s: { plugins?: string[] }) {
       seen.push(s.plugins);
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
 
@@ -653,7 +723,8 @@ test('a Job with no grant hands the runtime nothing, and a grant that has gone d
     async run(s: { plugins?: string[] }) {
       seen.push(s.plugins);
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
 
@@ -691,7 +762,8 @@ test('a narrowed Job reaches the runtime narrowed, and the gate built from it re
     async run(s: { allowedTools?: string[] }) {
       seen.push(s.allowedTools);
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
 
@@ -720,7 +792,8 @@ test('a Job that named no surface gets the runtime default, which is not the sam
     async run(s: { allowedTools?: string[] }) {
       seen.push(s.allowedTools);
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
   await db.job.create({ data: { boardId: b.id, name: 'ordinary', brief: 'x', isolate: false } });
@@ -739,7 +812,8 @@ test('an EMPTY surface is a value: the Job may call nothing, and the gate says s
     async run(s: { allowedTools?: string[] }) {
       seen.push(s.allowedTools);
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
   await db.job.create({
@@ -763,7 +837,8 @@ test('a board default narrows every Job that named no surface of its own', async
     async run(s: { allowedTools?: string[] }) {
       seen.push(s.allowedTools);
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
   await db.job.create({ data: { boardId: b.id, name: 'inherits', brief: 'x', isolate: false } });
@@ -942,7 +1017,8 @@ test('a declared input is read from the repository and reaches the prompt before
     async run(spec: { prompt: string }) {
       seen.push(spec.prompt);
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
 
@@ -971,10 +1047,11 @@ test('a declared input the board cannot read fails the attempt WITHOUT calling t
   let called = 0;
   const spy = {
     name: 'spy',
-    async run() {
+    async run(s: { workspace?: { name: string } }) {
       called += 1;
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
 
@@ -1001,7 +1078,8 @@ test('a value input the brief did not consume still reaches the run, as data', a
     async run(spec: { prompt: string }) {
       seen.push(spec.prompt);
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
 
@@ -1040,7 +1118,8 @@ test('self: hands a Job facts about itself, and slot is a small integer it can b
     async run(spec: { prompt: string }) {
       seen.push(spec.prompt);
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
 
@@ -1072,10 +1151,11 @@ test('a self: field this Job does not have is REFUSED, not rendered empty', asyn
   let called = 0;
   const spy = {
     name: 'spy',
-    async run() {
+    async run(s: { workspace?: { name: string } }) {
       called += 1;
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
 
@@ -1118,11 +1198,12 @@ test('concurrent runs get DIFFERENT slots, and a slot is released with its lease
   ]);
   const spy = {
     name: 'spy',
-    async run() {
+    async run(s: { workspace?: { name: string } }) {
       if (++started === 3) release();
       await allThree;
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
 
@@ -1144,9 +1225,10 @@ test('concurrent runs get DIFFERENT slots, and a slot is released with its lease
   const j4 = await db.job.create({ data: { boardId: b.id, name: 'later', brief: 'x', isolate: false } });
   const quick = {
     name: 'quick',
-    async run() {
+    async run(s: { workspace?: { name: string } }) {
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(s) };
     },
   } as never;
   await reconcile({ runtime: quick, cwd: REPO, board: 'slots' });
@@ -1162,7 +1244,8 @@ test('the board input is the arithmetic hkb already computes, and never includes
     async run(spec: { prompt: string }) {
       seen.push(spec.prompt);
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
 
@@ -1421,6 +1504,7 @@ const proposing = (body: string): Runtime => ({
     return {
       status: 'completed', ok: true, sessionId: 'sess-p', text: 'proposed',
       costUsd: 0.1, turns: 2, durationMs: 10, stopReason: 'end_turn', denials: 0, error: null,
+      workspacePath: ranWhere(spec),
     };
   },
 });
@@ -1646,7 +1730,8 @@ test('an isolated proposing Job is NOT told to commit', async () => {
     async run(spec: { prompt: string }) {
       seen = spec.prompt;
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
   const job = await db.job.create({
@@ -1682,7 +1767,8 @@ test('an isolated Job on a board that configures nothing is told its brief, and 
     async run(spec: { prompt: string }) {
       seen = spec.prompt;
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
   const job = await db.job.create({
@@ -1727,11 +1813,16 @@ test('a suspended Job is reported as waiting, not as retrying, and carries no er
   assert.equal(after.suspendedFor, 'does this look right?');
 });
 
-test('a suspended PROPOSER does not keep a checkout nothing will resume into', async () => {
-  // The gated Job beside it keeps its worktree because the approved attempt continues in it. A
-  // proposer's approval is applied by the controller — no session ever wakes up there — so the
-  // checkout is a whole repository on disk holding work nobody will return to, and the line saying
-  // "attempt 2 resumes in it" described an attempt that cannot happen.
+test('a suspended PROPOSER waits with its workspace, like every other unfinished Job', async () => {
+  // **This test used to assert the opposite**, and the change is deliberate. The controller had four
+  // branches deciding whether to keep a checkout, and one of them removed a proposer's immediately —
+  // because its approval is applied by the controller and no session ever wakes up there. All four
+  // are gone (ADR-018): a workspace dies by `ttlSecondsAfterFinished` and nothing else, and a
+  // suspended Job has no `finishedAt`, so it is never a candidate.
+  //
+  // What that costs is a checkout held while a person decides, and what it buys is one rule instead
+  // of four judgements about what is inside a tree. The workspace is collected on the TTL once the
+  // approval takes the Job terminal.
   const b = await proposalBoard();
   const job = await db.job.create({
     data: {
@@ -1746,8 +1837,7 @@ test('a suspended PROPOSER does not keep a checkout nothing will resume into', a
 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
   assert.equal(after.phase, 'suspended', 'it is still waiting for a person');
-  assert.equal(fs.existsSync(path.join(cwd, '.hkb', 'worktrees', `kb-${job.id}-1`)), false,
-    'and its checkout is gone, because nothing will run in it again');
+  assert.equal(after.finishedAt, null, 'suspended is not finished, so no TTL can reach its workspace');
   // The proposal itself is untouched by that: it lives beside the board, not in the checkout.
   assert.ok(storedProposalOf(after.id));
 });
@@ -1772,7 +1862,8 @@ test('a granted guide reaches the worker, in front of the brief', async () => {
     async run(spec: { prompt: string }) {
       seen = spec.prompt;
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
   const job = await db.job.create({
@@ -1813,7 +1904,8 @@ test('a Job may refuse the board’s guide, and a Job with none is unchanged', a
     async run(spec: { prompt: string }) {
       seen = spec.prompt;
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
   // `--guide ""` is the empty string, which `str()` reads as unset on the JOB — so the board
@@ -1868,7 +1960,8 @@ test('EVERY board default reaches a worker, not the ones somebody remembered to 
     async run(spec: never) {
       got = spec;
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
   const job = await db.job.create({
@@ -1898,7 +1991,8 @@ test('the standing rules reach every shape of Job, including a resumed approval'
     async run(spec: { prompt: string }) {
       seen = spec.prompt;
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
   const has = () => /Three standing rules/.test(seen) && /Never weaken a check/.test(seen)
@@ -2038,6 +2132,7 @@ const spyOn = (into: string[]): Runtime => ({
     return {
       status: 'completed', ok: true, sessionId: `s-${spec.taskId}-${spec.attempt}`, text: '',
       costUsd: 0, turns: 1, durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+      workspacePath: ranWhere(spec),
     };
   },
 });
@@ -2374,6 +2469,7 @@ test('the briefing survives a `stopped` attempt in between — k-1 is not the wh
       return {
         status: 'completed', ok: true, sessionId: spec.resume ?? `s-${spec.taskId}-${spec.attempt}`, text: '',
         costUsd: 0, turns: 1, durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+        workspacePath: ranWhere(spec),
       };
     },
   };
@@ -2468,6 +2564,7 @@ const crashes = (): Runtime => ({
     return {
       status: 'error', ok: false, sessionId: null, text: '', costUsd: 0, turns: 0,
       durationMs: 0, stopReason: 'error', denials: 0, error: 'the runtime fell over',
+      workspacePath: null,
     };
   },
 });
@@ -2495,6 +2592,7 @@ const proposes = (into: string[], jobs: { name: string; brief: string }[]): Runt
     return {
       status: 'completed', ok: true, sessionId: `s-${spec.taskId}-${spec.attempt}`, text: 'proposed',
       costUsd: 0, turns: 1, durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+      workspacePath: ranWhere(spec),
     };
   },
 });
@@ -2923,7 +3021,8 @@ const promptOf = () => {
     async run(spec: { prompt: string }) {
       seen = spec.prompt;
       return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
-               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+               workspacePath: ranWhere(spec) };
     },
   } as never;
   return { runtime, seen: () => seen };

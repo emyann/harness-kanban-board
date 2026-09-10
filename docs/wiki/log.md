@@ -395,3 +395,5 @@ history.
 ## 2026-09-10 — archived features/rebase-and-verify, features/the-checkout-base and features/worktree-includes (all three describe machinery the git protocol took with it: the controller no longer rebases, Job.base is gone, and `.worktreeinclude` is the harness's feature rather than hkb's reimplementation of it) — ADR-018
 
 ## 2026-09-10 — refreshed architecture/job-kind (the workspace is DECLARED and the runtime provisions it, per-Job naming is what makes a resume land in the right tree, ttlSecondsAfterFinished replaces the inspect-the-tree sweep, the sandbox contract is gone with the protocol, and `conflicted` is now historical) — ADR-018
+
+## 2026-09-10 — refreshed concepts/admission-control (the push rule is DELETED, not moved: #63 measured the pre-push hook not reaching a subagent, #432 failed twice to extend it, and a fence around git only had to exist while the core required a push — the forge refuses centrally now, and what HELD is the tool surface, which travels into a nested session); dropped covers entries naming the five deleted modules from eight pages, since a page cannot be derived from a file that does not exist — ADR-018

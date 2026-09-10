@@ -72,13 +72,25 @@ export type ValueFrom =
  * database name needs a small integer bounded by how many runs there can be at once. Kubernetes
  * gives every Pod its own IP and the question does not arise; hkb's workers share one machine.
  *
- * `base` is the field ADR-017 earns. When the pull request left the core, the one fact it took with
- * it was where the review opens — `BaseAdvice.prBase`, computed by the controller and written into
- * prose nobody could reach. A step's content has to be able to say *"open it against your base"* and
- * mean the ref the checkout was actually cut from, which is what this reads: `origin/main`, or
- * `origin/kb-33-1` for a chain step. Content, not core, and the same value either way.
+ * **`branch`, `base` and `worktree` are gone** (ADR-018), and they are refused HERE, at file time,
+ * rather than only at claim time. The controller has a message for each explaining where the field
+ * went — but a Job that declares one is filed happily, sits in the queue, is claimed, and only then
+ * fails `no_input`. The whole point of resolving inputs before a session is bought is that a bad
+ * declaration costs nothing; a field that can never resolve should cost even less than that.
  */
-export const JOB_FIELDS = ['id', 'name', 'board', 'attempt', 'slot', 'branch', 'base', 'worktree', 'repo'] as const;
+export const JOB_FIELDS = ['id', 'name', 'board', 'attempt', 'slot', 'repo'] as const;
+
+/**
+ * Fields a Job used to have, kept ONLY so a row already on the board is refused by name.
+ *
+ * They are not accepted at file time — `checkInputSpec` rejects them against `JOB_FIELDS` — but a
+ * Job filed before ADR-018 has one stored, and dropping it silently would run that Job with fewer
+ * inputs than it declared and tell nobody. Read back, it reaches the controller, which refuses the
+ * attempt and says where the field went (`RETIRED_FIELDS`, `src/controller.ts`).
+ *
+ * Genuine junk is still dropped: this is a closed list, not "any string".
+ */
+export const RETIRED_JOB_FIELDS = ['branch', 'base', 'worktree'] as const;
 export type JobField = (typeof JOB_FIELDS)[number];
 
 /** What an input actually resolved to, for the prompt and for the Attempt's catalogue. */
@@ -241,7 +253,16 @@ export function declaredInputs(value: unknown): InputSpec[] {
     } else if (f.board && typeof f.board === 'object') {
       out.push({ name: row.name, valueFrom: { board: {} } });
     } else if (f.jobRef && typeof f.jobRef === 'object'
-      && (JOB_FIELDS as readonly string[]).includes(String((f.jobRef as { field?: unknown }).field))) {
+      && [...JOB_FIELDS, ...RETIRED_JOB_FIELDS].includes(
+        String((f.jobRef as { field?: unknown }).field) as never,
+      )) {
+      // **Any field name, read back as written** — including the retired ones. `JOB_FIELDS` is the
+      // FILE-time list and `checkInputSpec` refuses anything outside it, which is where a typo or a
+      // `self:base` should die. But a row already on the board naming a field that has since been
+      // removed must not be silently DROPPED here: dropping it means the Job runs with one fewer
+      // input than it declared and nobody is told, which is the exact silent failure the whole
+      // declared-input mechanism exists to prevent. It is carried through so the controller refuses
+      // it by name and says where the field went (`RETIRED_FIELDS`, `src/controller.ts`).
       out.push({ name: row.name, valueFrom: { jobRef: { field: (f.jobRef as { field: JobField }).field } } });
     }
   }

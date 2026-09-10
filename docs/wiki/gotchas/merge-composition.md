@@ -8,8 +8,6 @@ read_when: "filing a batch of Jobs against one repository, reviewing several age
 covers:
   - path: src/controller.ts
     sha: 55cb278593ae0b3d0692712e4fcff643c29e4a4e
-  - path: src/worktree.ts
-    sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
   - path: src/limits.ts
     sha: 18849fb4775cabb4c5d65784f506d61d90c66f1f
   - path: src/hkb.ts

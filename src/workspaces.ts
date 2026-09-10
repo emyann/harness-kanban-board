@@ -47,8 +47,44 @@ export const workspacePath = (root: string, name: string): string =>
  */
 export const BUILT_IN_TTL_SECONDS = 3600;
 
-/** A Job as the sweep sees it: an id, and when it stopped being able to want its workspace. */
-export type Collectable = { id: number; finishedAt: Date | null; phase: string };
+/**
+ * The workspaces that actually exist, in one call.
+ *
+ * **The sweep must start here, not from the board.** Asking the board for finished Jobs and trying
+ * to remove each one's workspace spawns two git processes per Job per tick and — because
+ * `removeWorkspace` reports an absent workspace as removed, which it must — writes a `swept` event
+ * every time, for ever. A board with 200 finished Jobs would produce 1,200 rows an hour describing
+ * nothing happening. CLAUDE.md states the rule this breaks: *no per-Job calls when a board-wide one
+ * exists*, and `git worktree list` is the board-wide one.
+ *
+ * Only the workspaces hkb itself asked for, by name, so a worktree the operator made is never a
+ * candidate however old it is.
+ */
+export function existingWorkspaces(root: string): Set<string> {
+  const out = spawnSync('git', ['-C', root, 'worktree', 'list', '--porcelain'], {
+    encoding: 'utf8', timeout: 20_000,
+  });
+  const names = new Set<string>();
+  if (out.status !== 0 || !out.stdout) return names;
+  for (const line of out.stdout.split('\n')) {
+    if (!line.startsWith('worktree ')) continue;
+    const name = path.basename(line.slice('worktree '.length).trim());
+    if (/^kb-\d+$/.test(name)) names.add(name);
+  }
+  return names;
+}
+
+/**
+ * A Job as the sweep sees it.
+ *
+ * `resumable` is the one that is not about time, and it is the one that prevents the failure this
+ * whole naming scheme exists to prevent. A Job can be **finished and still resumable**: `max_budget`
+ * ends `failed` while keeping `lastSessionId`, precisely so `hkb retry <id> --max-budget <more>`
+ * continues the session rather than re-buying it. Its workspace is the tree that session's transcript
+ * describes, so collecting it on a clock would wake the retry in a checkout with none of its work —
+ * and an operator following the advice hkb itself printed is exactly who would hit it.
+ */
+export type Collectable = { id: number; finishedAt: Date | null; phase: string; resumable: boolean };
 
 /**
  * Which workspaces may be collected — `ttlSecondsAfterFinished`, and nothing else.
@@ -64,12 +100,12 @@ export type Collectable = { id: number; finishedAt: Date | null; phase: string }
  * not finished keeps its workspace whatever its age, because a later attempt resumes *in* it.
  *
  * Pure, so the refusing cases are the ones the tests can be exhaustive about: not finished, finished
- * too recently, and a TTL of zero meaning "immediately" rather than "never".
+ * too recently, still resumable, and a TTL of zero meaning "immediately" rather than "never".
  */
 export function collectable(jobs: Collectable[], now: Date, ttlSeconds: number): number[] {
   const cutoff = now.getTime() - ttlSeconds * 1000;
   return jobs
-    .filter((j) => j.finishedAt != null && j.finishedAt.getTime() <= cutoff)
+    .filter((j) => !j.resumable && j.finishedAt != null && j.finishedAt.getTime() <= cutoff)
     .map((j) => j.id);
 }
 

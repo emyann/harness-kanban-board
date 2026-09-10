@@ -115,7 +115,10 @@ test('the Job kind runs no git, apart from collecting the workspace it asked for
   // workspace back, neither of them about the work inside it.
   const ws = read('workspaces.ts').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
   const subcommands = [...ws.matchAll(/'worktree', '(\w+)'/g)].map((m) => m[1]).sort();
-  assert.deepEqual([...new Set(subcommands)], ['remove', 'unlock']);
+  // `list` is the board-wide enumeration the sweep starts from — without it the sweep would try to
+  // remove a workspace per finished Job per tick, for ever. `remove` and `unlock` take one back.
+  // Nothing here reads or writes the WORK inside a tree, which is the property being pinned.
+  assert.deepEqual([...new Set(subcommands)], ['list', 'remove', 'unlock']);
   assert.doesNotMatch(ws, /--force/, 'and it never forces: git\'s own refusal is the safety net');
 });
 

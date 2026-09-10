@@ -77,9 +77,11 @@ export function queryOptions(spec: WorkerSpec, abortController: AbortController)
       // on it for the run, and reported the path back on the `init` message.
       //
       // **This is an untyped escape hatch**, and that is the one thing to know about it: a flag
-      // renamed upstream fails silently rather than at compile time. `test/runtime-workspace.test.ts`
-      // is the answer — it asserts a worktree actually appears, which is the only kind of proof
-      // this arrangement admits.
+      // renamed upstream fails silently rather than at compile time. `test/workspace.live.test.ts`
+      // is the answer — it asserts a worktree actually appears, which is the only kind of proof this
+      // arrangement admits. It is gated on `HKB_LIVE_SDK=1`, so the controller ALSO verifies the
+      // path it gets back is not the repository itself (`isolationShortfall`, `src/controller.ts`):
+      // a guard that only runs when somebody remembers to run it is not a guard.
       //
       // What it buys is everything `src/worktree.ts` used to do by hand: creation, the base kept
       // current, `.worktreeinclude` for gitignored files, the lock against a concurrent sweep, and

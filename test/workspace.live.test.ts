@@ -39,7 +39,8 @@ test('the harness provisions the workspace hkb declares, and the session runs in
     git('commit', '-qm', 'base');
 
     const { claudeRuntime } = await import('../src/runtime/claude.ts');
-    const name = 'kb-1-1';
+    const { workspaceName } = await import('../src/workspaces.ts');
+    const name = workspaceName(1);
     const outcome = await claudeRuntime.run({
       taskId: 1,
       attempt: 1,

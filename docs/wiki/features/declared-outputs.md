@@ -10,8 +10,6 @@ covers:
     sha: 0fc3dc145a1c515267534909aee79f034effa61b
   - path: src/artifacts.ts
     sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
-  - path: src/worktree.ts
-    sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
   - path: src/controller.ts
     sha: 55cb278593ae0b3d0692712e4fcff643c29e4a4e
   - path: src/brief.ts

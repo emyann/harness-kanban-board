@@ -81,7 +81,6 @@ export const TEMPLATE_KEYS: Record<string, Kind> = {
   guide: 'string',
   // The ref a step branches from — the key that lets a workflow file express a chain at all, since
   // a coding Job's output is a branch and this is what a later step points at.
-  base: 'string',
   // The command a step must pass (ADR-016 §3). A workflow is the natural home for it — "this kind
   // of work is done when the suite is green" is a property of the workflow, not of one Job — and it
   // is safe here for the reason this file's header gives: a workflow is read from `Board.repoPath`

@@ -6,7 +6,9 @@ import { boardDir } from './db-url.ts';
 
 export { boardDir };
 import { reconcile } from './controller.ts';
-import { BUILT_IN_TTL_SECONDS, collectable, removeWorkspace, workspaceName } from './workspaces.ts';
+import {
+  BUILT_IN_TTL_SECONDS, collectable, existingWorkspaces, removeWorkspace, workspaceName,
+} from './workspaces.ts';
 import { holderId, holderLiveness, parseHolder, pidIsAlive } from './liveness.ts';
 import { windowStart } from './limits.ts';
 import { cliEntry, PACKAGE_ROOT } from './paths.ts';
@@ -406,16 +408,29 @@ export async function loop(deps: LoopDeps): Promise<number> {
         // window an operator has to go and look at it.
         if (sweeping) {
           const repo = b.repoPath ?? deps.cwd;
-          if (repo) {
+          // **One `git worktree list`, then the board** — never the other way round. Starting from
+          // the board means a pair of git processes and a `swept` event per finished Job per tick,
+          // for ever, describing nothing happening; `removeWorkspace` reports an absent workspace as
+          // removed (it must — the sweep is level-triggered), so there is no natural stopping point.
+          // CLAUDE.md: no per-Job calls when a board-wide one exists.
+          const present = repo ? existingWorkspaces(repo) : new Set<string>();
+          if (repo && present.size) {
             const finished = await db.job.findMany({
               where: { boardId: b.id, finishedAt: { not: null } },
-              select: { id: true, finishedAt: true, phase: true },
+              select: { id: true, finishedAt: true, phase: true, lastSessionId: true },
             });
-            for (const id of collectable(finished, new Date(now()), BUILT_IN_TTL_SECONDS)) {
+            const candidates = finished
+              .filter((j) => present.has(workspaceName(j.id)))
+              .map((j) => ({ ...j, resumable: j.lastSessionId != null }));
+            for (const id of collectable(candidates, new Date(now()), BUILT_IN_TTL_SECONDS)) {
               const name = workspaceName(id);
               const swept = removeWorkspace(repo, name);
               const where = boards.length > 1 ? `[${b.slug}] ` : '';
               if (swept.removed) {
+                // Said out loud. `.hkb/workflows/implement.md` tells a worker its workspace is
+                // collected after a TTL, so the operator who goes to look at one deserves to find
+                // out from the log rather than from an empty directory.
+                log(`${where}swept ${name} — its Job finished more than ${BUILT_IN_TTL_SECONDS / 60} minutes ago`);
                 said.delete(`kept:${name}`);
                 await db.event.create({
                   data: { kind: 'swept', boardId: b.id, actor: holder, payload: { workspace: name, jobId: id } },

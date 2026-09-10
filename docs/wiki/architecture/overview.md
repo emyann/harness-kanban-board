@@ -32,10 +32,6 @@ covers:
     sha: 992b53f9dc3ef4284c2a1bf0201794490afee393
   - path: src/brief.ts
     sha: a56db1e2f49d60c695034ecd14f73c5c258cce85
-  - path: src/worktree.ts
-    sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
-  - path: src/pulls.ts
-    sha: a27f00a986f576c2d3ed035902c0a1c9f9a9300c
   - path: prisma/schema.prisma
     sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
 related:

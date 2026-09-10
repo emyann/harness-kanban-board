@@ -12,8 +12,6 @@ covers:
     sha: 55cb278593ae0b3d0692712e4fcff643c29e4a4e
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
-  - path: src/worktree.ts
-    sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
   - path: src/limits.ts
     sha: 18849fb4775cabb4c5d65784f506d61d90c66f1f
   - path: prisma/schema.prisma

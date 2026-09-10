@@ -14,8 +14,6 @@ covers:
     sha: 97737608be17c28aeca4bf859902c9c5b6ec4d89
   - path: src/controller.ts
     sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
-  - path: src/worktree.ts
-    sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
   - path: prisma/schema.prisma
     sha: 4e4b7aa6863fad5e660435982912460565ebabf3
   - path: src/results.ts

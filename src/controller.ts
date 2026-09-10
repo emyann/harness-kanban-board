@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { openBoard } from './db.ts';
 import { exportOutputs } from './exports.ts';
 import { workspaceName } from './workspaces.ts';
@@ -167,6 +168,9 @@ export type ReconcileReport = {
    */
   suspended: number[];
 };
+
+/** Compared by real path, so a symlinked repository is not mistaken for isolation. */
+const fsRealpath = (p: string): string => { try { return realpathSync(p); } catch { return p; } };
 
 const nowDefault = () => new Date();
 
@@ -1318,6 +1322,42 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
        * Falls back to `cwd` when the run never happened (a missing input) or asked for nothing.
        */
       const ranIn = outcome?.workspacePath ?? cwd;
+      /**
+       * **Did the isolation we asked for actually happen?**
+       *
+       * `WorkerSpec.workspace` reaches the harness through `Options.extraArgs`, which is an untyped
+       * escape hatch: rename `--worktree` upstream, or put an older CLI on the PATH, and the flag is
+       * dropped in silence. The session then runs in the operator's own repository while everything
+       * here still believes it is isolated — `isolated: true` was already passed to the runtime, so
+       * even the subagent policy is wrong.
+       *
+       * What that costs is not abstract. A Job declaring `--export docs/report.md` on a repository
+       * that already has that file would find it, report no shortfall, and record an export the run
+       * never produced; and the completion check would run its command inside the operator's
+       * checkout. Both are silent.
+       *
+       * So it is verified rather than assumed, which is the rule this codebase already learned three
+       * times: *the admission gate, the worktree base and the lease were each silently inert and each
+       * passed every test it had.*
+       *
+       * **Only on a session that COMPLETED**, and that narrowing is not a softening — it is where the
+       * harm is. A crashed run, a capped one and a timeout legitimately report no workspace: they
+       * never got far enough to have one, and each already carries a cause of its own that outranks
+       * this. They also collect nothing, because every collection block below is gated on the run
+       * having succeeded. Asking the question of them would fail real outcomes — a `max_budget` stop
+       * would be recorded as an isolation fault and lose the session it was keeping for the retry.
+       */
+      const isolationShortfall = workspace && outcome?.status === 'completed' && (
+        !outcome.workspacePath || fsRealpath(outcome.workspacePath) === fsRealpath(cwd)
+      )
+        ? `#${job.id} asked for the workspace \`${workspace.name}\` and the runtime did not provide one`
+          + `${outcome.workspacePath ? ` — it ran in ${outcome.workspacePath}, which IS the repository` : ''}. `
+          + 'The session ran unisolated in the board\'s repository, so nothing it wrote is separable '
+          + 'from the operator\'s own tree and no declared output can be trusted. hkb asks for a '
+          + 'workspace through the runtime\'s own passthrough (`extraArgs`), which fails silently when '
+          + 'the flag it names is gone — check the runtime and its version. `hkb retry ' + `${job.id}\` `
+          + 'once it provides one.'
+        : null;
 
       // ---- EVERYTHING FROM HERE IS UNDER `finally`, and the reason is the renewer above it.
       //
@@ -1363,7 +1403,12 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
       // `let`, because one thing may still change it after the fact: a stop that lands while the
       // completion check is in flight. See the check block below.
-      let ran: Decision = inputShortfall
+      let ran: Decision = isolationShortfall
+        // Terminal and not retried: the same runtime gives the same answer next time, and a retry
+        // would run unisolated again. It is `no_input` in the sense `no_input` already carries — the
+        // fault is in the machinery around the run, not in the work — and a human has to look.
+        ? { phase: 'failed', outcome: 'no_input', resumable: false, lastError: isolationShortfall }
+        : inputShortfall
         // Terminal, and not retried, for the reason a missing declared OUTPUT is not: the same read
         // fails identically next time. `hkb retry` is the deliberate second go, once a human has read
         // which input is missing and decided whose mistake it was.

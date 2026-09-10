@@ -453,18 +453,25 @@ test('a resumable stop keeps the session, and the retry runs in the same checkou
   let n = 0;
   const capThenFinish = {
     name: 'cap-then-finish',
-    async run(spec: { cwd: string }) {
-      dirs.push(spec.cwd);
+    async run(spec: { cwd: string; workspace?: { name: string } }) {
+      // The workspace this runtime provisions — the same one on both attempts, because the
+      // controller asks for the same NAME (`workspaceName`, per Job rather than per attempt). That
+      // is the whole property under test: resume is not restart, on disk as well as in the
+      // transcript.
+      const dir = spec.workspace
+        ? path.join(SCRATCH, '.hkb', 'workspaces', spec.workspace.name)
+        : spec.cwd;
+      fs.mkdirSync(dir, { recursive: true });
+      dirs.push(dir);
       n += 1;
-      // A worker that runs out of turns has usually done partial work, and that is what keeps its
-      // checkout from being swept as clean. A first attempt that did nothing leaves nothing to
-      // resume INTO, and a fresh worktree is then equivalent — there is no work to lose.
-      if (n === 1) fs.writeFileSync(path.join(spec.cwd, 'wip.txt'), 'partial');
+      // A worker that runs out of turns has usually done partial work, and it is that work the
+      // second attempt must find still there.
+      if (n === 1) fs.writeFileSync(path.join(dir, 'wip.txt'), 'partial');
       return n === 1
         ? { status: 'max_turns', ok: false, sessionId: 'sess-1', text: '', costUsd: 0, turns: 1,
-            durationMs: 0, stopReason: null, denials: 0, error: null }
+            durationMs: 0, stopReason: null, denials: 0, error: null, workspacePath: dir }
         : { status: 'completed', ok: true, sessionId: 'sess-1', text: 'done', costUsd: 0, turns: 2,
-            durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+            durationMs: 0, stopReason: 'end_turn', denials: 0, error: null, workspacePath: dir };
     },
   };
 
@@ -475,7 +482,9 @@ test('a resumable stop keeps the session, and the retry runs in the same checkou
   await reconcile({ runtime: capThenFinish, cwd: SCRATCH, board: b.slug });
 
   assert.equal(dirs.length, 2);
-  assert.equal(dirs[1], dirs[0], 'the retry resumed in the SAME checkout, not a fresh one');
+  assert.equal(dirs[1], dirs[0], 'the retry resumed in the SAME workspace, not a fresh one');
+  assert.equal(fs.readFileSync(path.join(dirs[1], 'wip.txt'), 'utf8'), 'partial',
+    'and the partial work of attempt 1 was still in it');
 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: { orderBy: { k: 'asc' } } } });
   assert.equal(after.phase, 'succeeded');

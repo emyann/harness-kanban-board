@@ -102,15 +102,12 @@ const HELP = `hkb — run one agent against one brief
                           \`board\`             this board's Jobs, phases and outcomes
                           \`value:<literal>\`   a payload the caller pushes, not one hkb fetches
                           \`self:<field>\`      this Job about itself — id, name, board, attempt,
-                                              slot, branch, base, worktree, repo
+                                              slot, repo
                         Read before the run and put in the prompt; an input the board cannot read
                         fails the attempt without spending one. Narrow --allow-tool alongside it
                         and the Job sees what it was given and no more.
                         \`self:slot\` is the one that answers "which concurrent worker am I" — a
                         small integer no other live run holds, for a port or a database name.
-                        \`self:base\` is the resolved ref this Job's branch was cut from —
-                        \`origin/main\`, or \`origin/kb-33-1\` for a step chained onto another — so a
-                        step's own steps can say "open it against your base" and mean it.
                         A \`value:\` may also be interpolated into the brief as {{name}} or
                         {{name.field}} — whichever way the brief arrived. Only \`value:\`, because
                         the brief is instruction and a fetched source is data.
@@ -130,7 +127,7 @@ const HELP = `hkb — run one agent against one brief
                         already writes down instead of the brief restating them. Follows one
                         level of \`@import\`. Defaults to the board's --guide.
        --check "<cmd>"  the command that says whether the work BEHAVES: run in the attempt's
-                        checkout after the run and after the rebase onto the base, and a
+                        workspace after the run, on the tree as the session left it, and a
                         non-zero exit fails the attempt. hkb's worker is an agent session, so
                         it has no exit code of its own — --export and --result reconstruct one
                         for files, this one for behaviour. It runs through the shell, so
@@ -222,14 +219,13 @@ const HELP = `hkb — run one agent against one brief
        --workflow <name>|none  how work on this board FINISHES: the workflow in
                         \`${WORKFLOW_DIR}/\` whose frontmatter fills what a Job did not say when it
                         is filed, and whose BODY is appended as standing steps when it RUNS —
-                        "open a draft pull request against your base". hkb itself tells a worker
-                        only what the machinery makes true afterwards (commit on your branch,
-                        rebase onto your base, push that branch and nothing else), so anything past
-                        that is a step's content and lives here. Composed at claim time rather than
-                        stored, so \`hkb queue <id> "…"\` cannot drop it and editing the file
-                        changes the next attempt. A Job filed with \`--from\` ignores it — that
-                        workflow governs — and so do \`--propose\` and \`--no-isolate\`, which
-                        have no branch for the steps to be about. Null appends nothing.
+                        commit, push, "open a draft pull request". hkb itself says NOTHING about
+                        git: the core requires no commit, push or rebase, so every step that wants
+                        one lives here (ADR-018). Composed at claim time rather than stored, so
+                        \`hkb queue <id> "…"\` cannot drop it and editing the file changes the next
+                        attempt. A Job filed with \`--from\` ignores it — that workflow governs —
+                        and so do \`--propose\` and \`--no-isolate\`, which have no workspace for
+                        the steps to be about. Null appends nothing.
 
   hkb migrate               apply this build's pending migrations to the board, deliberately
   hkb version               what this build is
@@ -490,7 +486,6 @@ const OPTIONS = {
       gate: { type: 'string' },
       // The ref the checkout is cut from. One value, never repeatable: a branch has one base, and
       // a second would be a merge nobody asked for.
-      base: { type: 'string' },
       // A boolean, because the only thing that may be proposed is Jobs (ADR-011 decision 6). It
       // becomes the string the column holds, so the closed set can grow without a flag change.
       propose: { type: 'boolean' },
@@ -1470,7 +1465,7 @@ export async function main(argv: string[]): Promise<number> {
           throw usage(
             'hkb boards set needs something to set — a ceiling (--max-concurrent <n>, --daily-budget <usd>|none)'
             + ' or a spec default (--model, --effort, --max-turns, --max-budget,'
-            + ' --max-retries, --allow-tools, --default-plugin-dirs, --guide, --base, --check,'
+            + ' --max-retries, --allow-tools, --default-plugin-dirs, --guide, --check,'
             + ' --workflow; "none" clears one)',
           );
         }

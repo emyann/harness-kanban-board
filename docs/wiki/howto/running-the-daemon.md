@@ -10,8 +10,6 @@ covers:
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/hkb.ts
     sha: 5dc47f4b0e302d2eba5ca1d0895104f4f6e00bcb
-  - path: src/worktree.ts
-    sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
 generated_at_commit: 5279b8a

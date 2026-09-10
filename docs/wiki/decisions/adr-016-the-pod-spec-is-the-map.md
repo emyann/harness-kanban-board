@@ -16,8 +16,6 @@ covers:
     sha: 4dbb64ded8e441e2e837bfa4513ed3495a297108
   - path: src/inputs.ts
     sha: 140cf48b8b323742a57e3e604b6853f829c72b6c
-  - path: src/worktree.ts
-    sha: 0fd70150e01756dd5ace7b862e094b3746f285d0
 generated_at_commit: 8aa5ade
 last_refreshed: 2026-09-09
 related:

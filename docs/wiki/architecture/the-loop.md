@@ -12,8 +12,6 @@ covers:
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
     sha: 55cb278593ae0b3d0692712e4fcff643c29e4a4e
-  - path: src/worktree.ts
-    sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/schema.ts
