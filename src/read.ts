@@ -180,9 +180,10 @@ export type JobRow = Awaited<ReturnType<typeof listJobs>>[number];
 /**
  * What is on the board.
  *
- * One query for the rows, their attempt counts and their pull requests together — the listing has
- * always been a single board-wide read, and a per-row `prUrl` lookup would be the N+1 this project
- * measures against.
+ * One query for the rows and their attempt counts together — the listing has always been a single
+ * board-wide read, and a per-row lookup would be the N+1 this project measures against. It used to
+ * fetch a pull request per row too; ADR-018 took the forge out of the core and this comment
+ * outlived it by one release.
  *
  * The label selector is applied over the rows rather than in the `where`, because Prisma's JSON
  * filters are PostgreSQL and MySQL only and SQLite cannot ask the question in SQL. The rows are
