@@ -161,8 +161,10 @@ meet one in the git history, that is what it was.
   (`prisma/schema.prisma`, `reclaimExpired`, `src/controller.ts`). Its duration is derived from the
   run it covers — `attemptDeadlineSeconds` plus a grace — never chosen independently
   (*concepts/leases-and-liveness*, *architecture/job-kind*).
-- **`activeDeadlineSeconds`** — the **Job's** wall clock, across every attempt, measured from the
-  first one's `startedAt` (`Job.activeDeadlineSeconds`, `deadlineExceeded` in `src/limits.ts`).
+- **`activeDeadlineSeconds`** — how long a Job's sessions may actually RUN, summed across every
+  attempt (`Job.activeDeadlineSeconds`, `activeMs` and `deadlineExceeded` in `src/limits.ts`).
+  Deliberately not wall clock: Kubernetes measures from `startTime`, but an hkb Job pends for hours
+  at `maxConcurrent: 1` and counting that would bound luck rather than cost.
   Kubernetes' `JobSpec` field and its rule: it **outranks the retry budget**, so a Job past it ends
   `deadline_exceeded` with no further attempt however many retries remain. Unset by default, which
   is Kubernetes' default too — a default that silently ends work is not a default.

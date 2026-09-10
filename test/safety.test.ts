@@ -344,8 +344,13 @@ test('the lease outlives the run it covers — a 60-minute Job is not reclaimed 
   await reconcile({ runtime: watching, cwd: REPO, board: b.slug, readPr: false });
 
   assert.ok(held, 'a lease is held while the run is in flight');
+  // A RANGE, not an equality. `expiresAt` is built from the controller's own `now()` and
+  // `acquiredAt` is Prisma's `@default(now())`, sampled later when the INSERT runs — two clock
+  // reads, so any millisecond boundary crossed between them breaks a strict comparison. The first
+  // version of this test did compare exactly and reddened about one run in six.
   const life = held!.expiresAt.getTime() - held!.acquiredAt.getTime();
-  assert.equal(life, 3600 * 1000 + grace, 'the lease is the attempt clock plus the grace, in ms');
+  const want = 3600 * 1000 + grace;
+  assert.ok(Math.abs(life - want) < 1000, `the lease is the attempt clock plus the grace: ${life} vs ${want}`);
   assert.ok(life > 35 * 60_000, 'so a 60-minute run is not reclaimed at 35 minutes');
 
   // And the clock the lease was derived from is frozen on the attempt, in seconds.

@@ -86,11 +86,18 @@ CREATE TABLE "new_Job" (
 -- existing row. The column is a RENAME plus a unit change, so the value is carried across and
 -- divided: 1800000 ms -> 1800 s.
 --
+-- MAX(1, …) because this is INTEGER division: a hand-set `timeoutMs` below 1000 would land on 0,
+-- and 0 is not "no clock" here — `pick` in src/spec.ts compares against null rather than
+-- truthiness, so 0 would win over the board default and the built-in, `leaseFor(0)` would shrink
+-- the lease to the bare grace, and `spec.timeoutMs ? setTimeout(...)` in the runtime is falsy at 0,
+-- so the session would get no wall clock at all. Sub-second clocks only ever got there by hand,
+-- which is exactly the population this migration exists for.
+--
 -- NULLIF is what keeps the nullable column honest. Every row today carries the old database default
 -- 1800000, and copying that through would write "the operator asked for 30 minutes" onto Jobs whose
 -- operator said nothing — the exact distinction the column was made nullable to keep, and it would
 -- outrank the board default this migration exists to add.
-INSERT INTO "new_Job" ("attemptDeadlineSeconds", "allowedTools", "artifacts", "base", "boardId", "brief", "check", "createdAt", "effort", "endedBy", "endedFor", "exports", "finishedAt", "gate", "guide", "id", "inputs", "isolate", "labels", "lastError", "lastSessionId", "maxBudgetUsd", "maxRetries", "maxTurns", "model", "name", "phase", "pluginPaths", "proposalIndex", "proposedByJobId", "proposedByK", "proposes", "results", "suspendedFor", "updatedAt") SELECT NULLIF("timeoutMs", 1800000) / 1000, "allowedTools", "artifacts", "base", "boardId", "brief", "check", "createdAt", "effort", "endedBy", "endedFor", "exports", "finishedAt", "gate", "guide", "id", "inputs", "isolate", "labels", "lastError", "lastSessionId", "maxBudgetUsd", "maxRetries", "maxTurns", "model", "name", "phase", "pluginPaths", "proposalIndex", "proposedByJobId", "proposedByK", "proposes", "results", "suspendedFor", "updatedAt" FROM "Job";
+INSERT INTO "new_Job" ("attemptDeadlineSeconds", "allowedTools", "artifacts", "base", "boardId", "brief", "check", "createdAt", "effort", "endedBy", "endedFor", "exports", "finishedAt", "gate", "guide", "id", "inputs", "isolate", "labels", "lastError", "lastSessionId", "maxBudgetUsd", "maxRetries", "maxTurns", "model", "name", "phase", "pluginPaths", "proposalIndex", "proposedByJobId", "proposedByK", "proposes", "results", "suspendedFor", "updatedAt") SELECT MAX(1, NULLIF("timeoutMs", 1800000) / 1000), "allowedTools", "artifacts", "base", "boardId", "brief", "check", "createdAt", "effort", "endedBy", "endedFor", "exports", "finishedAt", "gate", "guide", "id", "inputs", "isolate", "labels", "lastError", "lastSessionId", "maxBudgetUsd", "maxRetries", "maxTurns", "model", "name", "phase", "pluginPaths", "proposalIndex", "proposedByJobId", "proposedByK", "proposes", "results", "suspendedFor", "updatedAt" FROM "Job";
 DROP TABLE "Job";
 ALTER TABLE "new_Job" RENAME TO "Job";
 CREATE INDEX "Job_boardId_phase_idx" ON "Job"("boardId", "phase");

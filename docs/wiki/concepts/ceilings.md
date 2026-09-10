@@ -7,18 +7,18 @@ audience: [dev, ops]
 read_when: "touching gateClaim, adding a limit, changing what a claim is judged against, or explaining why a board claimed nothing"
 covers:
   - path: src/limits.ts
-    sha: 6dfe4dbab79fff06f46f4d7cd01f3cd071ed9765
+    sha: 18849fb4775cabb4c5d65784f506d61d90c66f1f
   - path: src/controller.ts
-    sha: 2c0187bd11936fb1ed6b7a5517ccc53bec3db190
+    sha: 43770041da29adc6333f351e74a701673102f9d9
   - path: prisma/schema.prisma
     sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
   - path: src/spec.ts
     sha: 5f549ec7407fcf1af8d80266ad35b9e90ab1620a
   - path: src/hkb.ts
-    sha: 28cc3417db47ad003b9ff5e19ea4c25a27394b72
+    sha: ca8e6b1d5396b3506c01828c247249ed12590c54
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
-generated_at_commit: 1a75d0b
+generated_at_commit: 48b5ee1
 last_refreshed: 2026-09-09
 related: [architecture/the-board, architecture/the-loop, architecture/job-kind, concepts/leases-and-liveness]
 ---
@@ -185,12 +185,30 @@ ceiling of zero" are different configurations (`src/hkb.ts:1444-1448`).
 
 ## The fourth ceiling, and it is the only one that is not the board's
 
-`Job.activeDeadlineSeconds` is a **wall clock across every attempt a Job has**, from the first one's
-`startedAt` — Kubernetes' `JobSpec.activeDeadlineSeconds`. It belongs on this page because it
+`Job.activeDeadlineSeconds` bounds **how long a Job's sessions may actually run**, summed across
+every attempt — Kubernetes' `JobSpec.activeDeadlineSeconds`. It belongs on this page because it
 behaves like the three above and not like a default: a Job may set it, but once past it, nothing the
 Job says gets it another attempt.
 
-**It outranks the retry budget**, and that is Kubernetes' rule rather than a choice made here:
+**One deliberate deviation from the map, and the field's own name is the argument for it.**
+Kubernetes measures from the Job's `startTime`, so a `Pending` Pod burns the clock — tolerable
+there, where a Pod pends for seconds while the scheduler finds a node. An hkb Job pends for *hours*:
+at `maxConcurrent: 1`, the shipped default, a Job whose first attempt crashed at 09:00 may not be
+claimed again until 14:00. Counting that would fail a Job that used five minutes of compute because
+the board was busy, which bounds luck rather than cost. So `activeMs` sums the attempts' own
+durations, which is what *active* means (`src/limits.ts`).
+
+It is checked **twice, and the first one is the one that saves money**: before a claim, so a Job
+already over is refused before a slot, a worktree or a session is spent on it; and again after the
+run, because the run itself counts. A ceiling that only refuses after the money is gone is not a
+ceiling.
+
+An attempt that finished cleanly still has everything it **declared** collected before the verdict
+lands — the exports, results and artifacts are gathered first and the deadline is applied last. The
+work was paid for; discarding a report because a clock expired thirty seconds earlier loses real
+output and buys nothing. The Job still ends `deadline_exceeded`.
+
+**It outranks the retry budget**, and *that* half is Kubernetes' rule rather than a choice made here:
 *"once a Job reaches activeDeadlineSeconds, all of its running Pods are terminated and the Job
 status will become type: Failed with reason: DeadlineExceeded."* ADR-016 decision 4 says the failure
 semantics are Kubernetes' to decide, so `nextPhase` reads this **before** the completion check and

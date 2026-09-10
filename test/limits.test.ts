@@ -160,24 +160,38 @@ test('the window is a rolling 24 hours, with no timezone in it', () => {
  * matter and they refuse in opposite directions: a Job with no deadline must never be ended, and a
  * Job past one must never get another attempt however many retries it has left.
  */
-const { deadlineExceeded, deadlineShortfall } = await import('../src/limits.ts');
+const { deadlineExceeded, deadlineShortfall, activeMs } = await import('../src/limits.ts');
 
 const at = (ms: number) => new Date(1_000_000 + ms);
+const ran = (...spans: [number, number | null][]) =>
+  activeMs(spans.map(([s, e]) => ({ startedAt: at(s), endedAt: e == null ? null : at(e) })), at(10_000_000));
 
 test('no deadline means no deadline — the shipped default ends nothing', () => {
-  assert.equal(deadlineExceeded(at(0), at(999_999_999), null), false);
-  assert.equal(deadlineExceeded(at(0), at(999_999_999), undefined), false);
+  assert.equal(deadlineExceeded(999_999_999, null), false);
+  assert.equal(deadlineExceeded(999_999_999, undefined), false);
 });
 
-test('a Job that never started cannot have outrun a clock that never began', () => {
-  assert.equal(deadlineExceeded(null, at(999_999_999), 60), false);
-  assert.equal(deadlineExceeded(undefined, at(999_999_999), 60), false);
+test('a Job that never ran has spent nothing', () => {
+  assert.equal(activeMs([], at(0)), 0);
+  assert.equal(deadlineExceeded(activeMs([], at(999)), 60), false);
 });
 
-test('the clock runs from the FIRST attempt, and the boundary is inclusive', () => {
-  assert.equal(deadlineExceeded(at(0), at(59_000), 60), false, 'a second short is not exceeded');
-  assert.equal(deadlineExceeded(at(0), at(60_000), 60), true, 'exactly at the deadline IS exceeded');
-  assert.equal(deadlineExceeded(at(0), at(60_001), 60), true);
+test('it counts time RUNNING, not wall clock — queue time between attempts is free', () => {
+  // The case that decided this: a Job crashes after 2 minutes, the board is busy for five hours at
+  // maxConcurrent 1, then a second attempt succeeds in 3 minutes. Five minutes of compute.
+  const spent = ran([0, 120_000], [5 * 3_600_000, 5 * 3_600_000 + 180_000]);
+  assert.equal(spent, 300_000, 'five minutes, not five hours');
+  assert.equal(deadlineExceeded(spent, 3600), false, 'an hour of deadline is not spent by waiting');
+});
+
+test('an attempt still open counts up to now, so the claim guard and the verdict agree', () => {
+  assert.equal(activeMs([{ startedAt: at(0), endedAt: null }], at(90_000)), 90_000);
+});
+
+test('the boundary is inclusive: exactly at the deadline IS exceeded', () => {
+  assert.equal(deadlineExceeded(59_000, 60), false);
+  assert.equal(deadlineExceeded(60_000, 60), true);
+  assert.equal(deadlineExceeded(60_001, 60), true);
 });
 
 test('the shortfall names both numbers and the way back, since a retry is what it refuses', () => {
@@ -187,4 +201,12 @@ test('the shortfall names both numbers and the way back, since a retry is what i
   assert.match(why, /60m/, 'and the deadline it ran past');
   assert.match(why, /--deadline/, 'and the flag that changes it');
   assert.match(why, /retries or not/, 'said plainly, because retries left is the confusing part');
+});
+
+test('and it has resolution where the flags do — seconds are reachable, so seconds are printed', () => {
+  // `--deadline 90` with a 100s run used to read "ran 2m ... deadline is 2m", which describes a Job
+  // killed for hitting a limit it did not exceed.
+  const why = deadlineShortfall(1, 100_000, 90);
+  assert.match(why, /100s/);
+  assert.match(why, /90s/);
 });

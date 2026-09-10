@@ -187,6 +187,64 @@ test('migrating a populated board keeps its attempts, leases and events', () => 
   }
 });
 
+/**
+ * The deadlines rename, branch by branch — the risky half of `20260910000000_deadlines_in_seconds`.
+ *
+ * `timeoutMs` did not exist at the first migration, so this cannot ride on the populated-board test
+ * above: it stages the history up to the migration under test, seeds rows in the shape that
+ * migration will read, and then applies only it.
+ *
+ * Each branch fails differently and silently, which is why all three are here. Drop the `/ 1000`
+ * and every Job gets a 1800000-second clock. Drop the `NULLIF` and every Job that ever existed
+ * outranks the board default this card adds. Drop the `MAX(1, …)` and a sub-second clock lands on
+ * 0 — which `pick` accepts as a value, so the session gets no wall clock and the lease shrinks to
+ * the bare grace.
+ */
+test('the deadlines migration carries timeoutMs across, in seconds, without writing 0 or a false choice', () => {
+  const p = scratch();
+  const all = knownMigrations();
+  const MIGRATIONS = path.resolve(import.meta.dirname, '..', 'prisma', 'migrations');
+  const under = all[all.length - 1];
+  assert.match(under, /deadlines_in_seconds/, 'this test names the migration it is about');
+
+  const staged = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-dl-'));
+  dirs.push(staged);
+  for (const m of all.slice(0, -1)) fs.cpSync(path.join(MIGRATIONS, m), path.join(staged, m), { recursive: true });
+  ensureSchema(p, staged);
+
+  const seed = open(p);
+  seed.exec(`INSERT INTO "Board" ("slug", "updatedAt") VALUES ('dl', datetime('now'))`);
+  const job = (name: string, timeoutMs: number) =>
+    seed.exec(`INSERT INTO "Job" ("boardId", "name", "brief", "timeoutMs", "updatedAt")
+               VALUES (1, '${name}', 'b', ${timeoutMs}, datetime('now'))`);
+  job('untouched', 1800000);   // the old database default — nobody chose it
+  job('raised', 5400000);      // hand-raised in SQL, which is how these got set at all
+  job('tiny', 500);            // sub-second, only reachable by hand
+  seed.exec(`INSERT INTO "Attempt" ("jobId", "k", "host", "maxBudgetUsd") VALUES (1, 1, 'h', 1.0)`);
+  seed.close();
+
+  const r = ensureSchema(p, undefined, { asked: true });
+  assert.deepEqual(r.applied, [under], 'only the migration under test ran');
+
+  const db = open(p);
+  try {
+    const rows = db.prepare('SELECT name, attemptDeadlineSeconds AS s, activeDeadlineSeconds AS a FROM "Job" ORDER BY id')
+      .all() as { name: string; s: number | null; a: number | null }[];
+    assert.deepEqual(rows, [
+      { name: 'untouched', s: null, a: null },
+      { name: 'raised', s: 5400, a: null },
+      { name: 'tiny', s: 1, a: null },
+    ], 'null so a board default can answer; 5400000 carried across as 5400; 500 floored at 1, never 0');
+
+    // The frozen column is NOT NULL and past attempts have no value for it. 1800 is not a guess:
+    // it is what every one of them actually ran under, since no flag could change it.
+    const att = db.prepare('SELECT attemptDeadlineSeconds AS s FROM "Attempt" WHERE jobId = 1').get() as { s: number };
+    assert.equal(att.s, 1800, 'backfilled at the clock they really ran under');
+  } finally {
+    db.close();
+  }
+});
+
 test('a migration that would leave a dangling reference is rolled back, not committed', () => {
   // The price of turning foreign keys off for the duration: nothing else would notice. The check
   // runs before the commit, so the answer is a refusal rather than a corrupt board.

@@ -2969,8 +2969,8 @@ test('a board pointing at a workflow that is not there REFUSES the attempt, and 
  * failure semantics are Kubernetes' to decide, so the tests here are about ORDER: the deadline is
  * read before the check, before `completed`, and before anything counts retries.
  */
-const exceeded = { exceeded: true, ranForMs: 7_200_000, seconds: 3600 };
-const within = { exceeded: false, ranForMs: 60_000, seconds: 3600 };
+const exceeded = { jobId: 42, exceeded: true, ranForMs: 7_200_000, seconds: 3600 };
+const within = { jobId: 42, exceeded: false, ranForMs: 60_000, seconds: 3600 };
 
 test('a Job past its deadline fails, with retries left and to spare', () => {
   const d = nextPhase({ status: 'max_turns' } as never, 1, 99, 1, null, exceeded);
@@ -2978,6 +2978,7 @@ test('a Job past its deadline fails, with retries left and to spare', () => {
   assert.equal(d.outcome, 'deadline_exceeded');
   assert.equal(d.resumable, false, 'the Job ran out of wall clock, not the session');
   assert.match(d.lastError ?? '', /--deadline/);
+  assert.match(d.lastError ?? '', /#42/, 'the Job it is about, not a hardcoded 0');
 });
 
 test('and it outranks a run that FINISHED — otherwise the deadline is a race, not a ceiling', () => {
@@ -3025,5 +3026,63 @@ test('a Job ends on its deadline through a real reconcile, and keeps no session 
   assert.equal(after.phase, 'failed', 'five retries remained and none of them was taken');
   assert.equal(after.attempts[0].outcome, 'deadline_exceeded');
   assert.equal(after.lastSessionId, null, 'nothing to resume: the clock that ran out was the Job\'s');
-  assert.match(after.lastError ?? '', /ran .* across its attempts/);
+  // The Job's OWN id, which is the bug this line exists for: `nextPhase` is pure and has no jobId
+  // in scope, so the message was built with a hardcoded 0 and told the operator to run
+  // `hkb job set 0 --deadline` — a Job that does not exist.
+  assert.match(after.lastError ?? '', new RegExp(`^#${job.id} has run`));
+  assert.match(after.lastError ?? '', new RegExp(`hkb job set ${job.id} --deadline`));
+  assert.ok(!(after.lastError ?? '').includes('#0 '), 'never Job #0');
+});
+
+test('a Job already past its deadline is REFUSED at the claim, before a session is bought', async () => {
+  // The guard that matters most and had no test until this line: without it a Job past its deadline
+  // is claimed, cuts a checkout, runs a full paid attempt and is only then told it was over — and
+  // the `hkb retry` the deadline's own message points at would do exactly that.
+  const b = await proposalBoard();
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'already over', brief: 'x', isolate: false,
+      maxBudgetUsd: 1, maxRetries: 5, activeDeadlineSeconds: 60,
+    },
+  });
+  // One finished attempt that already spent more than the deadline allows.
+  await db.attempt.create({
+    data: {
+      jobId: job.id, k: 1, host: 'h', maxBudgetUsd: 1, attemptDeadlineSeconds: 1800,
+      startedAt: new Date(Date.now() - 300_000), endedAt: new Date(Date.now() - 120_000),
+      outcome: 'crashed',
+    },
+  });
+  await db.job.update({ where: { id: job.id }, data: { phase: 'pending' } });
+
+  let ran = false;
+  const never = { name: 'never', async run() { ran = true; throw new Error('the runtime must not be reached'); } } as never;
+  const r = await reconcile({ runtime: never, cwd, only: job.id, board: 'proposals', readPr: false });
+
+  assert.equal(ran, false, 'nothing was spent on a Job that was already over');
+  assert.deepEqual(r.claimed, [], 'and it was not claimed at all');
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'failed');
+  assert.equal(after.attempts.length, 1, 'no second attempt row was created');
+  assert.match(after.lastError ?? '', new RegExp(`hkb job set ${job.id} --deadline`));
+});
+
+test('and a Job inside its deadline is still claimed, so the guard is not just "refuse everything"', async () => {
+  const b = await proposalBoard();
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'still fine', brief: 'x', isolate: false,
+      maxBudgetUsd: 1, maxRetries: 5, activeDeadlineSeconds: 3600,
+    },
+  });
+  await db.attempt.create({
+    data: {
+      jobId: job.id, k: 1, host: 'h', maxBudgetUsd: 1, attemptDeadlineSeconds: 1800,
+      startedAt: new Date(Date.now() - 300_000), endedAt: new Date(Date.now() - 120_000),
+      outcome: 'crashed',
+    },
+  });
+  await db.job.update({ where: { id: job.id }, data: { phase: 'pending' } });
+  const r = await reconcile({ runtime: fakeRuntime(), cwd, only: job.id, board: 'proposals', readPr: false });
+  assert.deepEqual(r.claimed, [job.id], 'three minutes spent against an hour is not over');
 });

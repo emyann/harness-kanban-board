@@ -633,6 +633,14 @@ function seconds(v: unknown, flag: string): number | null | undefined {
   const n = num(v, flag);
   if (n === undefined) return undefined;
   if (!Number.isInteger(n)) throw usage(`${flag} wants a whole number of seconds, got ${n} — Kubernetes' activeDeadlineSeconds is an integer and so is this.`);
+  // Above this a `setTimeout` delay exceeds 2^31 ms, which Node clamps to 1 — so the longest
+  // possible clock would abort every session the instant it started, with a TimeoutOverflowWarning
+  // nobody reads. Refused by name rather than left to be discovered as "my 30-day Job times out
+  // immediately". ~24.8 days.
+  const MAX = Math.floor((2 ** 31 - 1) / 1000);
+  if (n > MAX) {
+    throw usage(`${flag} wants at most ${MAX} seconds (~24 days) — above that the runtime's own timer overflows and fires immediately, got ${n}.`);
+  }
   if (n <= 0) {
     throw usage(
       `${flag} wants a positive number of seconds, got ${n}. `
@@ -1486,6 +1494,12 @@ export async function main(argv: string[]): Promise<number> {
           const cost = a.costUsd != null
             ? ` $${a.costUsd.toFixed(4)} of $${a.maxBudgetUsd.toFixed(2)}`
             : ` up to $${a.maxBudgetUsd.toFixed(2)}`;
+          // The clock this attempt was frozen at, printed beside the cap it was frozen at — and
+          // that is the whole justification for the column existing. A frozen value nothing reads
+          // is two records of one fact answering no question, which is the trap `maxBudgetUsd`'s
+          // own comment names; it earns its place by being the number an operator wants next to
+          // `timed_out` when the board's default has moved since.
+          const clock = ` / ${a.attemptDeadlineSeconds}s`;
           // An attempt in flight has no `endedAt`, and elapsed-so-far is exactly what you want to
           // know about one: the trailing `+` says the number is still climbing.
           const took = formatDuration((a.endedAt ?? new Date()).getTime() - a.startedAt.getTime())
@@ -1493,7 +1507,7 @@ export async function main(argv: string[]): Promise<number> {
           // 13, not 11: `check_failed` is twelve characters and overflowed the column, so the row
           // an operator is reading precisely because something went wrong was the one that lost its
           // alignment. The width is the longest Outcome plus the gutter.
-          console.log(`  k=${a.k}      ${(a.outcome ?? 'running').padEnd(13)}${took.padStart(7)}${cost}  ${a.sessionId ?? '—'}`);
+          console.log(`  k=${a.k}      ${(a.outcome ?? 'running').padEnd(17)}${took.padStart(7)}${cost}${clock}  ${a.sessionId ?? '—'}`);
           // What the run actually did, for the attempt whose value is not a diff. Printed only when
           // the runtime measured it — an attempt refused at the gate has no turn count, and `0 turns`
           // would be a claim about a run that never happened. Denials are shown only when non-zero:
@@ -1929,8 +1943,10 @@ export async function main(argv: string[]): Promise<number> {
         setNumber('max-turns', 'defaultMaxTurns', (n) => Number.isInteger(n) && n >= 1, 'a whole number of turns, 1 or more');
         setNumber('max-budget', 'defaultMaxBudgetUsd', (n) => n > 0, 'dollars above zero');
         setNumber('max-retries', 'defaultMaxRetries', (n) => Number.isInteger(n) && n >= 0, 'a whole number of retries, 0 or more');
-        setNumber('attempt-deadline', 'defaultAttemptDeadlineSeconds', (n) => Number.isInteger(n) && n > 0, 'a positive whole number of seconds — activeDeadlineSeconds is a positive integer in Kubernetes');
-        setNumber('deadline', 'defaultActiveDeadlineSeconds', (n) => Number.isInteger(n) && n > 0, 'a positive whole number of seconds — activeDeadlineSeconds is a positive integer in Kubernetes');
+        for (const [flag, field] of [['attempt-deadline', 'defaultAttemptDeadlineSeconds'], ['deadline', 'defaultActiveDeadlineSeconds']] as const) {
+          const v = seconds(values[flag], `--${flag}`);
+          if (v !== undefined) data[field] = v;
+        }
         // A list, so it takes the comma-separated form rather than the repeatable one: `boards set`
         // is a single statement about the board, and a repeatable flag here would read as adding to
         // a list rather than replacing it.
@@ -2264,10 +2280,13 @@ export async function main(argv: string[]): Promise<number> {
       number('max-turns', 'maxTurns', (n) => Number.isInteger(n) && n >= 1, 'a whole number of turns, 1 or more');
       number('max-budget', 'maxBudgetUsd', (n) => n > 0, 'dollars above zero');
       number('max-retries', 'maxRetries', (n) => Number.isInteger(n) && n >= 0, 'a whole number of retries, 0 or more');
-      // Seconds, positive, whole. 0 is refused rather than read as "no deadline" — to the arithmetic
-      // it means "already expired", which is the most expensive way to be wrong about a clock.
-      number('attempt-deadline', 'attemptDeadlineSeconds', (n) => Number.isInteger(n) && n > 0, 'a positive whole number of seconds — activeDeadlineSeconds is a positive integer in Kubernetes');
-      number('deadline', 'activeDeadlineSeconds', (n) => Number.isInteger(n) && n > 0, 'a positive whole number of seconds — activeDeadlineSeconds is a positive integer in Kubernetes');
+      // Through `seconds()`, the same parser `hkb new` uses, which is this verb's own stated rule:
+      // "a value that could never have been filed cannot be set either". Four inline copies of the
+      // predicate meant `--deadline 0` explained itself on one verb and not on the other.
+      for (const [flag, field] of [['attempt-deadline', 'attemptDeadlineSeconds'], ['deadline', 'activeDeadlineSeconds']] as const) {
+        const v = seconds(values[flag], `--${flag}`);
+        if (v !== undefined) changes[field] = v;
+      }
       list('plugin-dir', 'pluginPaths', checkPluginPath);
       list('export', 'exports', checkExportPath);
       list('result', 'results', checkResultName);

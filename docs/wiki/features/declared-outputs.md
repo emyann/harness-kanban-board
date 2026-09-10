@@ -13,16 +13,16 @@ covers:
   - path: src/worktree.ts
     sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
   - path: src/controller.ts
-    sha: 2c0187bd11936fb1ed6b7a5517ccc53bec3db190
+    sha: 43770041da29adc6333f351e74a701673102f9d9
   - path: src/brief.ts
     sha: a56db1e2f49d60c695034ecd14f73c5c258cce85
   - path: src/hkb.ts
-    sha: 28cc3417db47ad003b9ff5e19ea4c25a27394b72
+    sha: ca8e6b1d5396b3506c01828c247249ed12590c54
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: prisma/schema.prisma
     sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
-generated_at_commit: 1a75d0b
+generated_at_commit: 48b5ee1
 last_refreshed: 2026-09-09
 related: [decisions/adr-008-declared-outputs, decisions/adr-011-proposals-not-board-access, features/proposals, features/worktree-includes, architecture/job-kind, architecture/the-board]
 ---

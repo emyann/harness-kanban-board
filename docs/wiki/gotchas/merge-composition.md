@@ -7,17 +7,17 @@ audience: [dev]
 read_when: "filing a batch of Jobs against one repository, reviewing several agent PRs cut from the same base, or designing how a graph kind would decompose work"
 covers:
   - path: src/controller.ts
-    sha: 2c0187bd11936fb1ed6b7a5517ccc53bec3db190
+    sha: 43770041da29adc6333f351e74a701673102f9d9
   - path: src/worktree.ts
     sha: 98d0b677291d536701dc137cf1d5997f8fd80a3f
   - path: src/limits.ts
-    sha: 6dfe4dbab79fff06f46f4d7cd01f3cd071ed9765
+    sha: 18849fb4775cabb4c5d65784f506d61d90c66f1f
   - path: src/hkb.ts
-    sha: 28cc3417db47ad003b9ff5e19ea4c25a27394b72
+    sha: ca8e6b1d5396b3506c01828c247249ed12590c54
   - path: prisma/schema.prisma
     sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
 related: [architecture/job-kind, architecture/the-loop, concepts/ceilings, features/rebase-and-verify, decisions/adr-007-workload-scheduler, decisions/adr-008-declared-outputs]
-generated_at_commit: 1a75d0b
+generated_at_commit: 48b5ee1
 last_refreshed: 2026-09-09
 ---
 

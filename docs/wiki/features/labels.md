@@ -9,7 +9,7 @@ covers:
   - path: src/labels.ts
     sha: b524ef31fce5611a1a676dfb4631aaa83ecba926
   - path: src/hkb.ts
-    sha: 28cc3417db47ad003b9ff5e19ea4c25a27394b72
+    sha: ca8e6b1d5396b3506c01828c247249ed12590c54
   - path: prisma/schema.prisma
     sha: 31ae1a8e52791c7a7e2555d68646e67c2df69a41
   - path: src/templates.ts
@@ -22,7 +22,7 @@ related:
     features/workflow-templates,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: 1a75d0b
+generated_at_commit: 48b5ee1
 last_refreshed: 2026-09-09
 ---
 

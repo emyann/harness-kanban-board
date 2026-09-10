@@ -106,41 +106,67 @@ export function gateClaim(i: ClaimInputs): ClaimGate {
 export const windowStart = (now: Date) => new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
 /**
- * Has this Job outrun its own wall clock — the one that spans every attempt?
+ * Has this Job outrun its deadline — the one that spans every attempt?
  *
- * Kubernetes' `JobSpec.activeDeadlineSeconds`, measured from the Job's `startTime`, which here is
- * the first attempt's `startedAt`. The per-attempt clock (`attemptDeadlineSeconds`) bounds a
- * runaway *session*; this bounds a runaway *Job*. Without it, three retries under a 90-minute
- * attempt clock can hold a slot for four and a half hours and still be "within its caps".
+ * Kubernetes' `JobSpec.activeDeadlineSeconds`, with **one deliberate deviation, and the name is the
+ * argument for it**. Kubernetes measures from the Job's `startTime`, so a Pod sitting `Pending`
+ * burns the clock; that is tolerable there because a Pod pends for seconds while the scheduler finds
+ * a node. An hkb Job pends for *hours*: at `maxConcurrent: 1` — the shipped default — a Job whose
+ * first attempt crashed at 09:00 may not be claimed again until 14:00. Measuring wall clock there
+ * fails a Job that used five minutes of compute because the board was busy, which bounds luck rather
+ * than cost.
+ *
+ * So this counts **time a session was actually running**: the sum of the attempts' own durations.
+ * It is what `active` means in the field's own name, and it makes the deadline answer the question
+ * an operator is really asking — how much work is this Job allowed to be worth.
  *
  * **Pure, and in this module rather than the controller**, because it is a ceiling and this is where
- * ceilings live (`src/spec.ts`'s header draws that line: a *default* is a value a Job may override
- * and is resolved there; a *ceiling* is a limit it may not exceed and is enforced here). The
- * controller supplies `startedAt` and `now`; nothing here reads a clock or a database, so the case
- * that matters — the refusing one — is testable without either.
+ * ceilings live (`src/spec.ts`'s header draws that line). The controller sums the attempts and calls
+ * in; nothing here reads a clock or a database, so the refusing case is testable without either.
  *
- * Null `seconds` is "no Job-wide deadline", which is the shipped default and Kubernetes' own. Null
- * `startedAt` is a Job that has never run: it cannot have outrun a clock that never started.
+ * Null `seconds` is "no deadline", which is the shipped default and Kubernetes' own.
  */
-export function deadlineExceeded(
-  startedAt: Date | null | undefined,
-  now: Date,
-  seconds: number | null | undefined,
-): boolean {
-  if (seconds == null || startedAt == null) return false;
-  return now.getTime() - startedAt.getTime() >= seconds * 1000;
+export function deadlineExceeded(activeMs: number, seconds: number | null | undefined): boolean {
+  if (seconds == null) return false;
+  return activeMs >= seconds * 1000;
 }
+
+/**
+ * How long a Job has actually been running, across every attempt.
+ *
+ * An attempt still open is counted up to `now`, which is what makes the claim-time guard and the
+ * post-run verdict agree: the run in flight is part of what the Job has spent.
+ */
+export function activeMs(
+  attempts: { startedAt: Date; endedAt?: Date | null }[],
+  now: Date,
+): number {
+  return attempts.reduce(
+    (sum, a) => sum + Math.max(0, (a.endedAt ?? now).getTime() - a.startedAt.getTime()),
+    0,
+  );
+}
+
+/**
+ * A duration an operator reads, with resolution where the flags have it.
+ *
+ * Seconds below ten minutes, minutes above. The threshold is not cosmetic: the flags take any
+ * positive integer of seconds, so a 90-second deadline and a 100-second run are both reachable —
+ * and rounding those to minutes printed "ran 2m and its deadline is 2m", which reads as a Job
+ * killed for hitting a limit it did not exceed. Two different numbers must not render the same.
+ */
+const duration = (ms: number): string =>
+  ms < 600_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}m`;
 
 /**
  * What the operator is told when a Job is ended by its own deadline.
  *
- * Names the two numbers that decide it and the one flag that changes it, because "DeadlineExceeded"
- * on its own sends nobody anywhere. It says `hkb job set --deadline` rather than "retry", since a
- * retry is precisely what this outcome refuses: the Job is out of wall clock, not out of luck.
+ * Names the two numbers that decide it and the way back, because "DeadlineExceeded" on its own sends
+ * nobody anywhere. It says `hkb job set --deadline` rather than "retry", since a retry is precisely
+ * what this outcome refuses: the Job is out of deadline, not out of luck.
  */
 export function deadlineShortfall(jobId: number, ranForMs: number, seconds: number): string {
-  const mins = (ms: number) => `${Math.round(ms / 60_000)}m`;
-  return `#${jobId} ran ${mins(ranForMs)} across its attempts and its deadline is ${mins(seconds * 1000)} `
-    + `— ended without another attempt, retries or not. `
-    + `\`hkb job set ${jobId} --deadline <seconds>\` then \`hkb retry ${jobId}\` to give it more wall clock.`;
+  return `#${jobId} has run ${duration(ranForMs)} across its attempts and its deadline is `
+    + `${duration(seconds * 1000)} — ended without another attempt, retries or not. `
+    + `\`hkb job set ${jobId} --deadline <seconds>\` then \`hkb retry ${jobId}\` to give it more.`;
 }
