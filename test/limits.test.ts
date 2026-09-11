@@ -210,3 +210,42 @@ test('and it has resolution where the flags do — seconds are reachable, so sec
   assert.match(why, /100s/);
   assert.match(why, /90s/);
 });
+
+// ---------------------------------------------------------------- the retry back-off
+
+/**
+ * `retryBackoffMs` — the spacing between a failure and its retry. The refusing case is the one that
+ * matters: a Job whose last attempt failed a moment ago is NOT claimable yet, however it got woken.
+ */
+const { retryBackoffMs } = await import('../src/limits.ts');
+const NOW = new Date('2026-09-10T12:00:00Z');
+const endedAgo = (ms: number, outcome: string | null = 'crashed') =>
+  ({ endedAt: new Date(NOW.getTime() - ms), outcome });
+
+test('a Job that failed a moment ago is not claimable yet — it waits the rest of the interval', () => {
+  assert.equal(retryBackoffMs(endedAgo(1_000), NOW, 45_000), 44_000);
+  assert.equal(retryBackoffMs(endedAgo(0), NOW, 45_000), 45_000);
+});
+
+test('every outcome that spends a retry waits, and so does an attempt with no outcome written', () => {
+  for (const outcome of ['crashed', 'max_turns', 'max_budget', 'timed_out', 'no_output', 'no_input',
+    'check_failed', 'lost', null]) {
+    assert.ok(retryBackoffMs(endedAgo(1_000, outcome), NOW, 45_000) > 0, `${outcome} waits`);
+  }
+});
+
+test('once the interval has passed it is claimable, and the boundary is inclusive', () => {
+  assert.equal(retryBackoffMs(endedAgo(45_000), NOW, 45_000), 0);
+  assert.equal(retryBackoffMs(endedAgo(90_000), NOW, 45_000), 0);
+});
+
+test('an attempt that spent no retry does not hold the next one back', () => {
+  // `stopped` is the operator turning the daemon off; `completed` is a gated Job its approval re-queued.
+  assert.equal(retryBackoffMs(endedAgo(1_000, 'stopped'), NOW, 45_000), 0);
+  assert.equal(retryBackoffMs(endedAgo(1_000, 'completed'), NOW, 45_000), 0);
+});
+
+test('no attempt yet, or no back-off asked for, is claimable now — `hkb run` asks for none', () => {
+  assert.equal(retryBackoffMs(null, NOW, 45_000), 0);
+  assert.equal(retryBackoffMs(endedAgo(1_000), NOW, 0), 0);
+});

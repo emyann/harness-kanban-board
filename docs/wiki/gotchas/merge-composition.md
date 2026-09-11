@@ -7,17 +7,17 @@ audience: [dev]
 read_when: "filing a batch of Jobs against one repository, reviewing several agent PRs cut from the same base, or designing how a graph kind would decompose work"
 covers:
   - path: src/controller.ts
-    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
+    sha: a50ac9ee35132bd67b57bb593e9771bd851fe741
   - path: src/limits.ts
-    sha: 18849fb4775cabb4c5d65784f506d61d90c66f1f
+    sha: 9c7bdc6c3fa037e11cd8ae52d1803d685d1af918
   - path: src/workspaces.ts
     sha: b709212e781376f570a613907a209648dab91526
   - path: src/hkb.ts
     sha: eb759e566ef71b11caa34cc0945a6e2ae30958cf
   - path: prisma/schema.prisma
-    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
+    sha: 364793f9a1174875c3bf644257b6d0cbdf94d25e
 related: [architecture/job-kind, architecture/the-loop, concepts/ceilings, decisions/adr-007-workload-scheduler, decisions/adr-008-declared-outputs, decisions/adr-018-the-boundary]
-generated_at_commit: 2b8902f
+generated_at_commit: ebf564a
 last_refreshed: 2026-09-10
 ---
 
@@ -70,7 +70,7 @@ find (#362)"*, 2026-09-05:
 
 - Every branch is cut from the mainline at claim time and never rebased by the
   machinery. The workspace is asked for on the serial side of the reconcile pass,
-  at the moment of the claim (`src/controller.ts:853-870`), and the runtime cuts
+  at the moment of the claim (`src/controller.ts:938-955`), and the runtime cuts
   it from the repository's default branch.
 - CI runs per branch.
 - No step compares one Job's diff against another's.
@@ -155,7 +155,7 @@ attempt chose to freeze the resolved cap onto the Attempt rather than re-derive
 it, and argued the cost into a feature (`docs/rebuild-plan.md:456`, `:469-470`);
 the doc-comment on `Attempt.maxBudgetUsd` sets out the three options and why the
 freeze is the only one that stays correct when an operator edits a board's default
-mid-flight (`prisma/schema.prisma:498-543`).
+mid-flight (`prisma/schema.prisma:499-544`).
 
 The recorded consequence: **what collides is not shared files but shared
 invariants**, and a decomposer that splits work by area reproduces this exactly

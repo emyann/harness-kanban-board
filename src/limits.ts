@@ -170,3 +170,32 @@ export function deadlineShortfall(jobId: number, ranForMs: number, seconds: numb
     + `${duration(seconds * 1000)} — ended without another attempt, retries or not. `
     + `\`hkb job set ${jobId} --deadline <seconds>\` then \`hkb retry ${jobId}\` to give it more.`;
 }
+
+/**
+ * How much longer a Job whose last attempt failed must wait before it may be claimed again.
+ *
+ * Kubernetes recreates a failed Job's Pod after a back-off — 10s, doubling to a six-minute cap — and
+ * `backoffLimit` counts the retries. hkb had only the count. The spacing was the daemon's interval,
+ * by accident: a pass read its pending Jobs once and then sat on its runs, so a Job that failed
+ * mid-pass could not be claimed before the next tick. When a pass stopped sitting on its runs and a
+ * run's end began to wake the loop, the accident went with it — a Job that fails in a second was
+ * retried on the next wake, by anybody's run, and spent its retries in seconds. So the spacing is
+ * written down here, as a fact about the Job rather than about who woke whom: constant rather than
+ * doubling, because the accident being kept was constant.
+ *
+ * Only an attempt that **spent a retry** waits — the two exemptions `charged` makes in
+ * `src/controller.ts`. A `stopped` attempt was the operator turning the daemon off, and waiting after
+ * it would delay every resume by an interval; a `completed` one belongs to a gated Job its approval
+ * re-queued, which a person is waiting on.
+ *
+ * Pure: the caller reads the last ended attempt and the clock. Zero means claimable now.
+ */
+export function retryBackoffMs(
+  last: { endedAt: Date; outcome: string | null } | null,
+  now: Date,
+  afterMs: number,
+): number {
+  if (!last || afterMs <= 0) return 0;
+  if (last.outcome === 'stopped' || last.outcome === 'completed') return 0;
+  return Math.max(0, last.endedAt.getTime() + afterMs - now.getTime());
+}

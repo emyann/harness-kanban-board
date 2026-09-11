@@ -7,18 +7,18 @@ audience: [dev, ops]
 read_when: "touching gateClaim, adding a limit, changing what a claim is judged against, or explaining why a board claimed nothing"
 covers:
   - path: src/limits.ts
-    sha: 18849fb4775cabb4c5d65784f506d61d90c66f1f
+    sha: 9c7bdc6c3fa037e11cd8ae52d1803d685d1af918
   - path: src/controller.ts
-    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
+    sha: a50ac9ee35132bd67b57bb593e9771bd851fe741
   - path: prisma/schema.prisma
-    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
+    sha: 364793f9a1174875c3bf644257b6d0cbdf94d25e
   - path: src/spec.ts
     sha: a83486dc8471b6e0358af03bafba75fa363c4032
   - path: src/hkb.ts
     sha: eb759e566ef71b11caa34cc0945a6e2ae30958cf
   - path: src/daemon.ts
-    sha: 22f946c6625de1f566d4301e098873050b23ac12
-generated_at_commit: 2b8902f
+    sha: d906e507fc36a20dc06070046faa301a23764576
+generated_at_commit: ebf564a
 last_refreshed: 2026-09-10
 related: [architecture/the-board, architecture/the-loop, architecture/job-kind, concepts/leases-and-liveness]
 ---
@@ -51,6 +51,13 @@ when it has nothing in flight to wait for (`src/controller.ts`). A refusal a pas
 itself is not news to report; it is a reason to wait for a slot (`src/controller.ts`). A pass
 that reported *"2 of 2 slots in use"* while both slots were its own would end early and blame the
 operator (`src/controller.ts`).
+
+Under the daemon the same wall is met differently, because the runs are not the pass's to wait for:
+it hands each one to a supervisor and returns (*architecture/the-loop*). "Its own runs" is then the
+supervisor's count for that board (`Supervisor.running`), and a board full of them makes the pass stop
+claiming **without a refusal** — no `refused` row, no line — leaving the asking to the pass a run's
+end wakes. Written as a refusal it would be a row per tick for as long as a run lasts, about a slot
+this very process is using (`src/controller.ts`, `test/daemon.test.ts`).
 
 That branch cannot be written against a message. It needs the name.
 

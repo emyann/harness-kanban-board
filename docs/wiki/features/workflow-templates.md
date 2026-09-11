@@ -15,7 +15,7 @@ covers:
   - path: src/filing.ts
     sha: a3c67c49d8fc5b46e0caac0894bc52d10ca22a17
   - path: prisma/schema.prisma
-    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
+    sha: 364793f9a1174875c3bf644257b6d0cbdf94d25e
 related:
   [
     decisions/adr-015-machinery-and-consumer,
@@ -26,7 +26,7 @@ related:
     concepts/ceilings,
     features/proposals,
   ]
-generated_at_commit: 2b8902f
+generated_at_commit: ebf564a
 last_refreshed: 2026-09-10
 ---
 
@@ -257,7 +257,7 @@ that was wrong three ways at once:
    steps now live.
 
 So the *body* is read by the controller when the attempt is claimed and appended after the brief,
-the way the guide and the check line are (`withStandingSteps`, `src/controller.ts:1197-1202`). Nothing is stored on the Job. The
+the way the guide and the check line are (`withStandingSteps`, `src/controller.ts:1287-1292`). Nothing is stored on the Job. The
 *frontmatter* still expands at file time, because those are columns and a column filled later is a
 column `hkb show` could not print.
 
@@ -282,7 +282,7 @@ Three refusals and two exclusions, each with a reason that is not tidiness:
 - **A `--propose` Job gets none, and neither does a `--no-isolate` one.** A proposer's whole output is
   one JSON file, so a brief ending in "open a pull request" is not an instruction a worker can
   follow (`features/proposals`). A `--no-isolate` Job has no workspace for the steps to be about at
-  all — the condition is `wantSteps && workspace && !job.proposes` (`src/controller.ts:1165`).
+  all — the condition is `wantSteps && workspace && !job.proposes` (`src/controller.ts:1255`).
 
 The record is `Board.defaultWorkflow` itself, and `hkb show` reads it there — printing
 `steps  standing steps from workflow <name>`, for the two populations above excepted. It used to be

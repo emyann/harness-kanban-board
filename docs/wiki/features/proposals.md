@@ -9,16 +9,16 @@ covers:
   - path: src/proposals.ts
     sha: fd5e1eee8b847c9b4024d1bf5f635a85907baae4
   - path: src/controller.ts
-    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
+    sha: a50ac9ee35132bd67b57bb593e9771bd851fe741
   - path: src/brief.ts
     sha: b3eddf6aebd95fdab1f38424b24851d6a4e3e5a2
   - path: prisma/schema.prisma
-    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
+    sha: 364793f9a1174875c3bf644257b6d0cbdf94d25e
   - path: src/hkb.ts
     sha: eb759e566ef71b11caa34cc0945a6e2ae30958cf
   - path: src/workspaces.ts
     sha: b709212e781376f570a613907a209648dab91526
-generated_at_commit: 2b8902f
+generated_at_commit: ebf564a
 last_refreshed: 2026-09-10
 related:
   [
@@ -54,19 +54,19 @@ ADR-017 decision 5 moved the pull request out, and **ADR-018 deleted the contrac
 together**: the core requires no commit, push or rebase, so it says none of it to anyone, and
 `withWorktree` is gone with `withSandbox` (`src/brief.ts`). A proposer's prompt is the brief, the
 standing rules, the guide, the declared outputs and `withProposal` — no git in it
-(`src/controller.ts:1197-1246`).
+(`src/controller.ts:1287-1336`).
 
 What survives the deletion is the *other* exclusion, and it still has to be made explicitly: a
 proposing Job is not given a board's **default workflow**, because that is where the commit-push-PR
 steps live now and they are exactly the contradiction the note existed to prevent
-(`src/controller.ts:1165`). It is made twice, at `hkb new` and again where the steps are composed at
+(`src/controller.ts:1255`). It is made twice, at `hkb new` and again where the steps are composed at
 claim time, because a Job can become a proposer after it is filed
 (*features/workflow-templates*).
 
 > **Its workspace is kept while it is suspended, and that changed.** The controller used to remove a
 > proposer's checkout on suspending — a gated Job's approval resumes a session *in* its tree, while a
 > proposer's approval is applied by the controller and no session ever wakes up there. The tidy block
-> is gone (`src/controller.ts:1869-1884`), and a `suspended` Job has no `finishedAt`, so
+> is gone (`src/controller.ts:1959-1974`), and a `suspended` Job has no `finishedAt`, so
 > `collectable` never takes its workspace (`src/workspaces.ts:119-128`). A proposer's checkout
 > therefore stands on disk from the moment it suspends until an hour after the Job finishes. That is
 > the honest cost of replacing four inspect-the-tree branches with one TTL; ADR-018 accepts it, and

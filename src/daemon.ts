@@ -14,6 +14,7 @@ import { holderId, holderLiveness, parseHolder, pidIsAlive } from './liveness.ts
 import { windowStart } from './limits.ts';
 import { cliEntry, PACKAGE_ROOT } from './paths.ts';
 import type { Runtime } from './runtime/index.ts';
+import type { Supervisor } from './controller.ts';
 
 /**
  * The loop — and only now.
@@ -35,6 +36,11 @@ import type { Runtime } from './runtime/index.ts';
  * The change-driven half — "a Job was just filed, run it" — is always one `hkb run` away, so it does
  * not need a loop and does not set the cadence. All three of the above have minute-scale tolerances,
  * so 45 seconds is generous and the cost of a tick is one indexed query against a local file.
+ *
+ * One change does reach the loop directly: a run it started, ending. The daemon holds its runs rather
+ * than letting a pass sit on them (`supervisor` in `loop`), so it hears an end as it happens and takes
+ * the next pass then instead of at the interval. That is a watch event in the Kubernetes sense — a
+ * hint that skips a wait — and nothing depends on having seen it: miss one and the tick still comes.
  *
  * **One daemon serves every board**, the way one controller-manager serves every namespace. Which
  * boards it may serve is decided per board by a `Controller` row — leader election, not exclusion.
@@ -312,13 +318,14 @@ export async function loop(deps: LoopDeps): Promise<number> {
   const sleep = deps.sleep ?? nap;
   const holder = holderId('daemon');
   const version = buildVersion();
-  const sweepEvery = Math.max(1, Math.round((deps.sweepEveryMs ?? SWEEP_EVERY_MS) / intervalMs));
+  const sweepEveryMs = deps.sweepEveryMs ?? SWEEP_EVERY_MS;
 
   log(`up${deps.board ? ` on ${deps.board}` : ' on every board'} — every ${Math.round(intervalMs / 1000)}s, `
     + `pid ${process.pid}, build ${version}`);
 
   let ticks = 0;
   let last = now();
+  let lastSweep = -Infinity;
   /** Boards this daemon has taken leadership of, so `daemon_up` is written once, not every tick. */
   const led = new Set<number>();
   // Only announce a refusal, or a board we cannot lead, when it changes. Repeating either every
@@ -328,6 +335,33 @@ export async function loop(deps: LoopDeps): Promise<number> {
     if (said.get(key) === msg) return;
     said.set(key, msg);
     if (msg) log(msg);
+  };
+
+  // ---- the kubelet half: every run this daemon has started and not yet seen end.
+  //
+  // A pass claims, hands the run here and returns ("Who waits for the runs", `src/controller.ts`), so
+  // the next tick comes on time for every board rather than once the longest run is over. What that
+  // moves onto this loop is the promise a pass used to keep by not returning: nothing below the
+  // `while` may write `daemon_down` or release a board while one of these is still recording.
+  const runs = new Map<Promise<void>, number>();
+  /** Aborted to cut the current wait short; replaced after every wait, so no wake carries over. */
+  let nudge = new AbortController();
+  const supervisor: Supervisor = {
+    adopt({ jobId, boardId, done }) {
+      const settled: Promise<void> = done
+        // The record failing, which a pass used to raise as a failed tick. Said the same way, and
+        // guarded, because a throw out of here would be an unhandled rejection in a daemon.
+        .catch((e: unknown) => {
+          try { log(`tick failed: #${jobId} ${(e as Error)?.message ?? String(e)}`); } catch { /* the row is the record */ }
+        })
+        // Any end frees a slot, and whatever waits on this run's outcome can act on it now, so the
+        // next pass is worth having at once. What keeps that pass from retrying a failure it has only
+        // just seen is the Job's own back-off (`retryBackoffMs` below), not the absence of a wake:
+        // one signal serves every run held here, so it cannot space any one of them.
+        .finally(() => { runs.delete(settled); nudge.abort(); });
+      runs.set(settled, boardId);
+    },
+    running: (boardId) => [...runs.values()].filter((id) => id === boardId).length,
   };
 
   while (!deps.signal.aborted && (deps.maxTicks === undefined || ticks < deps.maxTicks)) {
@@ -342,10 +376,12 @@ export async function loop(deps: LoopDeps): Promise<number> {
     // Reclaim is skipped for exactly that pass. It is belt and braces — `holderLiveness` already
     // refuses to take a lease off a running local process — but it is the half that also covers a
     // holder on another machine, which no pid check here can see.
-    // The first tick sweeps, then one tick in every `sweepEvery`. A daemon started to clean up
-    // should not have to wait ten minutes to do it, and a daemon left running should not ask the
-    // remote every 45 seconds.
-    const sweeping = deps.sweep !== false && (ticks - 1) % sweepEvery === 0;
+    // The first tick sweeps, then the first tick after every `sweepEveryMs`. A daemon started to
+    // clean up should not have to wait ten minutes to do it, and a daemon left running should not
+    // ask git every 45 seconds. By the clock rather than by counting ticks, because a run that ends
+    // wakes the loop early and ticks no longer arrive an interval apart.
+    const sweeping = deps.sweep !== false && now() - lastSweep >= sweepEveryMs;
+    if (sweeping) lastSweep = now();
 
     const slept = ticks > 1 && drift > intervalMs * SLEEP_FACTOR + SLEEP_SLACK_MS;
     if (slept) log(`woke — ${Math.round(drift / 1000)}s of wall clock passed since the last tick, skipping reclaim`);
@@ -390,6 +426,11 @@ export async function loop(deps: LoopDeps): Promise<number> {
           reclaim: !slept,
           signal: deps.signal,
           onEvent: (l) => log(boards.length > 1 ? `[${b.slug}] ${l}` : l),
+          // The pass claims and returns; this loop does the waiting, for every board's runs at once.
+          supervisor,
+          // A failed Job waits one interval for its retry — the spacing it had when a pass sat on its
+          // runs, now asked for rather than falling out of the loop's shape.
+          retryBackoffMs: intervalMs,
         });
         announce(`refused:${b.slug}`, report.refused ? `refused  ${b.slug}: ${report.refused}` : null);
         // A run that cannot go on, said ONCE. The stalled list is recomputed every pass — a step
@@ -406,10 +447,10 @@ export async function loop(deps: LoopDeps): Promise<number> {
         // ---- collect the workspaces of Jobs that have finished: `ttlSecondsAfterFinished`, and
         // nothing else (`src/workspaces.ts`).
         //
-        // After reconcile, never before, for the reason it always was: a pass that just claimed a
-        // Job has a live session standing in that workspace. The old race was against a `git
-        // worktree lock` this process took; now the runtime takes it, which is if anything a
-        // stronger guarantee — but the ordering is free, so it stays.
+        // After reconcile, and no longer because of it: a pass used to wait for its runs, so none of
+        // them was live by the time this ran, and now they outlive the pass. What keeps a live
+        // workspace safe is the row — a `running` Job has no `finishedAt`, so it is never a
+        // candidate — and behind that the `git worktree lock` the runtime holds for the run.
         //
         // What this no longer does is *inspect*. The old sweep asked each checkout whether it held
         // uncommitted or unpushed work and kept it if so. That question needed `pushedRef`,
@@ -488,8 +529,20 @@ export async function loop(deps: LoopDeps): Promise<number> {
 
     last = now();
     if (!deps.signal.aborted && (deps.maxTicks === undefined || ticks < deps.maxTicks)) {
-      await sleep(intervalMs, deps.signal);
+      // A run that ended during the tick has already aborted `nudge`, and a wait on an aborted signal
+      // returns at once — so an end that lands mid-tick is a wait skipped rather than a wake lost.
+      await sleep(intervalMs, AbortSignal.any([deps.signal, nudge.signal]));
+      nudge = new AbortController();
     }
+  }
+
+  // The runs, to their record, before anything says this daemon is gone. On a stop they are all
+  // aborting on the same signal and each records `stopped`; at `maxTicks` they finish. The
+  // `daemon_down` row and the released boards are how every other process learns this one has
+  // stopped acting, and a run still writing its record has not.
+  if (runs.size) {
+    log(`waiting for ${runs.size} run${runs.size === 1 ? '' : 's'} to record`);
+    await Promise.all([...runs.keys()]);
   }
 
   if (led.size) {

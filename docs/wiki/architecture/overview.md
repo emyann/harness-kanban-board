@@ -11,9 +11,9 @@ covers:
   - path: src/hkb.ts
     sha: eb759e566ef71b11caa34cc0945a6e2ae30958cf
   - path: src/controller.ts
-    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
+    sha: a50ac9ee35132bd67b57bb593e9771bd851fe741
   - path: src/daemon.ts
-    sha: 22f946c6625de1f566d4301e098873050b23ac12
+    sha: d906e507fc36a20dc06070046faa301a23764576
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
   - path: src/db-url.ts
@@ -37,7 +37,7 @@ covers:
   - path: src/brief.ts
     sha: b3eddf6aebd95fdab1f38424b24851d6a4e3e5a2
   - path: prisma/schema.prisma
-    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
+    sha: 364793f9a1174875c3bf644257b6d0cbdf94d25e
 related:
   [
     architecture/job-kind,
@@ -48,7 +48,7 @@ related:
     decisions/adr-009-retiring-the-first-system,
     decisions/adr-011-proposals-not-board-access,
   ]
-generated_at_commit: 2b8902f
+generated_at_commit: ebf564a
 last_refreshed: 2026-09-10
 ---
 
@@ -116,8 +116,10 @@ The Kubernetes mapping is deliberate and it is load-bearing rather than decorati
 | `Controller` row | leader election |
 | `hkb up` | a resync loop, not a watch |
 
-The one place hkb departs from it: it **fuses the controller-manager and the kubelet**. There is no node
-to schedule onto — the process that decides a Job should run is the process that runs it, inline.
+The one place hkb departs from it: it runs **the controller-manager and the kubelet in one process**. There
+is no node to schedule onto — the process that decides a Job should run is the process that runs it. They are
+no longer one *loop*: under the daemon a pass hands each run it claims to a supervisor and returns, so a long
+run holds up nothing else (`src/controller.ts`, *architecture/the-loop*).
 
 ## What a pass does
 

@@ -28,7 +28,9 @@ import {
 import {
   PROPOSAL_ARTIFACT, proposalGate, readProposal, storedProposal, type Proposal,
 } from './proposals.ts';
-import { activeMs, deadlineExceeded, deadlineShortfall, gateClaim, windowStart, type ClaimGate } from './limits.ts';
+import {
+  activeMs, deadlineExceeded, deadlineShortfall, gateClaim, retryBackoffMs, windowStart, type ClaimGate,
+} from './limits.ts';
 import { resolveSpec } from './spec.ts';
 import { holderId, holderLiveness } from './liveness.ts';
 import type { Runtime, RuntimeEvent, WorkerOutcome } from './runtime/index.ts';
@@ -80,11 +82,30 @@ import type { Runtime, RuntimeEvent, WorkerOutcome } from './runtime/index.ts';
  *   - **Every operator-facing line is tagged `#<job>`.** Indentation grouped lines under a claim,
  *     which only reads as grouping while one Job is speaking. `src/daemon.ts` already does the
  *     same thing per board, so a busy log reads `[board] #12 …`.
- *   - **Shutdown stops all of them.** One `AbortSignal` reaches every in-flight run, and the pass
- *     does not return until each has recorded its own attempt.
+ *   - **Shutdown stops all of them.** One `AbortSignal` reaches every in-flight run, and whoever is
+ *     waiting for them — the pass, or the daemon's supervisor — does not return until each has
+ *     recorded its own attempt.
  *
  * The CAS is still the thing that makes it safe. The gate refuses contention it can see; the
  * lease insert refuses the contention it cannot.
+ *
+ * ## Who waits for the runs
+ *
+ * Not necessarily the pass that started them, and under the daemon it is not. Kubernetes splits the
+ * two across loops — the Job controller creates a Pod and moves on, the kubelet runs its containers —
+ * and hkb had fused them: a pass claimed, then sat on every run it had started. A tick was therefore
+ * as long as the longest run in it, and since the daemon reconciles its boards one after another, a
+ * thirty-minute session on one board left every other board unclaimed, unreclaimed and unswept for
+ * thirty minutes — and a run that ended early was not heard of until the slowest one beside it had.
+ *
+ * `ControllerDeps.supervisor` is the split, and it is the caller's choice rather than a mode. The
+ * daemon hands its runs to one and ticks on (`src/daemon.ts`). `hkb run` passes none and the pass
+ * waits, because a foreground command that returned mid-run would be a launcher. Either way the claim
+ * — gate, lease, Attempt, `claimed` event — is made here and serially; only the waiting moves.
+ *
+ * Sitting on its runs had also spaced retries, by accident: a Job that failed mid-pass could not be
+ * claimed again before the next tick. That accident is now a decision, `ControllerDeps.retryBackoffMs`
+ * (`src/limits.ts`), because once runs outlive the pass nothing about the loop's shape spaces them.
  */
 
 export type ControllerDeps = {
@@ -125,8 +146,46 @@ export type ControllerDeps = {
    * left to finish: `hkb down` that took thirty minutes to return would not be a stop.
    */
   signal?: AbortSignal;
+  /**
+   * Who waits for the runs this pass starts, when it should not be the pass. Absent, the pass awaits
+   * every one before returning — see "Who waits for the runs" above.
+   */
+  supervisor?: Supervisor;
+  /**
+   * How long a Job whose last attempt spent a retry waits before it may be claimed again, in
+   * milliseconds (`retryBackoffMs`, `src/limits.ts`). The daemon passes its interval — the spacing a
+   * retry has always had there — and `hkb run` passes none, because an operator in the foreground
+   * asked for the Job now.
+   */
+  retryBackoffMs?: number;
 };
 
+/**
+ * Takes the runs a pass starts, and waits for them in its place.
+ *
+ * The kubelet's half of the line, held by something that outlives a pass. It never claims and never
+ * records: the claim is made before a run is handed over and the record is written by the run itself,
+ * so all it owns is *knowing that a run has not ended* — which is what the pass asks it back
+ * (`running`), to tell a board full of its own work from a board somebody else has filled.
+ */
+export type Supervisor = {
+  /**
+   * A run that has been claimed and started. `done` settles when the run has written its own record,
+   * and rejects only when writing that record failed — which a pass would have raised.
+   */
+  adopt(run: { jobId: number; boardId: number; done: Promise<void> }): void;
+  /** How many adopted runs on this board have not ended. This process's own, and only those. */
+  running(boardId: number): number;
+};
+
+/**
+ * What one pass did.
+ *
+ * Under a `supervisor` the pass returns while its runs are still going, and they fill in the outcome
+ * lists — `succeeded` through `suspended` — as they end, on an object its caller has already read.
+ * A supervised run's end is read off the Event stream and the `#<job>` lines instead; the daemon
+ * reads `refused` off a report, and nothing the runs write.
+ */
 export type ReconcileReport = {
   /** Why claiming stopped, when a ceiling or the kill switch stopped it. */
   refused: string | null;
@@ -639,6 +698,19 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     orderBy: { id: 'asc' },
   });
 
+  // Each wanted Job's last ended attempt, in one read for the whole pass rather than one per Job —
+  // and only when a back-off was asked for, since nothing else here needs it.
+  const lastEnded = new Map<number, { endedAt: Date; outcome: string | null }>();
+  if (deps.retryBackoffMs && wanted.length) {
+    for (const a of await db.attempt.findMany({
+      where: { jobId: { in: wanted.map((j) => j.id) }, endedAt: { not: null } },
+      select: { jobId: true, endedAt: true, outcome: true },
+    })) {
+      const seen = lastEnded.get(a.jobId);
+      if (!seen || a.endedAt! > seen.endedAt) lastEnded.set(a.jobId, { endedAt: a.endedAt!, outcome: a.outcome });
+    }
+  }
+
   /**
    * The runs this pass started and has not yet finished.
    *
@@ -660,6 +732,10 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // the pass that started it — this only refuses to open new work.
     if (deps.signal?.aborted) break;
     const say = sayFor(job.id);
+    // A retry waits out its back-off before anything is spent on it — a slot, a gate check, a read of
+    // the board. Silently: it is claimable within an interval, and a line per wake would say so again
+    // and again.
+    if (retryBackoffMs(lastEnded.get(job.id) ?? null, now(), deps.retryBackoffMs ?? 0) > 0) continue;
 
     // The whole row, deliberately, where this used to name its columns.
     //
@@ -699,6 +775,8 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // the difference between a ceiling and a stall — a pass that reported "2 of 2 slots in use"
     // while both of those slots were its own would end early and blame the operator for it.
     let gate: ClaimGate;
+    /** The board is full of this process's own runs, and a supervisor is the one holding them. */
+    let busy = false;
     for (;;) {
       const [liveLeases, spend, open] = await Promise.all([
         db.lease.count({ where: { job: { boardId } } }),
@@ -736,12 +814,19 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       gate = answer;
       if (answer.ok !== false) break;
       // A wall of our own making is not news. A stopped board is: no amount of waiting un-stops it.
-      if (answer.limit === 'stopped' || inFlight.size === 0) break;
+      const ours = deps.supervisor ? deps.supervisor.running(boardId) : inFlight.size;
+      if (answer.limit === 'stopped' || ours === 0) break;
+      // Nor, under a supervisor, is it a thing to wait for: those runs are not this pass's to await,
+      // and the loop that holds them comes back when one ends.
+      if (deps.supervisor) { busy = true; break; }
       await settleOne();
       if (deps.signal?.aborted) break;
     }
 
     if (deps.signal?.aborted) break;
+    // Quietly, where the refusal below is loud: a `refused` row here would be written every tick for
+    // as long as a run lasts, about a slot this very process is using.
+    if (busy) break;
     if (gate.ok === false) {
       // Loudly, and once: the whole pass stops, because every remaining Job faces the same wall.
       //
@@ -870,19 +955,24 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
     // ---- and now let it go. Everything past this point is the run and the record of it, and it
     // is the only part that overlaps with another Job's.
-    const done$: Promise<void> = runAndRecord({
+    const run$ = runAndRecord({
       job, spec, k, charged, token, leaseMs, cwd, workspace, say, slot,
       boardSlug: board?.slug ?? null,
       defaultWorkflow: board?.defaultWorkflow ?? null,
-    })
-      .catch((e: unknown) => { failure ??= e; })
-      .finally(() => { inFlight.delete(done$); });
-    inFlight.add(done$);
+    });
+    if (deps.supervisor) {
+      deps.supervisor.adopt({ jobId: job.id, boardId, done: run$ });
+    } else {
+      const done$: Promise<void> = run$
+        .catch((e: unknown) => { failure ??= e; })
+        .finally(() => { inFlight.delete(done$); });
+      inFlight.add(done$);
+    }
   }
 
   // Nothing returns until every run this pass started has recorded its own attempt — including on
   // shutdown, where they are all aborting at once rather than one being interrupted and the rest
-  // never starting.
+  // never starting. Runs a supervisor adopted are not in here: waiting for those is its job.
   while (inFlight.size) await settleOne();
   if (failure) throw failure;
 

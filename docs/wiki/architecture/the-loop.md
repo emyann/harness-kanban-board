@@ -7,11 +7,11 @@ audience: [dev]
 read_when: "changing the daemon, the reclaim rule, or anything that decides whether a lease may be taken"
 covers:
   - path: src/daemon.ts
-    sha: 22f946c6625de1f566d4301e098873050b23ac12
+    sha: d906e507fc36a20dc06070046faa301a23764576
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
-    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
+    sha: a50ac9ee35132bd67b57bb593e9771bd851fe741
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/schema.ts
@@ -20,7 +20,9 @@ covers:
     sha: 730324bea5aa0fe083bc5fb7244c06ce20a54c2c
   - path: src/workspaces.ts
     sha: b709212e781376f570a613907a209648dab91526
-generated_at_commit: 2b8902f
+  - path: src/limits.ts
+    sha: 9c7bdc6c3fa037e11cd8ae52d1803d685d1af918
+generated_at_commit: ebf564a
 last_refreshed: 2026-09-10
 related: [architecture/job-kind, architecture/runtime-layer, decisions/adr-007-workload-scheduler, decisions/adr-016-the-pod-spec-is-the-map, concepts/leases-and-liveness, features/check]
 ---
@@ -28,12 +30,13 @@ related: [architecture/job-kind, architecture/runtime-layer, decisions/adr-007-w
 # The loop
 
 `hkb run` reconciles once, in the foreground. `hkb up` runs the same pass on a timer
-in a detached process (`src/daemon.ts`). Nothing about the pass changes — the
-daemon is a caller, not a second control plane.
+in a detached process (`src/daemon.ts`). The daemon is a caller, not a second control
+plane — the one thing it gives the pass that `hkb run` does not is somewhere to hand
+the runs it starts (below).
 
 Both wire the same `AbortController` to `deps.signal`, and both handlers only *ask*: exiting is
-what would leave a lease held, since the release is written on the way out of `reconcile`
-(`src/hkb.ts`). `hkb run` wired none at all until it was found that `Ctrl-C` there killed the CLI
+what would leave a lease held, since the release is written on the way out of each run
+(`src/hkb.ts`, `src/controller.ts`). `hkb run` wired none at all until it was found that `Ctrl-C` there killed the CLI
 and left the pass's detached completion check running in the workspace with nothing left to bound
 it — `deps.signal` is the only route a stop has into `runCheck` (`features/check`).
 
@@ -51,8 +54,8 @@ Kubernetes makes, and the reasoning transfers directly:
   to re-read, not data. Miss every hint and it still converges, slowly. Miss an
   event in a genuinely edge-triggered system and it is wrong permanently.
 
-hkb is that loop with no watch at all: a controller whose resync period is 45
-seconds. The gap is **latency, not correctness**, which is why it could be
+hkb is that loop with almost no watch: a controller whose resync period is 45
+seconds, and whose one hint is a run it holds ending (below). The gap is **latency, not correctness**, which is why it could be
 deferred through three phases. It also means a guard that only fires on a
 transition is a guard that is wrong after a restart — the rule is in `CLAUDE.md`.
 
@@ -60,24 +63,62 @@ transition is a guard that is wrong after a restart — the rule is in `CLAUDE.m
 > commits and carries no payload — structurally a `resourceVersion`. It would slot
 > in as a hint that skips a wait. Not built; see `docs/rebuild-plan.md` Phase 4.
 
-## Where the Kubernetes analogy stops
+## Where the Kubernetes analogy stops — and where it was pulled back
 
 A controller there **decides but does not execute** — kube-controller-manager
-writes a Pod spec, kubelet runs the container. `reconcile()` does both: it claims
-the lease and then *awaits the worker inside the same pass*. hkb has fused
-controller-manager and kubelet into one process.
+writes a Pod spec, kubelet runs the container. hkb runs both in **one process**:
+`reconcile()` claims the lease and starts the worker itself. What it no longer does,
+under the daemon, is *wait* for the worker inside the pass.
 
-Three consequences follow from that fusion, and they are the reason for most of
-what is unusual in this file:
+It used to. A pass sat on every run it had started, and the daemon reconciles its
+boards one after another (`src/daemon.ts`), so a thirty-minute session on one board
+left every other board unclaimed, unreclaimed and unswept for thirty minutes — and a
+Step that finished could not file its successor until each sibling run had finished
+too. The kubelet half was costing the controller half its loop.
 
-1. A "tick" can last thirty minutes, where a Kubernetes sync is sub-millisecond.
+The split is `ControllerDeps.supervisor` (`src/controller.ts`, "Who waits for the
+runs"). The daemon passes one; the pass hands each run it claims to it and returns;
+the daemon holds the runs across ticks. `hkb run` passes none and the pass waits,
+because a foreground command that returned mid-run would be a launcher. The claim
+itself — gate, lease, Attempt — is still made by the pass, serially.
+
+What remains of the fusion, and still shapes this file:
+
+1. Under `hkb run` a pass can last thirty minutes, where a Kubernetes sync is
+   sub-millisecond. Under `hkb up` a tick is short again.
 2. The lease has to outlive the run it covers, not the pass.
 3. `hkb down` has to reach in and interrupt a worker. A controller would just exit.
+   The daemon then waits for every run it holds to record its `stopped` attempt
+   before it writes `daemon_down` and releases its boards — the promise a pass used
+   to keep by not returning (`src/daemon.ts`).
+
+### A run's end is the one event the loop hears
+
+The daemon holds its runs, so it learns of an end as it happens and takes the next
+pass then rather than at the interval — a watch event in exactly the sense above: a
+hint that skips a wait, never a thing correctness depends on. Every end wakes it,
+whatever the run's outcome.
+
+That took away something the old shape gave by accident: a Job that failed mid-pass
+could not be claimed again before the next tick, because the pass had read its
+pending Jobs once and was sitting on its runs. With runs outliving the pass, a Job
+that fails in a second was retried on the very next wake — anybody's wake, since one
+signal serves every run the daemon holds — and spent its retries in seconds. So the
+spacing is now a fact about the Job: a Job whose last attempt spent a retry is not
+claimable until an interval after that attempt ended (`retryBackoffMs`,
+`src/limits.ts`; the daemon passes its own interval, `src/daemon.ts`). It is
+Kubernetes' Pod back-off in its constant form — Kubernetes doubles from 10s to a
+six-minute cap — and `hkb run` asks for none, because the operator in the foreground
+wants the Job now.
+
+Ticks therefore no longer arrive one interval apart, which is why the workspace sweep
+is scheduled by the clock (`sweepEveryMs`) rather than by counting ticks.
 
 ## What follows the run, in order
 
-Because the pass is also the kubelet, the end of a run is a sequence rather than a return value,
-and the order of it is load-bearing (`src/controller.ts`):
+Because the controller also does the kubelet's work — the run a pass starts carries its own
+record, whoever waits for it — the end of a run is a sequence rather than a return value, and the
+order of it is load-bearing (`src/controller.ts`):
 
 1. the **workspace is verified** — a run that completed and came back with no
    `workspacePath`, or with one that resolves to the repository itself, did not get the isolation
@@ -155,7 +196,7 @@ A worker installs the target repository's dependency tree to run its tests, so a
 checkout costs about as much as the repository does — Phase 5 left **6.1 GB** for
 ten Jobs. The end of a run still cannot be where that is reclaimed: the next attempt
 resumes *into* that tree, and an operator wants to look at what a run left. So it is
-the loop's business — the first tick sweeps, then one tick in every `SWEEP_EVERY_MS`
+the loop's business — the first tick sweeps, then the first tick after every `SWEEP_EVERY_MS` — by the clock, since ticks no longer arrive evenly
 (ten minutes), after `reconcile` rather than before it. A daemon started to clean up
 should not wait ten minutes to do it, and one left running should not ask every 45
 seconds (`src/daemon.ts`).

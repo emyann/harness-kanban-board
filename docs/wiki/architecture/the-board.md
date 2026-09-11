@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "adding a column, deciding whether something belongs on the Job or the Attempt, writing a migration, or explaining why a board refuses to open"
 covers:
   - path: prisma/schema.prisma
-    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
+    sha: 364793f9a1174875c3bf644257b6d0cbdf94d25e
   - path: src/schema.ts
     sha: ee1920b789eb96be121c8bba20cc92e452ddf818
   - path: src/db.ts
@@ -16,7 +16,7 @@ covers:
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/spec.ts
     sha: a83486dc8471b6e0358af03bafba75fa363c4032
-generated_at_commit: 26055f1
+generated_at_commit: ebf564a
 last_refreshed: 2026-09-10
 related:
   [

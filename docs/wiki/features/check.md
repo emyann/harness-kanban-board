@@ -11,7 +11,7 @@ covers:
   - path: src/check.ts
     sha: 730324bea5aa0fe083bc5fb7244c06ce20a54c2c
   - path: src/controller.ts
-    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
+    sha: a50ac9ee35132bd67b57bb593e9771bd851fe741
   - path: src/spec.ts
     sha: a83486dc8471b6e0358af03bafba75fa363c4032
   - path: src/brief.ts
@@ -21,8 +21,8 @@ covers:
   - path: src/workspaces.ts
     sha: b709212e781376f570a613907a209648dab91526
   - path: prisma/schema.prisma
-    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
-generated_at_commit: 2b8902f
+    sha: 364793f9a1174875c3bf644257b6d0cbdf94d25e
+generated_at_commit: ebf564a
 last_refreshed: 2026-09-10
 related:
   [
@@ -91,13 +91,13 @@ opinion about a shell line it does not parse. What *is* refused, by name and poi
 
 In the attempt's **workspace** — `outcome.workspacePath`, reported by the runtime rather than
 computed here — or in `Board.repoPath` for a `--no-isolate` Job, which is the same "where the work
-happened" either way (`ranIn`, `src/controller.ts:1305`).
+happened" either way (`ranIn`, `src/controller.ts:1395`).
 
 **On the tree as the session left it, and the claim narrowed with ADR-018.** The check used to run
 after `rebaseOntoBase` and its push, and its whole justification was that it therefore tested *what
 would actually merge*. Nothing rebases now — `src/rebase.ts`, `src/push.ts` and `src/pulls.ts` are
 deleted and none of them moved into the core — so that claim would be false and it is not made
-(`src/controller.ts:1592-1599`). What the check still is, exactly, is ADR-016 §3's reconstruction of
+(`src/controller.ts:1682-1689`). What the check still is, exactly, is ADR-016 §3's reconstruction of
 an exit code: a command the **row** named, run where the work happened.
 
 A step that wants the branch rebased before it is reviewed asks for it in the workflow file, which
@@ -237,7 +237,7 @@ Two things about *which* failure is quoted, and both were wrong first:
   ended attempt, so reading only `k - 1` meant one `stopped` (`hkb down`), `lost` (a reclaim),
   `crashed`, `timed_out` or `max_turns` attempt in between dropped the briefing silently — none of
   those writes the column, so the refusal before them is still unanswered. `lastRefusedCheck`
-  (`src/controller.ts:464-486`) walks back over `CHECKLESS_OUTCOMES` and stops at the first attempt
+  (`src/controller.ts:523-545`) walks back over `CHECKLESS_OUTCOMES` and stops at the first attempt
   that *could* have answered.
 - **and it does not walk past a NULLED SESSION.** The walk was written on the premise that nothing
   it steps over clears `lastSessionId`; that is false for a runtime-error `crashed`, which nulls it.

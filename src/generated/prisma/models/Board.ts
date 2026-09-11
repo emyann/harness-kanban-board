@@ -1551,8 +1551,9 @@ export type $BoardPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs 
      */
     dailyBudgetUsd: number | null
     /**
-     * How many Jobs this board runs at once. Really at once: one reconcile pass starts up to this
-     * many and waits for them together (`src/controller.ts`). It is a ceiling on *leases*, so it
+     * How many Jobs this board runs at once. Really at once: a reconcile pass starts up to this many
+     * side by side, and under the daemon the next pass fills a slot as soon as one of them frees it
+     * (`src/controller.ts`, "Who waits for the runs"). It is a ceiling on *leases*, so it
      * also binds across reconcilers — but it is not only that, and it was for one release, which is
      * why this comment exists. 0 drains the board without stopping it.
      */

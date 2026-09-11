@@ -305,10 +305,20 @@ meet one in the git history, that is what it was.
   Composed **when the attempt is claimed**, never stored on the Job: a brief that carried them would
   lose them to the next `hkb queue <id> "…"`. `hkb show` names the workflow from the board column
   (*features/workflow-templates*).
-- **Sweep** — reclaiming worktrees on the daemon's tick rather than at the end of a run, because
-  "safe to delete" is a state a worktree enters *later*, when its pull request lands
-  (`sweepWorktrees`, `src/worktree.ts`). It is what bounds disk by `maxConcurrent × repo size`
-  instead of by `jobs-ever-run × repo size`.
+- **Retry back-off** — how long a Job whose last attempt spent a retry waits before it may be claimed
+  again: one daemon interval, measured from that attempt's `endedAt` (`retryBackoffMs`,
+  `src/limits.ts`; `ControllerDeps.retryBackoffMs`). Kubernetes' Pod back-off, in constant form. A
+  `stopped` or `completed` attempt spent no retry and holds nothing back; `hkb run` asks for none
+  (*architecture/the-loop*).
+- **Supervisor** — what holds a run once the pass that claimed it has returned: the kubelet's half of
+  the loop, split off from the Job controller's (`Supervisor`, `ControllerDeps.supervisor`,
+  `src/controller.ts`). The daemon passes one and ticks on, so one long run holds up no other board;
+  `hkb run` passes none and the pass waits. It never claims and never records — it only knows which
+  runs have not ended (*architecture/the-loop*).
+- **Sweep** — collecting a finished Job's workspace on the daemon's tick once its TTL has elapsed —
+  `ttlSecondsAfterFinished`, and nothing else (`collectable`, `src/workspaces.ts`) — scheduled by the
+  clock every `SWEEP_EVERY_MS` (`src/daemon.ts`). A Job that is `running`, `pending` or `suspended`
+  has no `finishedAt`, so its workspace is never a candidate.
 - **Worker** — the seat that codes: one agent session holding one attempt on one Job, launched by
   the controller into a worktree of its own with the **sandbox contract** in `src/brief.ts`. It never
   merges and never touches the operator's checkout.

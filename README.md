@@ -618,8 +618,9 @@ If you know Kubernetes, the shape is deliberate:
 
 The controller is **level-triggered**: it reads observed state, compares it to desired state and takes one
 step. It is safe to run repeatedly, to interrupt, and to run while another host runs it. Nothing depends on
-having seen an event. hkb fuses the controller-manager and the kubelet — it executes the work inline rather
-than scheduling it onto a node.
+having seen an event. hkb runs the controller-manager and the kubelet in one process — it executes the work
+itself rather than scheduling it onto a node — but under `hkb up` a pass does not wait for the runs it starts:
+the daemon holds them, so one long session never holds up another board.
 
 ### Local state
 

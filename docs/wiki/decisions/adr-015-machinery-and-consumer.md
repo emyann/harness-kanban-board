@@ -13,10 +13,10 @@ covers:
   - path: src/hkb.ts
     sha: eb759e566ef71b11caa34cc0945a6e2ae30958cf
   - path: src/controller.ts
-    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
+    sha: a50ac9ee35132bd67b57bb593e9771bd851fe741
   - path: prisma/schema.prisma
-    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
-generated_at_commit: 2b8902f
+    sha: 364793f9a1174875c3bf644257b6d0cbdf94d25e
+generated_at_commit: ebf564a
 last_refreshed: 2026-09-10
 related:
   [

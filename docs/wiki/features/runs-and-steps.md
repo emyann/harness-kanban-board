@@ -11,11 +11,11 @@ covers:
   - path: src/pass.ts
     sha: a179f059c5bf4e5703b40a0f2a7704fd2c226ef5
   - path: prisma/schema.prisma
-    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
+    sha: 364793f9a1174875c3bf644257b6d0cbdf94d25e
   - path: src/filing.ts
     sha: a3c67c49d8fc5b46e0caac0894bc52d10ca22a17
 related: [decisions/adr-018-the-boundary, features/workflow-templates, features/proposals, features/labels, architecture/job-kind]
-generated_at_commit: 2b8902f
+generated_at_commit: ebf564a
 last_refreshed: 2026-09-10
 ---
 

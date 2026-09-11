@@ -577,6 +577,145 @@ test('a board created after the daemon started is picked up without a restart', 
     'a controller re-reads the world; only a launcher needs restarting');
 });
 
+// ---------------------------------------------------------------- the kubelet half
+
+/**
+ * A pass claims and hands the run on; the daemon does the waiting (`Supervisor`, `src/controller.ts`).
+ * Until that split a pass sat on every run it started, so one long session held the whole loop:
+ * every other board unreconciled, and the next Job unclaimed, for as long as it lasted.
+ *
+ * Written as refusals, like the rest of this file: a board that is NOT held up, a refusal that is
+ * NOT written, a retry that does NOT come early, a shutdown that does NOT return before the record.
+ */
+
+/** Holds one Job's run until `release()`; runs everything else at once, as the fake does. */
+function holding(heldId: number) {
+  const base = fakeRuntime();
+  let open!: () => void;
+  const released = new Promise<void>((r) => { open = r; });
+  // A backstop, so that the code this replaced — which awaited the held run inside the pass, where
+  // nothing could release it — fails these tests in three seconds rather than hanging them.
+  const backstop = setTimeout(() => open(), 3_000);
+  const runtime = {
+    name: 'fake',
+    async run(spec, onEvent) {
+      if (spec.taskId === heldId) await released;
+      return base.run(spec, onEvent);
+    },
+  } as Rt;
+  return { runtime, release: () => { clearTimeout(backstop); open(); } };
+}
+
+const tick = () => new Promise((r) => setTimeout(r, 10));
+const phaseOf = async (id: number) => (await db.job.findUniqueOrThrow({ where: { id } })).phase;
+
+test('a long run on one board does not hold up another board', async () => {
+  // Named so the held board sorts first: the daemon walks its boards in slug order, and the stall
+  // this pins was the first board's pass holding the loop before the second board was reached.
+  const slow = await db.board.create({ data: { slug: `aa-held-${++n}` } });
+  const quick = await db.board.create({ data: { slug: `zz-quick-${n}` } });
+  const held = await mkJob(slow.id);
+  const other = await mkJob(quick.id);
+  const { runtime, release } = holding(held.id);
+  const stopper = new AbortController();
+  await daemon.loop({
+    runtime, cwd: REPO, intervalMs: 5, signal: stopper.signal, maxTicks: 200, log: () => {},
+    sleep: async () => {
+      await tick();
+      if (await phaseOf(other.id) === 'succeeded') release();
+      if (await phaseOf(held.id) === 'succeeded') stopper.abort();
+    },
+  });
+  const [h, o] = await Promise.all([held, other].map((j) =>
+    db.attempt.findFirstOrThrow({ where: { jobId: j.id } })));
+  assert.ok(o.endedAt! < h.endedAt!,
+    'the other board\'s Job finished while the held one was still running — not after it');
+});
+
+test('a board full of its own runs is busy, not refused — nothing is written per tick', async () => {
+  const board = await freshBoard();
+  const first = await mkJob(board.id);
+  const second = await mkJob(board.id);
+  const { runtime, release } = holding(first.id);
+  const stopper = new AbortController();
+  const lines: string[] = [];
+  let waits = 0;
+  await daemon.loop({
+    runtime, cwd: REPO, board: board.slug, intervalMs: 5, signal: stopper.signal, maxTicks: 200,
+    log: (l) => lines.push(l),
+    // Several ticks with the one slot taken by this daemon's own run, then let it go.
+    sleep: async () => {
+      await tick();
+      if (++waits === 5) release();
+      if (await phaseOf(second.id) === 'succeeded') stopper.abort();
+    },
+  });
+  assert.equal(await db.event.count({ where: { boardId: board.id, kind: 'refused' } }), 0,
+    'a slot this daemon is using itself is not a refusal — as one, it would be a row per tick per run');
+  assert.ok(!lines.some((l) => l.includes('refused')), `nor a line:\n${lines.join('\n')}`);
+  assert.equal(await phaseOf(first.id), 'succeeded');
+  assert.equal(await phaseOf(second.id), 'succeeded', 'and the waiting Job got the slot when it freed');
+});
+
+test('a run that ends wakes the loop, rather than leaving the next Job to the interval', async () => {
+  const board = await freshBoard();
+  await mkJob(board.id);
+  const second = await mkJob(board.id);
+  const stopper = new AbortController();
+  // Without the wake the second Job is claimed a minute from now; this stops the loop long before.
+  const guard = setTimeout(() => stopper.abort(), 10_000);
+  await daemon.loop({
+    runtime: fakeRuntime(), cwd: REPO, board: board.slug, intervalMs: 60_000, signal: stopper.signal,
+    log: (l) => { if (l.startsWith(`#${second.id} succeeded`)) stopper.abort(); },
+  });
+  clearTimeout(guard);
+  assert.equal(await phaseOf(second.id), 'succeeded',
+    'one slot, two Jobs: the second is claimed when the first ends, not an interval later');
+});
+
+test('a Job that fails fast waits an interval for its retry, however often other runs wake the loop', async () => {
+  // The wake is one signal for every run the daemon holds. So "a failure does not wake the loop"
+  // spaced nothing the moment anything else was running: each other run's end woke it, and each
+  // of those passes retried the failure at once. The spacing has to be a fact about the Job.
+  const board = await freshBoard();
+  await db.board.update({ where: { id: board.id }, data: { maxConcurrent: 2 } });
+  const failing = await mkJob(board.id, { maxRetries: 3 });
+  const others = [await mkJob(board.id), await mkJob(board.id), await mkJob(board.id)];
+  const stopper = new AbortController();
+  const guard = setTimeout(() => stopper.abort(), 2_000);
+  await daemon.loop({
+    runtime: fakeRuntime({ failTasks: [failing.id] }), cwd: REPO, board: board.slug, intervalMs: 60_000,
+    signal: stopper.signal, log: () => {},
+  });
+  clearTimeout(guard);
+  for (const o of others) {
+    assert.equal(await phaseOf(o.id), 'succeeded', 'sanity: two slots, four Jobs — only wakes get through them all');
+  }
+  assert.equal(await phaseOf(failing.id), 'pending', 'sanity: it failed, and has retries left');
+  assert.equal(await db.attempt.count({ where: { jobId: failing.id } }), 1,
+    'retried on every other run\'s wake, a Job that fails in a second spends its retries in the next few');
+});
+
+test('a daemon stopped mid-run does not return until the run has recorded its stop', async () => {
+  const board = await freshBoard();
+  const job = await mkJob(board.id, { maxRetries: 0 });
+  const stopper = new AbortController();
+  await daemon.loop({
+    runtime: fakeRuntime({ delayMs: 30_000 }), cwd: REPO, board: board.slug, intervalMs: 5,
+    signal: stopper.signal,
+    log: (l) => { if (l.startsWith(`#${job.id} claim`)) setTimeout(() => stopper.abort(), 50); },
+  });
+  // Read the moment the loop returns. A daemon that let go of its boards with the run still
+  // recording would leave exactly this lease held, on a Job `running` with nobody behind it.
+  assert.equal(await db.lease.findUnique({ where: { jobId: job.id } }), null);
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'pending', 'a stop spends no retry, even the only one');
+  assert.equal(after.attempts[0].outcome, 'stopped');
+  const kinds = (await db.event.findMany({ where: { boardId: board.id }, orderBy: { id: 'asc' } })).map((e) => e.kind);
+  assert.ok(kinds.indexOf('stopped') !== -1 && kinds.indexOf('stopped') < kinds.indexOf('daemon_down'),
+    `the stop is on the record before the daemon says it is down:\n${kinds.join(' ')}`);
+});
+
 // ---------------------------------------------------------------- reclaiming the checkouts
 
 type Rt = Parameters<typeof reconcile>[0]['runtime'];
