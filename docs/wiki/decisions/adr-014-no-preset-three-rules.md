@@ -15,8 +15,8 @@ covers:
   - path: src/runtime/claude.ts
     sha: e3afb9de9e34d90f222e7bf9865cbad39e99044b
   - path: src/controller.ts
-    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
-generated_at_commit: 62135e9
+    sha: a50ac9ee35132bd67b57bb593e9771bd851fe741
+generated_at_commit: ebf564a
 last_refreshed: 2026-09-10
 related:
   [

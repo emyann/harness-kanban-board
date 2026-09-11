@@ -15,13 +15,13 @@ covers:
   - path: src/results.ts
     sha: a67f369f7e0806ea8fe10d6def7105ff2a65e131
   - path: src/controller.ts
-    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
+    sha: a50ac9ee35132bd67b57bb593e9771bd851fe741
   - path: src/runtime/claude.ts
     sha: e3afb9de9e34d90f222e7bf9865cbad39e99044b
   - path: src/brief.ts
     sha: b3eddf6aebd95fdab1f38424b24851d6a4e3e5a2
   - path: prisma/schema.prisma
-    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
+    sha: 364793f9a1174875c3bf644257b6d0cbdf94d25e
   - path: src/artifacts.ts
     sha: 74efd4d0fc9f6f0e5bcce4379b55f533b81e9e6d
   - path: src/inputs.ts
@@ -36,7 +36,7 @@ related:
     architecture/job-kind,
     architecture/the-loop,
   ]
-generated_at_commit: 26055f1
+generated_at_commit: ebf564a
 last_refreshed: 2026-09-10
 ---
 

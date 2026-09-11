@@ -11,7 +11,7 @@ covers:
   - path: src/artifacts.ts
     sha: 74efd4d0fc9f6f0e5bcce4379b55f533b81e9e6d
   - path: src/controller.ts
-    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
+    sha: a50ac9ee35132bd67b57bb593e9771bd851fe741
   - path: src/exports.ts
     sha: afa23e85d0df61d1d0d91587d425df2ad7a872a0
   - path: src/read.ts
@@ -23,8 +23,8 @@ covers:
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: prisma/schema.prisma
-    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
-generated_at_commit: 2b8902f
+    sha: 364793f9a1174875c3bf644257b6d0cbdf94d25e
+generated_at_commit: ebf564a
 last_refreshed: 2026-09-10
 related: [decisions/adr-008-declared-outputs, decisions/adr-011-proposals-not-board-access, decisions/adr-018-the-boundary, features/proposals, features/workflow-templates, architecture/job-kind, architecture/the-board]
 ---
@@ -41,10 +41,10 @@ related: [decisions/adr-008-declared-outputs, decisions/adr-011-proposals-not-bo
 ## The rule, and what it costs
 
 The declaration is the contract: a declared output that is not produced **fails the
-attempt** (`prisma/schema.prisma:312-317`, `src/controller.ts:1440-1504`). That single rule
+attempt** (`prisma/schema.prisma:313-318`, `src/controller.ts:1530-1594`). That single rule
 is what the three mechanisms exist to serve, and it is what makes `succeeded` mean more
 than "a session ended" — the collection block runs after `nextPhase` has already decided
-the run went fine, and can still overturn it (`src/controller.ts:1707-1720`).
+the run went fine, and can still overturn it (`src/controller.ts:1797-1810`).
 
 What it buys is twofold. The workspace becomes disposable: once the declared outputs are
 out, whatever is left in it is by definition undeclared, which is the one case where a dirty
@@ -67,9 +67,9 @@ the thing and how big it is*:
   into `Board.repoPath` before the workspace is collected (`src/exports.ts:103-191`). The
   repository keeps it, which means git keeps it, which means it will be committed.
 - **Result** — a small named value the board keeps on the attempt row as a JSON object
-  (`prisma/schema.prisma:577`). Capped per value (below).
+  (`prisma/schema.prisma:578`). Capped per value (below).
 - **Artifact** — a file kept in a directory beside the board, uncapped; only its catalogue
-  — name, kind, size — goes onto the row (`prisma/schema.prisma:608`,
+  — name, kind, size — goes onto the row (`prisma/schema.prisma:609`,
   `src/artifacts.ts:121-150`).
 
 The framing that matters, and the one the module states in its own words: **an artifact is
@@ -139,14 +139,14 @@ The three fences differ because the three names name different kinds of place:
 
 Before the run, the controller builds a path per declared name and creates both collection
 directories — always, even when nothing was declared, because a run may volunteer
-something (`src/controller.ts:1016-1036`). Those paths go into the prompt as **absolute**
+something (`src/controller.ts:1106-1126`). Those paths go into the prompt as **absolute**
 paths, and the worker is told plainly that they are outside its checkout and will not
 appear in its diff (`src/brief.ts:68-130`, `src/results.ts:82-86`,
 `src/artifacts.ts:91-95`). Nothing is parsed out of a transcript and nothing arrives by
 tool call: the worker writes files, the controller reads the directory.
 
 At the end of a run, all three are collected under the same two gates — the attempt
-otherwise succeeded, and the holder kept its lease to the end (`src/controller.ts:1440`,
+otherwise succeeded, and the holder kept its lease to the end (`src/controller.ts:1530`,
 `:1462`, `:1488`). A crashed or capped attempt has not finished the work, so half its
 outputs being absent describes the stop it already reported rather than a second finding.
 Exports resolve in two passes — plan everything, then copy — so a shortfall never leaves
@@ -154,10 +154,10 @@ half a failed run's output mixed into the repository (`src/exports.ts:114-135`).
 
 **And the two passes are split across the completion check**, which is where that same rule
 had a hole in it. Asking whether the declared paths are *there* happens early
-(`exportOutputs(..., { copy: false })`, `src/controller.ts:1447`), because a missing declared
+(`exportOutputs(..., { copy: false })`, `src/controller.ts:1537`), because a missing declared
 output is the cheaper cause and has to keep outranking a check that would spend ten minutes finding
 a second one. **Copying** them into `Board.repoPath` happens after the check
-(`src/controller.ts:1650-1656`) — it used to run about 150 lines earlier, so an attempt the check
+(`src/controller.ts:1740-1746`) — it used to run about 150 lines earlier, so an attempt the check
 went on to *refuse* had already written its files into the operator's repository, which is exactly
 what this rule forbids one step out (`features/check`). Nothing is lost by waiting: a refused check
 keeps its workspace, and the files are still in it.
@@ -183,11 +183,11 @@ file stays where the worker put it.
 
 That asymmetry propagates to lifetime. The results directory is removed unconditionally
 when the attempt ends, success or failure, because the values are durable by being on the
-row rather than by the file surviving (`src/controller.ts:1481`,
+row rather than by the file surviving (`src/controller.ts:1571`,
 `src/results.ts:152-155`). The artifacts directory is removed **only if it is empty** —
 `rmdir` refusing a non-empty directory is exactly the test that needs making — because an
 artifact's value *is* the file, so nothing else holds it (`src/artifacts.ts:177-189`,
-`src/controller.ts:1504`). Nothing removes a non-empty one at all, which is why the
+`src/controller.ts:1594`). Nothing removes a non-empty one at all, which is why the
 size is walked and recorded: it is the only warning an operator gets that a board is
 filling up (`src/artifacts.ts:152-175`), and `hkb show` prints both the sizes and the
 directory, since an artifact is the one output whose location a human has to be told
@@ -217,11 +217,11 @@ Two different things get called "produced nothing", and they are worth keeping a
 
 **A declared output that did not arrive** ends the attempt as `no_output`, not resumable,
 with the shortfall message as `lastError` and as the attempt's `reason`
-(`src/controller.ts:1720`, `:1767`). It outranks the gate: a run that did not produce
-what it promised has nothing worth approving (`src/controller.ts:1707-1722`). Only the
+(`src/controller.ts:1810`, `:1767`). It outranks the gate: a run that did not produce
+what it promised has nothing worth approving (`src/controller.ts:1797-1812`). Only the
 first cause found is reported — export shortfall, then result, then artifact — because two
 concatenated shortfalls read worse than one and mean the same thing
-(`src/controller.ts:1470`, `:1494`). The messages are written for the person who
+(`src/controller.ts:1560`, `:1494`). The messages are written for the person who
 has to decide whose mistake it was, which is why they name the value and the remedy rather
 than a code (`src/results.ts:158-169`, `src/artifacts.ts:209-215`).
 

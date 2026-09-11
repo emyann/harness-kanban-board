@@ -15,8 +15,8 @@ covers:
   - path: src/templates.ts
     sha: 169ac395a4b608e231beeb978952da3adfc8c82c
   - path: prisma/schema.prisma
-    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
-generated_at_commit: 26055f1
+    sha: 364793f9a1174875c3bf644257b6d0cbdf94d25e
+generated_at_commit: ebf564a
 last_refreshed: 2026-09-10
 related:
   [

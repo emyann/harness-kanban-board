@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "installing hkb on a machine that should keep reconciling without somebody logged in at a terminal"
 covers:
   - path: src/daemon.ts
-    sha: 22f946c6625de1f566d4301e098873050b23ac12
+    sha: d906e507fc36a20dc06070046faa301a23764576
   - path: src/workspaces.ts
     sha: b709212e781376f570a613907a209648dab91526
   - path: src/hkb.ts
@@ -16,7 +16,7 @@ covers:
     sha: e3afb9de9e34d90f222e7bf9865cbad39e99044b
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
-generated_at_commit: 2b8902f
+generated_at_commit: ebf564a
 last_refreshed: 2026-09-10
 related: [architecture/the-loop, architecture/job-kind, decisions/adr-007-workload-scheduler, decisions/adr-018-the-boundary]
 ---
@@ -24,7 +24,7 @@ related: [architecture/the-loop, architecture/job-kind, decisions/adr-007-worklo
 # Running the daemon under a supervisor
 
 `hkb up` detaches on its own: it spawns this same binary with `up --foreground`
-and returns (`src/daemon.ts:503-531`). That is enough for a laptop and nothing
+and returns (`src/daemon.ts:573-601`). That is enough for a laptop and nothing
 more — the child dies with the machine, and nothing brings it back.
 
 `hkb up --foreground` exists for the other case. It runs the loop in *this*
@@ -38,12 +38,12 @@ none of it is repeated here.
 
 **One daemon serves every board on the machine.** Leadership is taken per board
 through a `Controller` row, and a daemon re-reads the board list every tick
-(`src/daemon.ts:354-360`), so a board created next week is picked up without a
+(`src/daemon.ts:390-396`), so a board created next week is picked up without a
 restart. You want **one** unit, not one per repository.
 
 **Point each board at its checkout.** A Job runs in `Board.repoPath`; the
 daemon's own cwd is only the fallback for a board that has none
-(`src/daemon.ts:383-386`, `src/hkb.ts:1301-1303`). Run `hkb boards add <slug> --repo
+(`src/daemon.ts:419-422`, `src/hkb.ts:1301-1303`). Run `hkb boards add <slug> --repo
 <path>` once per repository and the unit needs no meaningful working directory.
 
 **Use an absolute path to `hkb`.** A user service does not inherit the PATH your
@@ -85,19 +85,21 @@ Four choices in there are load-bearing:
 - **`Type=simple`** — `--foreground` never forks or writes a pid file. The
   process systemd starts is the process that runs the loop (`src/hkb.ts:1285`, `src/hkb.ts:1301-1304`).
 - **No `ExecStop`.** SIGTERM is already the clean stop, and it is a *stop*, not a
-  kill: the handler aborts the run in flight and deliberately does not exit,
-  because the lease release is written on the way out of `reconcile`
-  (`src/hkb.ts:1290-1299`). The loop then unwinds, records `daemon_down` and
-  releases its controller rows (`src/daemon.ts:478-484`). systemd's default kill
+  kill: the handler aborts the runs in flight and deliberately does not exit,
+  because each run writes its own record and lease release on the way out
+  (`src/hkb.ts:1290-1299`). The loop then unwinds, waits for every run it holds
+  to record its `stopped` attempt — logging `waiting for N runs to record` — and
+  only then records `daemon_down` and releases its controller rows
+  (`src/daemon.ts:543-554`). systemd's default kill
   action sends exactly that signal to the main process, so anything you add here
   can only make it worse.
 - **`TimeoutStopSec` generous.** A clean stop includes interrupting a worker,
   which is not instant — `hkb down` waits 60s by default and deliberately never
   escalates to SIGKILL, because killing a daemon mid-unwind trades a slow stop
-  for a lost attempt row (`src/daemon.ts:589-597`). Give systemd at least as
+  for a lost attempt row (`src/daemon.ts:659-667`). Give systemd at least as
   long before it does the escalation `hkb down` refuses to do.
 - **`Restart=on-failure`, not `always`.** A tick that throws is caught and logged
-  and the loop carries on (`src/daemon.ts:465-470`), so an actual exit means
+  and the loop carries on (`src/daemon.ts:523-528`), so an actual exit means
   something structural. A clean SIGTERM exits 0 (`src/hkb.ts:1304`), and
   `on-failure` leaves `systemctl --user stop hkb` meaning stop.
 
@@ -163,11 +165,11 @@ reclaim for exactly that pass ([architecture/the-loop](../architecture/the-loop.
 Two different places, depending on who started the loop, and this trips people up:
 
 - **`hkb up` (detached).** The parent opens a file and hands it to the child as
-  stdout and stderr (`src/daemon.ts:507-527`): `<boardDir>/hkb.log` for a
+  stdout and stderr (`src/daemon.ts:577-592`): `<boardDir>/hkb.log` for a
   machine-wide daemon, `<boardDir>/hkb-<slug>.log` when `--board` was given
-  (`src/daemon.ts:70-71`).
+  (`src/daemon.ts:76-77`).
 - **`hkb up --foreground` (under a supervisor).** The loop writes lines to
-  stdout (`src/daemon.ts:311`), so the log is wherever your supervisor puts
+  stdout (`src/daemon.ts:317`), so the log is wherever your supervisor puts
   stdout — the journal for systemd, `StandardOutPath` for launchd.
 
 `<boardDir>` is the directory holding the board file — `~/.hkb` unless
@@ -209,7 +211,7 @@ changed shape with ADR-018 rather than going away. A workspace is named
 `model Board`), so two boards may point at one checkout. The sweep then asks the
 board about every `kb-*` worktree it finds in that repository, filtered to *its
 own* `boardId`, and treats a name it cannot match as a Job whose row is gone —
-collectable immediately, with no TTL to wait out (`src/daemon.ts:419-440`). Board
+collectable immediately, with no TTL to wait out (`src/daemon.ts:483-488`). Board
 A therefore deletes board B's workspaces. A run in flight is saved by the `git
 worktree lock` the runtime holds and by nothing else. One board per repository
 until that is fixed.
@@ -219,8 +221,8 @@ until that is fixed.
 A worker installs the target repository's dependencies to run its tests, so each
 workspace costs about what that repository costs — Phase 5 left 6.1 GB for ten
 Jobs. The daemon takes them back every 10 minutes, after reconciling each board
-(`SWEEP_EVERY_MS`, `src/daemon.ts:57`; the block itself is
-`src/daemon.ts:396-463`). The first tick sweeps, so a restart reclaims
+(`SWEEP_EVERY_MS`, `src/daemon.ts:63`; the block itself is
+`src/daemon.ts:447-521`). The first tick sweeps, so a restart reclaims
 immediately rather than ten minutes later.
 
 **What it no longer does is look inside a tree.** The old sweep asked each
@@ -277,9 +279,9 @@ kept  kb-9 — fatal: 'kb-9' is a locked working tree — something is still usi
 ```
 
 A `kept` line is printed **once**, not every ten minutes, the same way a refusal
-is (`src/daemon.ts:459`) — so it reappears only when the reason changes. A `swept`
+is (`src/daemon.ts:514-517`) — so it reappears only when the reason changes. A `swept`
 line is also an `Event` on the board, so `hkb watch` sees it
-(`src/daemon.ts:452-454`).
+(`src/daemon.ts:510-512`).
 
 Nothing here reads the remote any more, which retires the whole
 `SSH_AUTH_SOCK`-under-systemd warning this section used to carry: the sweep's
@@ -293,11 +295,11 @@ depends on it.
 Upgrading `hkb` does **not** upgrade the running daemon. It has the old
 controller, the old admission gate, the old runtime, until it is restarted. The
 previous dispatcher had the same hazard and it was managed by remembering, which
-is not a mechanism (`src/daemon.ts:73-88`).
+is not a mechanism (`src/daemon.ts:79-94`).
 
 So the daemon records the build it started from, and `hkb up --status` compares
 that against the checkout and prints a line when they differ
-(`src/daemon.ts:243-244`, `src/hkb.ts:1271-1275`):
+(`src/daemon.ts:249-250`, `src/hkb.ts:1271-1275`):
 
 ```
 default  up    host/12345@daemon  87 min, every 45s
@@ -318,8 +320,8 @@ a `git pull` — the same command, every time. `BEHIND` is the safety net, not t
 plan.
 
 One honest limit: the build stamp is `git rev-parse --short HEAD` in the package
-root, and it is `unknown` when that fails (`src/daemon.ts:80-88`). Status only
-claims `BEHIND` when both sides are a real answer (`src/daemon.ts:243-244`), so
+root, and it is `unknown` when that fails (`src/daemon.ts:86-94`). Status only
+claims `BEHIND` when both sides are a real answer (`src/daemon.ts:249-250`), so
 for a published install from npm — no git, no `HEAD` — the line never appears.
 There, the restart-on-upgrade habit is the whole mechanism.
 

@@ -7,14 +7,14 @@ audience: [dev]
 read_when: "adding a workload kind, changing retry or lease behaviour, or wondering why the DAG is not in the core"
 covers:
   - path: prisma/schema.prisma
-    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
+    sha: 364793f9a1174875c3bf644257b6d0cbdf94d25e
   - path: src/controller.ts
-    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
+    sha: a50ac9ee35132bd67b57bb593e9771bd851fe741
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
   - path: src/workspaces.ts
     sha: b709212e781376f570a613907a209648dab91526
-generated_at_commit: 26055f1
+generated_at_commit: ebf564a
 last_refreshed: 2026-09-10
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control, features/check, architecture/transitions]
 ---
@@ -399,9 +399,12 @@ itself; nothing outside that run asks about them while it is live.
 
 ## `maxConcurrent` is a parallelism setting
 
-One reconcile pass starts up to `maxConcurrent` Jobs and waits for them together. For one
-release it did not: the loop awaited each run in turn, so the ceiling only ever bound
-*between* reconcilers, and an operator raising it from 1 to 2 got exactly what they had.
+One reconcile pass starts up to `maxConcurrent` Jobs side by side. Under `hkb run` it waits
+for them together; under the daemon it hands them to a supervisor and returns, and a later
+pass fills a slot as soon as one frees (*architecture/the-loop*). For one release it did
+not run them side by side at all: the loop awaited each run in turn, so the ceiling only
+ever bound *between* reconcilers, and an operator raising it from 1 to 2 got exactly what
+they had.
 
 The cheap fix was to rename it an admission ceiling and document that throughput comes
 from running more reconcilers. That is not the Kubernetes shape, and the giveaway is one
@@ -416,14 +419,16 @@ What that costs, all of it in `src/controller.ts`:
 - **Admission stays serial.** The gate, the compare-and-swap and the worktree happen one
   Job at a time; only the run overlaps. Two claims can never read the same `liveLeases`.
 - **A ceiling the pass is itself filling is not a refusal.** It waits for one of its own
-  runs to end and asks again. `ClaimLimit` (`src/limits.ts`) is what tells "somebody else
-  holds the slots" apart from "we do" — a stopped board is never waited out.
+  runs to end and asks again — or, when a supervisor holds those runs, stops claiming
+  without a word and leaves the asking to the pass that run's end wakes
+  (`Supervisor.running`, `src/controller.ts`). `ClaimLimit` (`src/limits.ts`) is what tells
+  "somebody else holds the slots" apart from "we do" — a stopped board is never waited out.
 - **Every operator-facing line is tagged `#<job>`.** Indentation grouped lines under a
   claim, which only reads as grouping while one Job is speaking. The daemon already tags
   per board, so a busy log reads `[board] #12 …`.
-- **Shutdown stops all of them.** One `AbortSignal` reaches every run in flight, and the
-  pass does not return until each has recorded its own attempt — each `stopped`, which
-  spends no retry.
+- **Shutdown stops all of them.** One `AbortSignal` reaches every run in flight, and
+  whoever holds them — the pass, or the daemon — does not return until each has recorded
+  its own attempt — each `stopped`, which spends no retry.
 
 `gateClaim` is pure, and that is deliberate: every guard in this system that turned
 out to be silently inert was inert because nothing tested that it *refused*.

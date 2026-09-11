@@ -15,14 +15,14 @@ covers:
   - path: src/runtime/claude.ts
     sha: e3afb9de9e34d90f222e7bf9865cbad39e99044b
   - path: prisma/schema.prisma
-    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
+    sha: 364793f9a1174875c3bf644257b6d0cbdf94d25e
   - path: src/controller.ts
-    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
+    sha: a50ac9ee35132bd67b57bb593e9771bd851fe741
   - path: src/workspaces.ts
     sha: b709212e781376f570a613907a209648dab91526
   - path: src/exports.ts
     sha: afa23e85d0df61d1d0d91587d425df2ad7a872a0
-generated_at_commit: 26055f1
+generated_at_commit: ebf564a
 last_refreshed: 2026-09-10
 related:
   [

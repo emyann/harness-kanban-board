@@ -9,16 +9,16 @@ covers:
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
-    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
+    sha: a50ac9ee35132bd67b57bb593e9771bd851fe741
   - path: src/daemon.ts
-    sha: 22f946c6625de1f566d4301e098873050b23ac12
+    sha: d906e507fc36a20dc06070046faa301a23764576
   - path: src/limits.ts
-    sha: 18849fb4775cabb4c5d65784f506d61d90c66f1f
+    sha: 9c7bdc6c3fa037e11cd8ae52d1803d685d1af918
   - path: prisma/schema.prisma
-    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
+    sha: 364793f9a1174875c3bf644257b6d0cbdf94d25e
   - path: src/workspaces.ts
     sha: b709212e781376f570a613907a209648dab91526
-generated_at_commit: 2b8902f
+generated_at_commit: ebf564a
 last_refreshed: 2026-09-10
 related: [architecture/the-loop, architecture/the-board, architecture/job-kind, concepts/ceilings]
 ---
@@ -305,7 +305,11 @@ collapses the three answers to a boolean at its own boundary —
 Renewal differs in shape as well: the controller row is renewed by the same
 `acquireBoard` call the daemon makes every tick, whose first act is an
 `updateMany` on `(boardId, holder)` — take-or-renew in one
-(`src/daemon.ts`). Both are released on the way out, which is why
+(`src/daemon.ts`). So the renewal is only as regular as the ticks, and until a pass stopped waiting
+for its runs a tick could last as long as a session — well past the row's lease, so a daemon on
+another host, which can only read the clock, would find the board unled mid-run and take it
+(`controllerIsLive`, `acquireBoard`). Runs are held outside the pass now (*architecture/the-loop*),
+and the tick comes on time. Both are released on the way out, which is why
 `hkb down` sends SIGTERM and never SIGKILL: the shutdown path is what releases
 the Job lease in flight *and* the controller rows, and killing the process
 outright leaves both held until they expire (`src/daemon.ts`,

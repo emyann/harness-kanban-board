@@ -11,9 +11,9 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: prisma/schema.prisma
-    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
+    sha: 364793f9a1174875c3bf644257b6d0cbdf94d25e
   - path: src/controller.ts
-    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
+    sha: a50ac9ee35132bd67b57bb593e9771bd851fe741
   - path: src/runtime/index.ts
     sha: a325ddd4b03fd864bb2c556aaa7925ed1a95a0e9
   - path: src/hkb.ts
@@ -29,7 +29,7 @@ related:
     architecture/job-kind,
     architecture/overview,
   ]
-generated_at_commit: 2b8902f
+generated_at_commit: ebf564a
 last_refreshed: 2026-09-10
 ---
 

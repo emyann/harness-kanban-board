@@ -11,12 +11,12 @@ supersedes: ~
 superseded_by: decisions/adr-018-the-boundary (in part — three rows of decision 1's map table)
 covers:
   - path: prisma/schema.prisma
-    sha: 6e249ec160c4a441ad45255f65470bb94267cf6f
+    sha: 364793f9a1174875c3bf644257b6d0cbdf94d25e
   - path: src/controller.ts
-    sha: 6563f3234641037e46504688115ac5ed4b76cf1b
+    sha: a50ac9ee35132bd67b57bb593e9771bd851fe741
   - path: src/inputs.ts
     sha: 6ed576d25bf9db5f8b76e3752c17a250725df3b6
-generated_at_commit: 26055f1
+generated_at_commit: ebf564a
 last_refreshed: 2026-09-10
 related:
   [
